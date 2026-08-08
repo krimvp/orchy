@@ -1,12 +1,13 @@
 # Plan
 
-Status: draft. The open questions at the end are not settled.
+Status: draft. Round 1 of the grilling is settled. Round 2 is open. The
+mechanisms in "Open questions" are not decided.
 
 ## Goal
 
 A user declares a flow, such as `read the ticket, plan, code, review, open the
-merge request`. Orchy runs the flow. Orchy also enforces the rules that the
-user declares, and records what each step did.
+merge request`. Orchy runs the flow, enforces the rules that the user declares,
+and records what each step did.
 
 Three properties make Orchy different from a shell script:
 
@@ -15,31 +16,29 @@ Three properties make Orchy different from a shell script:
 2. **Enforced** — Orchy guarantees the declared invariants. It does not ask the
    model to respect them.
 3. **Observable** — every run produces a measurable record and a trajectory for
-   each step.
+   each step, in a standard format.
 
 ## Shape
 
-Orchy is a command-line program and a library. It embeds Pi through the Pi SDK.
-One step is one Pi agent session. Orchy owns the control flow.
+The programmatic API is the product. A file format and, later, a graphical
+editor are layers above it. All three produce the same data.
 
 ```
-orchy run flow.yaml
-   │
-   ├── step "plan"   → createAgentSession(...) → session JSONL + files
-   ├── step "code"   → createAgentSession(...) → session JSONL + files
-   └── step "review" → createAgentSession(...) → session JSONL + files
+TypeScript API ─┐
+YAML file ──────┼──▶  Flow (data)  ──▶  Runner  ──▶  Run record + trajectories
+Graphical editor┘
 ```
 
-Reasons to embed Pi rather than to extend Pi:
+This makes one rule: **a flow is data, not code.** The wiring of the steps is
+serializable. Code lives inside a component, never in the wiring. A graphical
+editor cannot draw arbitrary TypeScript, so the API must not permit it.
 
-- The value of Orchy is deterministic control flow. Control flow belongs in a
-  process that Orchy owns, not inside one agent session.
-- A Pi extension lives inside a single session. A flow needs many sessions with
-  different prompts, tools, and models.
-- The SDK gives the parts that Orchy needs directly: `createAgentSession`,
-  `SessionManager`, and a typed event stream.
+The runner talks to a harness through an adapter. Orchy ships one adapter, for
+Pi. See [ADR 0001](./adr/0001-embed-pi-through-the-sdk.md) and [ADR
+0002](./adr/0002-keep-a-harness-adapter.md).
 
-See [ADR 0001](./adr/0001-embed-pi-through-the-sdk.md).
+A run is local-first, but it must also run on a server and in CI. So no part of
+a run needs a terminal.
 
 ## What Pi supplies
 
@@ -47,132 +46,82 @@ These facts come from the Pi documentation. They set the limits of the design.
 
 | Need | Pi feature | Source |
 | --- | --- | --- |
-| Run one step | `createAgentSession({ model, tools, sessionManager })` | [SDK](https://pi.dev/docs/latest/sdk) |
+| Run one agent step | `createAgentSession({ model, tools, sessionManager })` | [SDK](https://pi.dev/docs/latest/sdk) |
 | Limit the tools of a step | `tools`, `noTools`, `excludeTools`. Built-in tools are `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls` | [SDK](https://pi.dev/docs/latest/sdk) |
 | Watch a step | `session.subscribe()` gives `tool_execution_start`, `turn_end`, `agent_end` | [SDK](https://pi.dev/docs/latest/sdk) |
 | Record a trajectory | Sessions are JSONL files. Entries form a tree through `id` and `parentId` | [Session format](https://pi.dev/docs/latest/session-format) |
-| Store Orchy data in a trajectory | `CustomEntry` holds a `customType` and a `data` field | [Session format](https://pi.dev/docs/latest/session-format) |
 | Block a tool call | The `tool_call` event can block execution and can change the arguments | [Extensions](https://pi.dev/docs/latest/extensions) |
-| Reuse prompts as components | Skills are `SKILL.md` files under `.pi/skills/` or `.agents/skills/` | [Skills](https://pi.dev/docs/latest/skills) |
-| Ship components to users | A Pi package declares `pi.extensions` and `pi.skills` in `package.json` | [Packages](https://pi.dev/docs/latest/packages) |
+| Reuse prompts | Skills are `SKILL.md` files under `.pi/skills/` or `.agents/skills/` | [Skills](https://pi.dev/docs/latest/skills) |
 | Choose a model | `getModel(provider, modelId)` from `@earendil-works/pi-ai` | [SDK](https://pi.dev/docs/latest/sdk) |
-
-Pi supports 15 or more providers, and four run modes: interactive, print, RPC,
-and JSON. Orchy needs only the SDK.
 
 ## The model
 
-**Flow** — a YAML file. It holds a name and a list of steps.
+**Step** — one unit of work. A step is deterministic or non-deterministic. A
+step that reads a ticket is an API call and spends no tokens. A step that writes
+code is an agent session.
 
-**Step** — an entry in that list.
+**Component** — the code that a step calls. Orchy supplies `agent` and `gate`. A
+user adds a component as a TypeScript file that exports one function. Orchy
+loads it with the same loader that Pi uses, so a user writes TypeScript and does
+not compile it.
 
-```yaml
-name: ticket-to-mr
-steps:
-  - id: plan
-    uses: agent
-    prompt: prompts/plan.md
-    tools: [read, grep, find, ls]
-    produces: [plan.md]
+**Gate** — a step that stops the run and waits for a person. Because a run must
+work on a server, a gate does not block a process. The run writes its state to
+disk and ends. A person answers, and the run continues.
 
-  - id: code
-    uses: agent
-    needs: [plan]
-    prompt: prompts/code.md
-    tools: [read, write, edit, bash, grep, find, ls]
-    produces: [.orchy/changed.txt]
-
-  - id: review
-    uses: agent
-    needs: [code]
-    prompt: prompts/review.md
-    tools: [read, grep, find, ls]
-    produces: [review.md]
-```
-
-**Component** — the value of `uses`. Orchy supplies `agent`. A user adds a
-component with a TypeScript file that exports one function:
-
-```ts
-export default async function (step, ctx) {
-  // ctx.workspace, ctx.log, ctx.run
-  return { ok: true };
-}
-```
-
-Orchy loads a user component with the same loader that Pi uses for extensions.
-So a user writes TypeScript and does not compile it.
-
-**Workspace** — one directory per run. The files in the workspace are the only
-state between steps. A step declares what it produces. The next step reads the
-file. Orchy passes no other data.
+**Cycle** — a group of steps that repeat, such as code and then review. A flow
+sets a limit on the number of cycles, and a policy for the case where the limit
+is reached and the steps still disagree.
 
 ## The invariants
 
-Orchy guarantees three rules in version 1. Each rule is cheap and each rule is
-enforced by Orchy, not by a prompt.
+Orchy guarantees these rules. Orchy enforces each one, not a prompt.
 
-1. **Tools** — a step receives only the tools that it declares. Orchy passes
-   the list to `createAgentSession`. A step that declares read-only tools cannot
-   write a file.
-2. **Contract** — a step must produce every file in `produces`. Orchy checks the
-   files after the session ends. A missing file fails the step.
-3. **Order** — a step starts only after every step in `needs` passes.
-
-These three rules make a trajectory match the declared flow. A step cannot
-reach outside its declared tools, and a step cannot pass work forward that it
-did not finish.
+1. **Tools** — an agent step receives only the tools that it declares. A step
+   that declares read-only tools cannot write a file.
+2. **Contract** — a step must produce the result that it declares. Orchy checks
+   the result after the step ends.
+3. **Order** — a step starts only after every step that it needs passes.
+4. **Limit** — a cycle stops at its declared limit. A flow cannot run without
+   end.
 
 ## Measurement
 
-Orchy writes one record per run:
+Orchy writes one ATIF trajectory for each run. Each step becomes a child
+trajectory. `final_metrics` holds the token counts and the cost. See [ADR
+0003](./adr/0003-write-trajectories-as-atif.md).
 
-```
-.orchy/runs/<run-id>/
-├── run.jsonl          # one line per step event
-├── plan.session.jsonl  # the trajectory of the step "plan"
-├── code.session.jsonl
-└── review.session.jsonl
-```
-
-For each step, `run.jsonl` records the start time, the end time, the token
-count, the cost, the number of tool calls, the invariant results, and the
-result.
-
-Orchy also emits one OpenTelemetry span for each step, with the same fields as
-attributes. OpenTelemetry is the boring choice. A user sends the spans to a
-system that they already operate. Orchy ships no dashboard.
+Orchy ships no exporter and no dashboard. A user converts ATIF to OpenTelemetry
+spans with a tool that already does it.
 
 ## Milestones
 
-**M1 — a flow runs.** Read the YAML. Run each step as a Pi session. Enforce the
-three invariants. Write `run.jsonl` and keep the session files. The target is a
-two-step flow: `plan` then `code`.
+**M1 — a flow runs.** The TypeScript API builds a flow as data. The runner runs
+each step, through the Pi adapter for an agent step and directly for a
+deterministic step. It enforces the tool, contract, and order invariants, and
+writes the run state to disk after each step.
 
-**M2 — a user adds a component.** Load a TypeScript file that a step names in
-`uses`.
+**M2 — the cycle and the gate.** Code and review repeat to a limit. A gate stops
+the run and `orchy resume` continues it. Both features use the run state from
+M1.
 
-**M3 — the spans.** Emit one OpenTelemetry span for each step.
+**M3 — ATIF.** Convert the Pi session file into an ATIF trajectory.
 
-**M4 — the proof.** Make the full flow work: read a ticket, plan, code, review,
-open a merge request.
+**M4 — the file format.** A YAML loader that produces the same flow data as the
+API.
 
 ## Deferred
 
-Orchy does not ship these until a real flow needs them. Each one is a knob, and
-each knob costs the user a decision.
+Orchy does not ship these until a real flow needs them.
 
 - Retries and timeouts for a step.
 - A model choice for each step. Version 1 uses one model for the whole flow.
-- Parallel steps. Version 1 runs the steps in order.
-- Conditions and loops. A review step writes its findings to a file. A later
-  step reads the file and repairs the code. This is a linear flow and it needs
-  no loop. Add a loop when a real flow shows that the linear form fails.
-- A second harness. Orchy calls the Pi SDK directly. It has no adapter layer.
-  Add the layer when a second harness arrives.
-- A user interface, a server, and a scheduler.
+- Parallel steps.
+- A second adapter, a server, a scheduler, and a graphical editor.
 
 ## Open questions
 
-The `grill-with-docs` session covers these. See the questions in the reply that
-accompanies this plan.
+Round 2 of the grilling covers the mechanisms: how a run suspends and resumes,
+how the API stays serializable, how a step passes a value to the next step, the
+shape of the cycle, the disagreement policy, the members of the adapter, and the
+version of ATIF to pin.

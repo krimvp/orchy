@@ -1,11 +1,11 @@
 ---
-status: proposed
+status: accepted
 ---
 
 # Embed Pi through the SDK
 
 Orchy needs a harness to run one agent step. We choose Pi, and we call the Pi
-SDK from a process that Orchy owns. One step becomes one Pi agent session.
+SDK from a process that Orchy owns. One agent step becomes one Pi agent session.
 
 ## Considered options
 
@@ -17,12 +17,9 @@ SDK from a process that Orchy owns. One step becomes one Pi agent session.
   RPC. Rejected for now: it hides the typed event stream behind a pipe, and it
   makes measurement coarse. It stays the upgrade path if Orchy must drive a
   harness that has no library.
-- **A port with adapters for several harnesses.** Rejected: it is an interface
-  with one implementation. Add it when a second harness arrives.
 
 ## Consequences
 
-Orchy is a TypeScript program on Node, because the Pi SDK is TypeScript.
-Orchy inherits the Pi provider list, the Pi tool set, and the Pi session file
-format. Orchy is locked to Pi. A change of harness costs a rewrite of the step
-runner, but not of the flow model.
+Orchy is a TypeScript program on Node, because the Pi SDK is TypeScript. Orchy
+inherits the Pi provider list and the Pi tool names. [ADR
+0002](./0002-keep-a-harness-adapter.md) keeps those details behind an adapter.
