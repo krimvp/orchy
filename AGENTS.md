@@ -93,6 +93,12 @@ the daemon serves that directory.
   edge that jumps a column passes above the steps, a cycle passes below them,
   and an upright run sits in the gap between two columns. So no line crosses a
   step. Keep that true for any edge you add.
+- Where two edges meet, the flat one steps over the upright one. Every edge is
+  built before any is drawn, because an edge cannot step over a line that does
+  not exist yet.
+- An edge leaves and arrives by its own place on the side of a step. Two edges
+  that share one line read as one edge, and that is a join the flow does not
+  hold.
 - The UI adds no package. React, and nothing else.
 
 ## Tests

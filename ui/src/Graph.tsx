@@ -11,6 +11,8 @@ const PAD = 14;
 /** The distance between two lanes that carry an edge past the steps. */
 const LANE = 24;
 const CORNER = 9;
+/** The half width of the step that one edge makes over another. */
+const HOP = 5;
 
 interface Placed {
   step: Step;
@@ -45,30 +47,99 @@ function place(steps: Step[]): Placed[] {
   });
 }
 
+type Point = [number, number];
+
+/** The corners of an edge, with a corner that goes nowhere taken out. */
+function corners(points: Point[]): Point[] {
+  return points.filter(
+    (point, index) => index === 0 || point[0] !== points[index - 1]?.[0] || point[1] !== points[index - 1]?.[1],
+  );
+}
+
+/** Each pair of corners, which is one flat or upright run of the edge. */
+function runs(points: Point[]): Array<[Point, Point]> {
+  return points.slice(0, -1).map((point, index) => [point, points[index + 1] as Point]);
+}
+
+const length = (a: Point, b: Point) => Math.hypot(b[0] - a[0], b[1] - a[1]);
+
+function toward(a: Point, b: Point, by: number): Point {
+  const far = length(a, b) || 1;
+  return [a[0] + ((b[0] - a[0]) * by) / far, a[1] + ((b[1] - a[1]) * by) / far];
+}
+
 /**
  * A path of straight lines, with a round corner at each turn. Every segment is
  * flat or upright, so the drawing reads as a diagram and not as a sketch.
+ *
+ * `hops` names, for each run of the edge, the places where it meets a run of
+ * another edge. The edge steps over each one, so a reader sees which line
+ * carries on and which line passes under.
  */
-function orthogonal(points: Array<[number, number]>): string {
-  const kept = points.filter(
-    (point, index) => index === 0 || point[0] !== points[index - 1]?.[0] || point[1] !== points[index - 1]?.[1],
-  );
-  const first = kept[0];
-  if (!first) return "";
+function orthogonal(points: Point[], hops: Map<number, number[]> = new Map()): string {
+  const count = points.length;
+  const first = points[0];
+  if (!first || count < 2) return "";
 
-  let d = `M ${first[0]} ${first[1]}`;
-  for (let index = 1; index < kept.length - 1; index += 1) {
-    const [ax, ay] = kept[index - 1] as [number, number];
-    const [bx, by] = kept[index] as [number, number];
-    const [cx, cy] = kept[index + 1] as [number, number];
-    const back = Math.hypot(bx - ax, by - ay);
-    const on = Math.hypot(cx - bx, cy - by);
-    const radius = Math.min(CORNER, back / 2, on / 2);
-    d += ` L ${bx + ((ax - bx) * radius) / back} ${by + ((ay - by) * radius) / back}`;
-    d += ` Q ${bx} ${by} ${bx + ((cx - bx) * radius) / on} ${by + ((cy - by) * radius) / on}`;
+  const radius = points.map((_point, index) =>
+    index === 0 || index === count - 1
+      ? 0
+      : Math.min(
+          CORNER,
+          length(points[index - 1] as Point, points[index] as Point) / 2,
+          length(points[index] as Point, points[index + 1] as Point) / 2,
+        ),
+  );
+
+  let d = "";
+  for (let index = 0; index < count - 1; index += 1) {
+    const a = points[index] as Point;
+    const b = points[index + 1] as Point;
+    const from = radius[index] ? toward(a, b, radius[index] as number) : a;
+    const to = radius[index + 1] ? toward(b, a, radius[index + 1] as number) : b;
+    if (index === 0) d += `M ${from[0]} ${from[1]}`;
+
+    const meets = hops.get(index);
+    if (meets && a[1] === b[1]) {
+      const way = to[0] > from[0] ? 1 : -1;
+      let held = from[0];
+      for (const x of [...meets].sort((one, two) => (one - two) * way)) {
+        const enter = x - HOP * way;
+        const leave = x + HOP * way;
+        // A step needs a straight run before it and after it, or it deforms.
+        if ((enter - held) * way < 1 || (to[0] - leave) * way < 1) continue;
+        // The arc always rises, whichever way the edge travels.
+        d += ` L ${enter} ${a[1]} A ${HOP} ${HOP} 0 0 ${way > 0 ? 1 : 0} ${leave} ${a[1]}`;
+        held = leave;
+      }
+    }
+
+    d += ` L ${to[0]} ${to[1]}`;
+    if (radius[index + 1]) {
+      const next = toward(b, points[index + 2] as Point, radius[index + 1] as number);
+      d += ` Q ${b[0]} ${b[1]} ${next[0]} ${next[1]}`;
+    }
   }
-  const last = kept[kept.length - 1] as [number, number];
-  return `${d} L ${last[0]} ${last[1]}`;
+  return d;
+}
+
+/**
+ * Where a flat run of one edge crosses an upright run of another. A flat run
+ * steps over an upright one, always, so two edges never both step at one place.
+ */
+function crossings(points: Point[], bars: Array<{ key: string; x: number; top: number; foot: number }>, key: string) {
+  const found = new Map<number, number[]>();
+  runs(points).forEach(([a, b], index) => {
+    if (a[1] !== b[1]) return;
+    const y = a[1];
+    const low = Math.min(a[0], b[0]);
+    const high = Math.max(a[0], b[0]);
+    const cuts = bars
+      .filter((bar) => bar.key !== key && bar.x > low + 1 && bar.x < high - 1 && y > bar.top + 1 && y < bar.foot - 1)
+      .map((bar) => bar.x);
+    if (cuts.length > 0) found.set(index, cuts);
+  });
+  return found;
 }
 
 export function Graph({
@@ -158,6 +229,39 @@ export function Graph({
   };
 
   /**
+   * An edge leaves by its own place on the right side of a step, in the order
+   * the edges go. Without this, every edge out of one step covers the same
+   * line, and a line that arrives at one height covers a line that leaves at
+   * that height. Then a reader sees a join that the flow does not hold.
+   */
+  const going = [
+    ...forward.map((edge) => ({
+      key: edge.key,
+      from: edge.from.step.id,
+      at: edge.far ? -1000 + (above.get(edge.key) ?? 0) : port(put.get(edge.to.step.id) as Placed, edge.key),
+    })),
+    ...loops
+      .filter((edge) => !clear(edge.from))
+      .map((edge) => ({ key: edge.key, from: edge.from.step.id, at: 100_000 })),
+  ];
+  const leaving = new Map<string, string[]>();
+  for (const node of nodes) {
+    leaving.set(
+      node.step.id,
+      going
+        .filter((one) => one.from === node.step.id)
+        .sort((a, b) => a.at - b.at)
+        .map((one) => one.key),
+    );
+  }
+  const exit = (node: Placed, key: string): number => {
+    const held = leaving.get(node.step.id) ?? [];
+    const place = held.indexOf(key);
+    if (place === -1) return node.y + H / 2;
+    return node.y + (H * (place + 1)) / (held.length + 1);
+  };
+
+  /**
    * Every upright run of an edge sits in the gap between two columns, and the
    * edges that share one gap share it evenly. So two edges never cover one line.
    */
@@ -173,8 +277,8 @@ export function Graph({
     if (edge.far) {
       claim(edge.from.column, edge.key);
       claim(edge.to.column - 1, edge.key);
-    } else if (from.y + H / 2 !== port(to, edge.key)) {
-      // A step that leaves and arrives at one height needs no turn at all.
+    } else if (exit(from, edge.key) !== port(to, edge.key)) {
+      // An edge that leaves and arrives at one height needs no turn at all.
       claim(edge.from.column, edge.key);
     }
   }
@@ -195,22 +299,67 @@ export function Graph({
   const width = Math.max(...nodes.map((node) => node.x + W)) + PAD;
   const height = floor + roomBelow + PAD;
 
-  const wire = (edge: (typeof forward)[number]): string => {
+  const wireOf = (edge: (typeof forward)[number]): Point[] => {
     const from = put.get(edge.from.step.id) as Placed;
     const to = put.get(edge.to.step.id) as Placed;
-    const start: [number, number] = [from.x + W, from.y + H / 2];
-    const end: [number, number] = [to.x, port(to, edge.key)];
+    const start: Point = [from.x + W, exit(from, edge.key)];
+    const end: Point = [to.x, port(to, edge.key)];
 
     if (edge.far) {
       const lane = above.get(edge.key) as number;
       const out = channel(from.column, edge.key);
       const into = channel(to.column - 1, edge.key);
-      return orthogonal([start, [out, start[1]], [out, lane], [into, lane], [into, end[1]], end]);
+      return corners([start, [out, start[1]], [out, lane], [into, lane], [into, end[1]], end]);
     }
-    if (start[1] === end[1]) return orthogonal([start, end]);
+    if (start[1] === end[1]) return [start, end];
     const turn = channel(from.column, edge.key);
-    return orthogonal([start, [turn, start[1]], [turn, end[1]], end]);
+    return corners([start, [turn, start[1]], [turn, end[1]], end]);
   };
+
+  const loopOf = (edge: (typeof loops)[number]) => {
+    const from = put.get(edge.from.step.id) as Placed;
+    const to = put.get(edge.to.step.id) as Placed;
+    const lane = below.get(edge.key) as number;
+
+    // The foot of a step, when nothing stands below it. The gap beside it when
+    // something does.
+    const down: Point[] = clear(edge.from)
+      ? [[from.x + W / 2, from.y + H]]
+      : [
+          [from.x + W, exit(from, edge.key)],
+          [channel(edge.from.column, edge.key), exit(from, edge.key)],
+        ];
+    const up: Point[] = clear(edge.to)
+      ? [[to.x + W / 2, to.y + H]]
+      : [
+          [channel(edge.to.column - 1, edge.key), port(to, edge.key)],
+          [to.x, port(to, edge.key)],
+        ];
+
+    const leaves = (down[down.length - 1] as Point)[0];
+    const returns = (up[0] as Point)[0];
+    return {
+      points: corners([...down, [leaves, lane], [returns, lane], ...up]),
+      label: { x: (leaves + returns) / 2, y: lane + 4, text: `${(edge.cycle as Cycle).limit}×` },
+    };
+  };
+
+  // Every edge is built before any is drawn, so each one knows where it crosses
+  // another and can step over it.
+  const wires = [
+    ...forward.map((edge) => ({ key: edge.key, cycle: false, points: wireOf(edge), label: undefined })),
+    ...loops.map((edge) => ({ key: edge.key, cycle: true, ...loopOf(edge) })),
+  ];
+  const bars = wires.flatMap((one) =>
+    runs(one.points)
+      .filter(([a, b]) => a[0] === b[0])
+      .map(([a, b]) => ({
+        key: one.key,
+        x: a[0],
+        top: Math.min(a[1], b[1]),
+        foot: Math.max(a[1], b[1]),
+      })),
+  );
 
   return (
     <svg className="graph" viewBox={`0 0 ${width} ${height}`} width={width} height={height}>
@@ -224,45 +373,20 @@ export function Graph({
         </marker>
       </defs>
 
-      {loops.map((edge) => {
-        const from = put.get(edge.from.step.id) as Placed;
-        const to = put.get(edge.to.step.id) as Placed;
-        const lane = below.get(edge.key) as number;
-
-        // The foot of a step, when nothing stands below it. The gap beside it
-        // when something does.
-        const down: Array<[number, number]> = clear(edge.from)
-          ? [[from.x + W / 2, from.y + H]]
-          : [
-              [from.x + W, from.y + H / 2],
-              [channel(edge.from.column, edge.key), from.y + H / 2],
-            ];
-        const up: Array<[number, number]> = clear(edge.to)
-          ? [[to.x + W / 2, to.y + H]]
-          : [
-              [channel(edge.to.column - 1, edge.key), port(to, edge.key)],
-              [to.x, port(to, edge.key)],
-            ];
-
-        const leaves = (down[down.length - 1] as [number, number])[0];
-        const returns = (up[0] as [number, number])[0];
-        return (
-          <g key={edge.key}>
-            <path
-              className="edge cycle"
-              pathLength={1}
-              d={orthogonal([...down, [leaves, lane], [returns, lane], ...up])}
-              markerEnd="url(#tip-cycle)"
-            />
-            <text className="limit" x={(leaves + returns) / 2} y={lane + 4}>
-              {(edge.cycle as Cycle).limit}×
+      {wires.map((one) => (
+        <g key={one.key}>
+          <path
+            className={one.cycle ? "edge cycle" : "edge"}
+            pathLength={1}
+            d={orthogonal(one.points, crossings(one.points, bars, one.key))}
+            markerEnd={one.cycle ? "url(#tip-cycle)" : "url(#tip)"}
+          />
+          {one.label && (
+            <text className="limit" x={one.label.x} y={one.label.y}>
+              {one.label.text}
             </text>
-          </g>
-        );
-      })}
-
-      {forward.map((edge) => (
-        <path key={edge.key} className="edge" pathLength={1} d={wire(edge)} markerEnd="url(#tip)" />
+          )}
+        </g>
       ))}
 
       {nodes.map((node, index) => (
