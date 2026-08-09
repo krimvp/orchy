@@ -1,17 +1,49 @@
 #!/usr/bin/env node
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { run } from "./run.ts";
+import { type RunEvent, type RunState, resume, run } from "./run.ts";
 
-const [command, file] = process.argv.slice(2);
+const USAGE = `use: orchy run <flow file>
+     orchy resume <run id> <json value>`;
 
-if (command !== "run" || !file) {
-  console.error("use: orchy run <flow file>");
-  process.exit(2);
+function report(event: RunEvent): void {
+  switch (event.type) {
+    case "step_start":
+      return console.error(`▶ ${event.step}`);
+    case "step_end":
+      return console.error(`${event.status === "done" ? "✓" : "✗"} ${event.step}`);
+    case "cycle":
+      return console.error(`↻ ${event.step} goes back to ${event.to} (${event.count})`);
+    case "waiting":
+      return console.error(`⏸ ${event.step} waits for a person\n  ${event.question}`);
+    case "run_end":
+      return console.error(`— ${event.status}`);
+  }
 }
 
-const module = await import(pathToFileURL(resolve(file)).href);
-const state = await run(module.default);
+function finish(state: RunState): never {
+  console.log(JSON.stringify(state, null, 2));
+  if (state.status === "waiting") {
+    console.error(`\nanswer with: orchy resume ${state.runId} '<json value>'`);
+  }
+  process.exit(state.status === "failed" ? 1 : 0);
+}
 
-console.log(JSON.stringify(state, null, 2));
-process.exit(state.status === "done" ? 0 : 1);
+const [command, first, second] = process.argv.slice(2);
+
+try {
+  if (command === "run" && first) {
+    const module = await import(pathToFileURL(resolve(first)).href);
+    finish(await run(module.default, { onEvent: report }));
+  }
+
+  if (command === "resume" && first && second) {
+    finish(await resume(first, JSON.parse(second), { onEvent: report }));
+  }
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+}
+
+console.error(USAGE);
+process.exit(2);

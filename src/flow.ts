@@ -1,43 +1,72 @@
-import type { TSchema } from "@sinclair/typebox";
+import type { Static, TSchema } from "@sinclair/typebox";
 
 export type ToolName = "read" | "bash" | "edit" | "write" | "grep" | "find" | "ls";
 
-export interface AgentStep {
-  kind: "agent";
+/**
+ * `when` is a partial match against the value of the step, not an expression.
+ * A small expression language grows, and a graphical editor cannot draw one.
+ */
+export interface Cycle<S extends TSchema = TSchema> {
+  to: string;
+  when: Partial<Static<S>>;
+  limit: number;
+  policy: "escalate" | "accept";
+}
+
+interface Common {
   id: string;
   needs: string[];
+}
+
+export interface AgentStep<S extends TSchema = TSchema> extends Common {
+  kind: "agent";
   prompt: string;
   tools: ToolName[];
-  returns: TSchema;
+  returns: S;
+  cycle?: Cycle<S>;
 }
 
-export interface CallStep {
+export interface CallStep<S extends TSchema = TSchema> extends Common {
   kind: "call";
-  id: string;
-  needs: string[];
   module: string;
-  returns: TSchema;
+  returns: S;
+  cycle?: Cycle<S>;
 }
 
-export type Step = AgentStep | CallStep;
+/** A step that takes its value from a person. The run stops until one answers. */
+export interface GateStep<S extends TSchema = TSchema> extends Common {
+  kind: "gate";
+  question: string;
+  returns: S;
+}
+
+export type Step = AgentStep | CallStep | GateStep;
 
 export interface Flow {
   name: string;
   steps: Step[];
 }
 
-type Declared<T extends Step> = Omit<T, "kind" | "needs"> & { needs?: string[] };
+type Declared<T> = Omit<T, "kind" | "needs"> & { needs?: string[] };
 
-export function agent(step: Declared<AgentStep>): AgentStep {
+export function agent<S extends TSchema>(step: Declared<AgentStep<S>>): AgentStep<S> {
   return { kind: "agent", needs: [], ...step };
 }
 
-export function call(step: Declared<CallStep>): CallStep {
+export function call<S extends TSchema>(step: Declared<CallStep<S>>): CallStep<S> {
   return { kind: "call", needs: [], ...step };
+}
+
+export function gate<S extends TSchema>(step: Declared<GateStep<S>>): GateStep<S> {
+  return { kind: "gate", needs: [], ...step };
 }
 
 export function flow(name: string, definition: { steps: Step[] }): Flow {
   return { name, steps: definition.steps };
+}
+
+export function cycleOf(step: Step): Cycle | undefined {
+  return step.kind === "gate" ? undefined : step.cycle;
 }
 
 /**
@@ -65,7 +94,46 @@ export function validate(flow: Flow): string[] {
   }
 
   problems.push(...findLoops(flow.steps));
+  if (problems.length > 0) return problems;
+
+  const sorted = order(flow.steps).map((step) => step.id);
+  for (const step of flow.steps) {
+    const cycle = cycleOf(step);
+    if (!cycle) continue;
+    if (!ids.has(cycle.to)) {
+      problems.push(`step "${step.id}" cycles to "${cycle.to}", which does not exist`);
+    } else if (sorted.indexOf(cycle.to) >= sorted.indexOf(step.id)) {
+      problems.push(`step "${step.id}" cycles to "${cycle.to}", which does not run before it`);
+    }
+    if (cycle.limit < 1) problems.push(`step "${step.id}" sets a cycle limit below one`);
+    problems.push(...checkWhen(step, cycle));
+  }
+
   return problems;
+}
+
+function checkWhen(step: Step, cycle: Cycle): string[] {
+  const keys = Object.keys(cycle.when as Record<string, unknown>);
+  if (keys.length === 0) return [`step "${step.id}" cycles on an empty condition, so it always cycles`];
+
+  const properties = (step as { returns: { properties?: Record<string, unknown> } }).returns.properties;
+  if (!properties) return [];
+  return keys
+    .filter((key) => !(key in properties))
+    .map((key) => `step "${step.id}" cycles on "${key}", which it does not return`);
+}
+
+/** Invariant 3: a step starts only after every step that it needs passes. */
+export function order(steps: Step[]): Step[] {
+  const done = new Set<string>();
+  const sorted: Step[] = [];
+  while (sorted.length < steps.length) {
+    const next = steps.find((step) => !done.has(step.id) && step.needs.every((need) => done.has(need)));
+    if (!next) throw new Error("the steps cannot be put in order");
+    done.add(next.id);
+    sorted.push(next);
+  }
+  return sorted;
 }
 
 function findLoops(steps: Step[]): string[] {

@@ -1,5 +1,5 @@
-export { agent, call, flow, validate } from "./flow.ts";
-export type { AgentStep, CallStep, Flow, Step, ToolName } from "./flow.ts";
-export { run } from "./run.ts";
-export type { RunOptions, RunState, StepRecord } from "./run.ts";
+export { agent, call, cycleOf, flow, gate, order, validate } from "./flow.ts";
+export type { AgentStep, CallStep, Cycle, Flow, GateStep, Step, ToolName } from "./flow.ts";
+export { read, resume, run } from "./run.ts";
+export type { RunEvent, RunOptions, RunState, StepRecord } from "./run.ts";
 export type { AgentRequest, AgentResult, Harness } from "./pi.ts";

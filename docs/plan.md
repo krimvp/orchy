@@ -91,6 +91,9 @@ and `cycle.to` are plain strings, and `validate()` checks them. A chained
 builder would type those names, but it would cost the array, and it would help
 only the users who write TypeScript.
 
+The `workspace` field and `changes: false` arrive with M3. Everything else in
+this example runs today.
+
 ## The model
 
 **Step** — one unit of work. A step is deterministic or non-deterministic. A
@@ -102,10 +105,14 @@ a component as a TypeScript file that exports one function. Orchy loads it with
 the same loader that Pi uses, so a user writes TypeScript and does not compile
 it.
 
-**Gate** — a step that takes its value from a person. A gate is a field on a
-step, not a component. The run writes its state to disk and ends. A person runs
-`orchy resume <run-id> --value '{"approved":true}'`, and Orchy checks that value
-against the same contract as any other step.
+**Gate** — a step that takes its value from a person. A gate is a kind of step,
+not a component, so it names no prompt and no module. The run writes its state
+to disk and ends. A person runs `orchy resume <run id> '{"approved":true}'`, and
+Orchy checks that value against the same contract as any other step.
+
+The same stop serves the `escalate` policy. When a cycle reaches its limit,
+Orchy clears the value of the step and waits for a person to supply it. So one
+mechanism covers a declared gate and an escalation.
 
 **Cycle** — a step result can name an earlier step to return to. Orchy counts
 the returns on that edge and stops at the limit. There is no loop construct in
@@ -129,8 +136,9 @@ Orchy enforces these rules. A prompt does not.
 1. **Tools** — an agent step calls only the tools that it declares. This is not
    a sandbox. A step that declares `bash` can change any file and can call the
    network. Orchy makes no claim about what a tool does after Orchy permits it.
-2. **Contract** — the value of a step must match its TypeBox schema. Orchy
-   checks the value after the step ends.
+2. **Contract** — the value of a step must match its schema. A user writes the
+   schema with TypeBox, and Orchy checks the value as plain JSON Schema. See
+   [ADR 0007](./adr/0007-check-a-contract-as-json-schema.md).
 3. **Order** — a step starts only after every step that it needs passes.
 4. **Limit** — a cycle stops at its declared limit. A flow cannot run without
    end.
@@ -142,6 +150,16 @@ Orchy enforces these rules. A prompt does not.
 Rule 5 needs a workspace. A step with `bash` and no workspace has no record
 beyond the text of the command. Only a sandbox closes that gap, and Orchy does
 not ship one.
+
+## Events
+
+A run calls `onEvent` when a step starts, when a step ends, when a step goes
+back, when the run waits for a person, and when the run ends. The command line
+prints these, so a long flow is not silent.
+
+A graphical editor needs the same events, and it needs the live output of an
+agent as well. Orchy does not carry that output today, because nothing reads it.
+The adapter grows a second argument when something does, which breaks nothing.
 
 ## Measurement
 
@@ -159,10 +177,11 @@ it. The runner runs each step, through the Pi adapter for an agent step and
 through a module for a deterministic step. It enforces rules 1 to 3, and writes
 the run state to disk after each step. `orchy run <flow file>` runs a flow.
 
-**M2 — the cycle and the gate.** Rule 4. A step returns to an earlier step to a
-limit, and a policy decides what happens at the limit. A gate stops the run, and
-`orchy resume` continues it. This milestone lands the first proof flow: code and
-review.
+**M2 — the cycle and the gate. Done.** Rule 4. A step returns to an earlier step
+to a limit, and a policy decides what happens at the limit. A gate stops the
+run, and `orchy resume <run id> <json value>` continues it. A run reports what it
+does through events. This milestone lands the first proof flow, in
+[examples/code-review](../examples/code-review).
 
 **M3 — the workspace.** Rule 5, with the `git` and `none` kinds. This milestone
 lands the second proof flow: a grilling session that asks a person questions in
