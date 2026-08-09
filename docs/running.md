@@ -1,5 +1,26 @@
 # Run a flow
 
+## Schemas
+
+A contract is JSON Schema. That is the one form that Orchy keeps, because a
+flow is data and a file or a graphical editor must produce the same contract.
+
+Orchy uses two libraries at run time:
+
+- **Ajv** checks every value against the contract. This is the guarantee.
+- **Zod** describes the `submit_result` tool of the Claude Code adapter, because
+  its SDK takes no JSON Schema. The Claude SDK names Zod as a peer, so it is
+  installed for that adapter in any case.
+
+**TypeBox** is optional. You need it only to write a flow in TypeScript, where
+it gives one source for the contract and the static type that makes
+`cycle.when` safe. A flow in YAML holds plain JSON Schema and needs nothing.
+
+```bash
+npm i orchy @sinclair/typebox   # to write a flow in TypeScript
+npm i orchy                     # to run a flow from YAML
+```
+
 ## Choose a harness
 
 Orchy ships two adapters. Pi is the default.
