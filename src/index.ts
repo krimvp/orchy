@@ -2,6 +2,7 @@ export {
   WAVE,
   agent,
   call,
+  changesOf,
   computedOf,
   cycleOf,
   expandFanout,
@@ -17,7 +18,7 @@ export {
   validate,
 } from "./flow.ts";
 export { changed, take } from "./workspace.ts";
-export type { Snapshot, Workspace } from "./workspace.ts";
+export type { Change, Snapshot, Workspace } from "./workspace.ts";
 export type {
   AgentStep,
   CallStep,

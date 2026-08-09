@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -478,15 +478,20 @@ function gitWorkspace(): string {
   return directory;
 }
 
-/** A harness that writes a file before it answers, like an agent with `bash`. */
-function writingHarness(directory: string, name: string, value: unknown): Harness {
+/** A harness that acts in the workspace before it answers, like an agent with `bash`. */
+function actingHarness(work: () => void, value: unknown): Harness {
   return {
     toTrajectory: () => undefined,
     async run() {
-      writeFileSync(join(directory, name), "written by the step");
+      work();
       return { value };
     },
   };
+}
+
+/** A harness that writes a file before it answers. */
+function writingHarness(directory: string, name: string, value: unknown): Harness {
+  return actingHarness(() => writeFileSync(join(directory, name), "written by the step"), value);
 }
 
 test("validate refuses a promise that no workspace can check", () => {
@@ -511,7 +516,7 @@ test("a step that promises to change nothing fails when it changes a file", asyn
   );
 
   assert.equal(state.status, "failed");
-  assert.match(state.steps.a?.error ?? "", /promises to change nothing, but it changed sneaky\.txt/);
+  assert.match(state.steps.a?.error ?? "", /promises to change nothing, but it added sneaky\.txt/);
 });
 
 test("a step without the promise records what it changed and passes", async () => {
@@ -526,7 +531,7 @@ test("a step without the promise records what it changed and passes", async () =
   );
 
   assert.equal(state.status, "done");
-  assert.deepEqual(state.steps.a?.changed, ["new.txt"]);
+  assert.deepEqual(state.steps.a?.changed, [{ path: "new.txt", how: "added" }]);
 });
 
 test("a change to a tracked file keeps its whole path", async () => {
@@ -542,7 +547,7 @@ test("a change to a tracked file keeps its whole path", async () => {
     { cwd, harness: writingHarness(cwd, "step.md", { summary: "changed a tracked file" }) },
   );
 
-  assert.deepEqual(state.steps.a?.changed, ["step.md"]);
+  assert.deepEqual(state.steps.a?.changed, [{ path: "step.md", how: "changed" }]);
 });
 
 test("the run state of Orchy is not counted as a change", async () => {
@@ -1505,7 +1510,7 @@ test("a step that promises a path fails when it changes a file outside it", asyn
   );
 
   assert.equal(state.status, "failed");
-  assert.match(state.steps.a?.error ?? "", /promises to change only docs, but it changed src\.txt/);
+  assert.match(state.steps.a?.error ?? "", /promises to change only docs, but it added src\.txt/);
 });
 
 test("a step that promises a path passes when it stays under it", async () => {
@@ -1521,7 +1526,7 @@ test("a step that promises a path passes when it stays under it", async () => {
   );
 
   assert.equal(state.status, "done");
-  assert.deepEqual(state.steps.a?.changed, ["docs/new.md"]);
+  assert.deepEqual(state.steps.a?.changed, [{ path: "docs/new.md", how: "added" }]);
 });
 
 test("validate tells a user of changes: false what to write instead", () => {
@@ -2818,4 +2823,241 @@ test("a file keeps a computed fanout, so the editor writes it back unharmed", ()
   const parsed = parseFlow(text);
   assert.deepEqual(validate(parsed), []);
   assert.deepEqual(parseFlow(formatFlow(parsed)), parsed);
+});
+
+// ── The promise of a flow, and what a step did ───────────────────────────────
+
+test("a flow sets the promise, and a step that declares none takes it", async () => {
+  const cwd = gitWorkspace();
+
+  const state = await run(
+    flow("read-only", {
+      workspace: { kind: "git", path: "." },
+      changes: "nothing",
+      steps: [agent({ id: "a", prompt: "step.md", tools: ["read"], returns: Summary })],
+    }),
+    { cwd, harness: writingHarness(cwd, "sneaky.txt", { summary: "I changed nothing" }) },
+  );
+
+  assert.equal(state.status, "failed");
+  assert.match(state.steps.a?.error ?? "", /step "a" promises to change nothing, but it added sneaky\.txt/);
+});
+
+test("a step overrides the promise of the flow", async () => {
+  const cwd = gitWorkspace();
+  mkdirSync(join(cwd, "docs"));
+
+  const state = await run(
+    flow("mixed", {
+      workspace: { kind: "git", path: "." },
+      changes: "nothing",
+      steps: [agent({ id: "a", prompt: "step.md", tools: ["write"], returns: Summary, changes: { paths: ["docs"] } })],
+    }),
+    { cwd, harness: writingHarness(cwd, "docs/new.md", { summary: "I stayed in docs" }) },
+  );
+
+  assert.equal(state.status, "done");
+  assert.deepEqual(state.steps.a?.changed, [{ path: "docs/new.md", how: "added" }]);
+});
+
+test("validate refuses a promise on a flow that no workspace can check", () => {
+  const problems = validate(
+    flow("unchecked", {
+      changes: "nothing",
+      steps: [agent({ id: "a", prompt: "step.md", tools: ["read"], returns: Summary })],
+    }),
+  );
+
+  assert.ok(problems.some((p) => p.includes("the flow promises what it changes, but it has no workspace to check it")));
+});
+
+test("a step that promises an exception fails when it changes the path it excepts", async () => {
+  const cwd = gitWorkspace();
+
+  const state = await run(
+    flow("except", {
+      workspace: { kind: "git", path: "." },
+      steps: [
+        agent({ id: "a", prompt: "step.md", tools: ["write"], returns: Summary, changes: { except: ["step.md"] } }),
+      ],
+    }),
+    { cwd, harness: writingHarness(cwd, "step.md", { summary: "I left step.md alone" }) },
+  );
+
+  assert.equal(state.status, "failed");
+  assert.match(state.steps.a?.error ?? "", /promises to change nothing in step\.md, but it changed step\.md/);
+});
+
+test("a step that promises an exception passes when it changes anything else", async () => {
+  const cwd = gitWorkspace();
+
+  const state = await run(
+    flow("except", {
+      workspace: { kind: "git", path: "." },
+      steps: [
+        agent({ id: "a", prompt: "step.md", tools: ["write"], returns: Summary, changes: { except: ["step.md"] } }),
+      ],
+    }),
+    { cwd, harness: writingHarness(cwd, "new.txt", { summary: "I left step.md alone" }) },
+  );
+
+  assert.equal(state.status, "done");
+  assert.deepEqual(state.steps.a?.changed, [{ path: "new.txt", how: "added" }]);
+});
+
+test("validate refuses a promise that names paths and an exception at once", () => {
+  const problems = validate(
+    parseFlow(
+      [
+        "name: both",
+        "workspace: { kind: git, path: . }",
+        "steps:",
+        "  - id: one",
+        "    kind: agent",
+        "    prompt: p.md",
+        "    tools: [write]",
+        "    changes: { paths: [docs], except: [CONTEXT.md] }",
+        "    returns: { type: object }",
+      ].join("\n"),
+    ),
+  );
+
+  assert.ok(problems.some((p) => p.includes('step "one" promises "paths" and "except" at once')));
+});
+
+test("the record of a step names what it did to each path", async () => {
+  const cwd = gitWorkspace();
+
+  const state = await run(
+    flow("kinds", {
+      workspace: { kind: "git", path: "." },
+      steps: [agent({ id: "a", prompt: "step.md", tools: ["write"], returns: Summary })],
+    }),
+    {
+      cwd,
+      harness: actingHarness(() => {
+        writeFileSync(join(cwd, "new.txt"), "new");
+        rmSync(join(cwd, "step.md"));
+      }, { summary: "one added, one deleted" }),
+    },
+  );
+
+  assert.deepEqual(state.steps.a?.changed, [
+    { path: "new.txt", how: "added" },
+    { path: "step.md", how: "deleted" },
+  ]);
+});
+
+test("a step that deletes a file hears the word deleted, and not the word changed", async () => {
+  const cwd = gitWorkspace();
+
+  const state = await run(
+    flow("promise", {
+      workspace: { kind: "git", path: "." },
+      steps: [agent({ id: "a", prompt: "step.md", tools: ["read"], returns: Summary, changes: "nothing" })],
+    }),
+    { cwd, harness: actingHarness(() => rmSync(join(cwd, "step.md")), { summary: "I changed nothing" }) },
+  );
+
+  assert.equal(state.status, "failed");
+  assert.match(state.steps.a?.error ?? "", /promises to change nothing, but it deleted step\.md/);
+});
+
+test("a step that commits hears that it moved HEAD", async () => {
+  const cwd = gitWorkspace();
+
+  const state = await run(
+    flow("commit", {
+      workspace: { kind: "git", path: "." },
+      steps: [agent({ id: "a", prompt: "step.md", tools: ["bash"], returns: Summary, changes: "nothing" })],
+    }),
+    {
+      cwd,
+      harness: actingHarness(() => {
+        writeFileSync(join(cwd, "step.md"), "changed by the step");
+        execFileSync("git", ["commit", "-qam", "second"], { cwd, stdio: "pipe" });
+      }, { summary: "I committed" }),
+    },
+  );
+
+  assert.equal(state.status, "failed");
+  assert.match(state.steps.a?.error ?? "", /promises to change nothing, but it moved HEAD/);
+});
+
+test("a file keeps the promise of a flow, and a promise with an exception", () => {
+  const text = [
+    "name: kept",
+    "workspace: { kind: git, path: . }",
+    "changes: nothing",
+    "steps:",
+    "  - id: code",
+    "    kind: agent",
+    "    prompt: p.md",
+    "    tools: [write]",
+    "    changes: { except: [CONTEXT.md] }",
+    "    returns: { type: object }",
+  ].join("\n");
+
+  const parsed = parseFlow(text);
+  assert.deepEqual(validate(parsed), []);
+  assert.deepEqual(parseFlow(formatFlow(parsed)), parsed);
+});
+
+test("a step that undoes the work of an earlier step hears that it restored the path", async () => {
+  const cwd = gitWorkspace();
+
+  const state = await run(
+    flow("undo", {
+      workspace: { kind: "git", path: "." },
+      steps: [
+        agent({ id: "a", prompt: "step.md", tools: ["write"], returns: Summary }),
+        agent({ id: "b", needs: ["a"], prompt: "step.md", tools: ["write"], returns: Summary }),
+      ],
+    }),
+    {
+      cwd,
+      harness: {
+        toTrajectory: () => undefined,
+        async run(request) {
+          if (request.step === "a") writeFileSync(join(cwd, "extra.txt"), "work");
+          else rmSync(join(cwd, "extra.txt"));
+          return { value: { summary: request.step } };
+        },
+      },
+    },
+  );
+
+  assert.deepEqual(state.steps.a?.changed, [{ path: "extra.txt", how: "added" }]);
+  assert.deepEqual(state.steps.b?.changed, [{ path: "extra.txt", how: "restored" }]);
+});
+
+test("a sub-flow carries the promise it sets into the flow that holds it", async () => {
+  const inner = flow("inner", {
+    workspace: { kind: "git", path: "." },
+    changes: "nothing",
+    steps: [
+      agent({ id: "read", prompt: "p.md", tools: ["read"], returns: Summary }),
+      agent({
+        id: "write",
+        needs: ["read"],
+        prompt: "p.md",
+        tools: ["write"],
+        returns: Summary,
+        changes: { paths: ["docs"] },
+      }),
+    ],
+  });
+
+  const expanded = await expandFlows(
+    flow("outer", {
+      workspace: { kind: "git", path: "." },
+      steps: [{ kind: "flow", id: "sub", needs: [], flow: "./inner.yaml" }],
+    }),
+    async () => inner,
+  );
+
+  assert.deepEqual(
+    expanded.steps.map((step) => (step as AgentStep).changes),
+    ["nothing", { paths: ["docs"] }],
+  );
 });

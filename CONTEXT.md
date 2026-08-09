@@ -66,7 +66,9 @@ _Avoid_: Comparison, test, expression, function
 
 **Promise**:
 What a step says it changes in the workspace. Orchy checks the promise against
-the record of what moved. A step promises nothing, or a list of paths.
+the record of what moved. A step promises nothing, the only paths it changes, or
+the paths it must not change. A flow holds one promise for every step that
+declares none. The record names the kind of each change, and not only the path.
 _Avoid_: Guarantee, claim, permission, scope
 
 **Fanout**:

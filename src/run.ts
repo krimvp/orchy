@@ -16,6 +16,7 @@ import {
   type Member,
   type Step,
   WAVE,
+  changesOf,
   computedOf,
   cycleOf,
   exitsOf,
@@ -31,7 +32,7 @@ import {
 import type { Harness, Note } from "./harness.ts";
 import { pi } from "./pi.ts";
 import { toAtif } from "./atif.ts";
-import { changed, take } from "./workspace.ts";
+import { type Change, changed, take } from "./workspace.ts";
 
 const version = String(createRequire(import.meta.url)("../package.json").version);
 
@@ -74,8 +75,8 @@ export interface StepRecord {
   skipped?: string;
   /** The step voted to cycle, and the run acted on a vote to an earlier step. */
   votedToCycle?: string;
-  /** Invariant 5: what the step changed in the workspace. */
-  changed?: string[];
+  /** Invariant 5: each path the step changed, and what it did to that path. */
+  changed?: Change[];
   /** The cost of the step, when the trajectory of the harness does not hold it. */
   cost?: number;
 }
@@ -269,7 +270,9 @@ async function execute(state: RunState, cwd: string, options: RunOptions, answer
     // wave that holds a promise runs one step at a time.
     // ponytail: two runs in one working directory still disturb each other, so a
     // promise holds inside one run only. A workspace for each run lifts that.
-    const parallel = work.some((step) => promiseOf(step) !== undefined) ? 1 : (state.flow.parallel ?? WAVE);
+    const parallel = work.some((step) => changesOf(state.flow, step) !== undefined)
+      ? 1
+      : (state.flow.parallel ?? WAVE);
 
     await pool(work, parallel, async (step) => {
       emit({ type: "step_start", step: step.id });
@@ -611,7 +614,7 @@ async function runStep(
 
   // Invariant 5: what the step really did, not what it says it did.
   const touched = changed(before, take(state.flow.workspace, cwd));
-  const broken = brokenPromise(promiseOf(step), touched);
+  const broken = brokenPromise(changesOf(state.flow, step), touched);
   if (broken) {
     return {
       ...at(),
@@ -632,23 +635,30 @@ async function runStep(
   return record;
 }
 
-/** What a step promises about the workspace. Only these two kinds promise. */
-function promiseOf(step: Step): Changes | undefined {
-  return step.kind === "agent" || step.kind === "call" ? step.changes : undefined;
-}
-
 /**
  * Invariant 5: what a step promises about the workspace. A promise of `nothing`
  * refuses every path. A promise of paths refuses a path that is not one of them,
- * and not inside one of them. A commit moves HEAD, which no path holds.
+ * and not inside one of them. A promise with an exception refuses the paths it
+ * names and allows the rest. A commit moves HEAD, which no path holds.
  */
-function brokenPromise(changes: Changes | undefined, touched: string[]): string | undefined {
+function brokenPromise(changes: Changes | undefined, touched: Change[]): string | undefined {
   if (changes === undefined || touched.length === 0) return undefined;
-  if (changes === "nothing") return `promises to change nothing, but it changed ${touched.join(", ")}`;
+  if (changes === "nothing") return `promises to change nothing, but it ${say(touched)}`;
 
-  const outside = touched.filter((path) => !changes.paths.some((allowed) => under(path, allowed)));
+  if ("except" in changes) {
+    const inside = touched.filter((one) => changes.except.some((refused) => under(one.path, refused)));
+    if (inside.length === 0) return undefined;
+    return `promises to change nothing in ${changes.except.join(", ")}, but it ${say(inside)}`;
+  }
+
+  const outside = touched.filter((one) => !changes.paths.some((allowed) => under(one.path, allowed)));
   if (outside.length === 0) return undefined;
-  return `promises to change only ${changes.paths.join(", ")}, but it changed ${outside.join(", ")}`;
+  return `promises to change only ${changes.paths.join(", ")}, but it ${say(outside)}`;
+}
+
+/** `deleted docs/x, added docs/y`. The kind of each change, and not only the path. */
+function say(touched: Change[]): string {
+  return touched.map((one) => `${one.how} ${one.path}`).join(", ");
 }
 
 /** A path is the file itself, or anything under it as a directory. */

@@ -80,8 +80,12 @@ interface Common {
  * What a step promises to change in the workspace. Invariant 5 checks the
  * promise against the record. A step that promises nothing declares nothing.
  * A path names a file, or a directory and everything under it.
+ *
+ * `paths` names the only paths the step changes. `except` names the paths it
+ * must not change, and lets it change everything else, which is the natural way
+ * to write a rule about a whole repository.
  */
-export type Changes = "nothing" | { paths: string[] };
+export type Changes = "nothing" | { paths: string[] } | { except: string[] };
 
 /** Invariant 5 is opt-in. A step that promises what it changes declares it. */
 interface Acts {
@@ -170,6 +174,8 @@ export interface Flow {
   harness?: string;
   /** The model for a step that names none. */
   model?: string;
+  /** The promise for an agent step and a call step that declares none. */
+  changes?: Changes;
   /** The values a run supplies. Every step of the run reads them. */
   takes?: TSchema;
   /** The value the flow produces, which is the value of the step it ends with. */
@@ -202,6 +208,7 @@ export function flow(name: string, definition: Definition): Flow {
   if (definition.workspace) built.workspace = definition.workspace;
   if (definition.harness) built.harness = definition.harness;
   if (definition.model) built.model = definition.model;
+  if (definition.changes) built.changes = definition.changes;
   if (definition.takes) built.takes = definition.takes;
   if (definition.returns) built.returns = definition.returns;
   if (definition.parallel !== undefined) built.parallel = definition.parallel;
@@ -242,6 +249,15 @@ export function harnessOf(flow: Flow, step: Step): string | undefined {
 /** The model of a step, by the same rule as the harness. */
 export function modelOf(flow: Flow, step: Step): string | undefined {
   return (step.kind === "agent" ? step.model : undefined) ?? flow.model;
+}
+
+/**
+ * The promise of a step, by the same rule as the harness. Only these two kinds
+ * act in the workspace, so the promise of the flow reaches no other kind.
+ */
+export function changesOf(flow: Flow, step: Step): Changes | undefined {
+  if (step.kind !== "agent" && step.kind !== "call") return undefined;
+  return step.changes ?? flow.changes;
 }
 
 /**
@@ -381,8 +397,10 @@ export async function expandFlows(flow: Flow, load: (path: string) => Promise<Fl
       } as Step;
       // Expansion drops the inner flow, so the values it takes ride on each step
       // that reads one. The step keeps what only it holds, which is the narrower.
-      if (step.with && (moved.kind === "agent" || moved.kind === "call")) {
-        moved.with = { ...step.with, ...moved.with };
+      if (moved.kind === "agent" || moved.kind === "call") {
+        if (step.with) moved.with = { ...step.with, ...moved.with };
+        // A promise that expansion drops is a rule that looks enforced and is not.
+        if (inner.changes) moved.changes ??= inner.changes;
       }
       // A cycle inside a flow stays inside it, and so does a computed fanout.
       const cycle = cycleOf(moved);
@@ -406,7 +424,7 @@ export async function expandFlows(flow: Flow, load: (path: string) => Promise<Fl
   return { ...flow, steps: rename(steps, map) };
 }
 
-const FLOW_HOLDS = ["name", "workspace", "harness", "model", "takes", "returns", "parallel", "steps"];
+const FLOW_HOLDS = ["name", "workspace", "harness", "model", "changes", "takes", "returns", "parallel", "steps"];
 
 /**
  * What each kind of step holds. A field that this table does not name is a
@@ -458,6 +476,7 @@ function shapeProblems(flow: Flow): string[] {
     if (!FLOW_HOLDS.includes(key)) problems.push(`the flow holds "${key}", which is not a field of a flow`);
   }
   problems.push(...workspaceProblems(flow.workspace));
+  problems.push(...changesProblems("the flow", flow.changes));
   if (flow.takes !== undefined && !isSchema(flow.takes)) {
     problems.push(`the flow takes ${JSON.stringify(flow.takes)}, which is not JSON Schema`);
   }
@@ -490,7 +509,7 @@ function shapeProblems(flow: Flow): string[] {
     if (step.kind !== "flow" && returns !== undefined && !isSchema(returns)) {
       problems.push(`step "${step.id}" returns "${JSON.stringify(returns)}", which is not JSON Schema`);
     }
-    problems.push(...changesProblems(step));
+    problems.push(...changesProblems(`step "${step.id}"`, (step as AgentStep).changes));
     problems.push(...memberProblems(step));
   }
   return problems;
@@ -518,23 +537,44 @@ function workspaceProblems(workspace: Workspace | undefined): string[] {
   return [];
 }
 
-/** The promise of invariant 5. A boolean cannot hold it, so a word does. */
-function changesProblems(step: Step): string[] {
-  const changes = (step as AgentStep).changes;
+/** The two tags of a promise. A promise names one of them, and never both. */
+const CHANGES_HOLDS = ["paths", "except"];
+
+const WRITE = 'Write "nothing", { paths } for the only paths it changes, or { except } for the paths it must not change.';
+
+/**
+ * The promise of invariant 5. A boolean cannot hold it, so a word does. `who`
+ * names the flow, or the step, because both hold a promise.
+ */
+function changesProblems(who: string, changes: Changes | undefined): string[] {
   if (changes === undefined || changes === "nothing") return [];
   if (typeof changes === "boolean") {
     const write = changes ? "leave it out" : 'write "changes: nothing"';
-    return [`step "${step.id}" promises "changes: ${changes}", which Orchy cannot check. Instead, ${write}.`];
+    return [`${who} promises "changes: ${changes}", which Orchy cannot check. Instead, ${write}.`];
   }
-  if (isSchema(changes) && Array.isArray((changes as { paths?: unknown }).paths)) {
-    const { paths } = changes as { paths: unknown[] };
-    if (paths.length === 0) return [`step "${step.id}" promises no path. Write "changes: nothing" instead.`];
-    if (paths.some((path) => typeof path !== "string" || path === "")) {
-      return [`step "${step.id}" promises a path that is not a name`];
-    }
-    return [];
+  if (!isSchema(changes)) return [`${who} promises "${JSON.stringify(changes)}". ${WRITE}`];
+
+  const held = changes as unknown as Record<string, unknown>;
+  const problems = Object.keys(held)
+    .filter((key) => !CHANGES_HOLDS.includes(key))
+    .map((key) => `${who} promises a change that holds "${key}", which is not a field of a promise`);
+  const tags = CHANGES_HOLDS.filter((key) => held[key] !== undefined);
+  if (tags.length === 0) return [...problems, `${who} promises "${JSON.stringify(changes)}". ${WRITE}`];
+  if (tags.length > 1) {
+    // Each one rules the other out: "paths" already refuses every other path.
+    return [...problems, `${who} promises "paths" and "except" at once. ${WRITE}`];
   }
-  return [`step "${step.id}" promises "${JSON.stringify(changes)}". Write "nothing" or a list of paths.`];
+
+  const tag = tags[0] as string;
+  const paths = held[tag];
+  if (!Array.isArray(paths) || paths.some((path) => typeof path !== "string" || path === "")) {
+    return [...problems, `${who} promises "${tag}" that is not a list of names. ${WRITE}`];
+  }
+  if (paths.length === 0) {
+    const write = tag === "paths" ? 'Write "changes: nothing" instead.' : 'Leave "changes" out instead.';
+    return [...problems, `${who} promises "${tag}" with no path. ${write}`];
+  }
+  return problems;
 }
 
 function memberProblems(step: Step): string[] {
@@ -654,9 +694,15 @@ export function validate(flow: Flow): string[] {
   }
 
   const records = flow.workspace !== undefined && flow.workspace.kind !== "none";
-  for (const step of flow.steps) {
-    if ((step.kind === "agent" || step.kind === "call") && step.changes !== undefined && !records) {
-      problems.push(`step "${step.id}" promises what it changes, but the flow has no workspace to check it`);
+  if (!records) {
+    // One promise on the flow speaks for every step, so it answers once.
+    if (flow.changes !== undefined) {
+      problems.push("the flow promises what it changes, but it has no workspace to check it");
+    }
+    for (const step of flow.steps) {
+      if ((step.kind === "agent" || step.kind === "call") && step.changes !== undefined) {
+        problems.push(`step "${step.id}" promises what it changes, but the flow has no workspace to check it`);
+      }
     }
   }
 

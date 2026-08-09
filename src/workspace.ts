@@ -12,6 +12,16 @@ export interface Snapshot {
   files: Record<string, string>;
 }
 
+/**
+ * What a step did to one path. Invariant 5 records the kind of the change and
+ * not only the path, because a person who reads "changed" and means "deleted"
+ * loses the worst case in the vaguest word. `moved` belongs to HEAD alone.
+ */
+export interface Change {
+  path: string;
+  how: "added" | "changed" | "deleted" | "renamed" | "restored" | "moved";
+}
+
 /** A workspace that records nothing returns nothing, and invariant 5 stays quiet. */
 export function take(workspace: Workspace | undefined, cwd: string): Snapshot | undefined {
   if (!workspace || workspace.kind === "none") return undefined;
@@ -26,12 +36,33 @@ export function take(workspace: Workspace | undefined, cwd: string): Snapshot | 
   return { head: git(["rev-parse", "HEAD"], at).trim(), files: status(at) };
 }
 
-export function changed(before: Snapshot | undefined, after: Snapshot | undefined): string[] {
+export function changed(before: Snapshot | undefined, after: Snapshot | undefined): Change[] {
   if (!before || !after) return [];
 
   const paths = new Set([...Object.keys(before.files), ...Object.keys(after.files)]);
-  const moved = [...paths].filter((path) => before.files[path] !== after.files[path]).sort();
-  return before.head === after.head ? moved : ["HEAD", ...moved];
+  const list = [...paths]
+    .filter((path) => before.files[path] !== after.files[path])
+    .sort()
+    .map((path) => ({ path, how: howOf(after.files[path]) }));
+  return before.head === after.head ? list : [{ path: "HEAD", how: "moved" }, ...list];
+}
+
+/** The status letters, in the order they alarm a reader. The first one wins. */
+const HOW: Array<[string, Change["how"]]> = [
+  ["D", "deleted"],
+  ["R", "renamed"],
+  ["?", "added"],
+  ["A", "added"],
+];
+
+/**
+ * The two status characters of git, as one word. A path that git no longer
+ * reports is back as the repository holds it, which a commit or an undo does.
+ */
+function howOf(status: string | undefined): Change["how"] {
+  if (status === undefined) return "restored";
+  for (const [letter, how] of HOW) if (status.includes(letter)) return how;
+  return "changed";
 }
 
 /**

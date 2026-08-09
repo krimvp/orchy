@@ -1,14 +1,14 @@
-# Find a document that disagrees with the code. Every step is read-only, so
-# every step promises to change nothing and the workspace checks the promise.
+# Find a document that disagrees with the code. Every step is read-only, so the
+# flow promises to change nothing and the workspace checks every step.
 name: docs-audit
 workspace: { kind: git, path: . }
+changes: nothing
 
 steps:
   - id: auditor
     kind: agent
     prompt: prompts/audit.md
     tools: [read, grep, find, ls]
-    changes: nothing
     returns: &report
       type: object
       required: [checked, disagreements]
