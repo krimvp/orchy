@@ -57,6 +57,8 @@ export interface StepRecord {
   disagreement?: "accepted";
   /** Why a condition ruled the step out, so a reader needs no second look. */
   skipped?: string;
+  /** The step voted to cycle, and the run acted on a vote to an earlier step. */
+  votedToCycle?: string;
   /** Invariant 5: what the step changed in the workspace. */
   changed?: string[];
   /** The cost of the step, when the trajectory of the harness does not hold it. */
@@ -72,8 +74,8 @@ export interface RunState {
   question?: string;
   steps: Record<string, StepRecord>;
   cycles: Record<string, number>;
-  /** The value that sent the run back, and the step it goes back to. */
-  feedback?: { step: string; to: string; value: unknown };
+  /** Each value that sent the run back, and the step it goes back to. */
+  feedback?: Array<{ step: string; to: string; value: unknown }>;
   /** Every step that a cycle dropped. A dropped attempt is still a cost. */
   history?: Array<{ step: string; record: StepRecord }>;
 }
@@ -202,61 +204,85 @@ async function execute(state: RunState, cwd: string, options: RunOptions): Promi
     const feedback = state.feedback;
     state.feedback = undefined;
 
-    const records = await pool(work, state.flow.parallel ?? WAVE, async (step) => {
+    // Invariant 5: a promise needs a workspace that no other step disturbs, so a
+    // wave that holds a promise runs one step at a time.
+    // ponytail: two runs in one working directory still disturb each other, so a
+    // promise holds inside one run only. A workspace for each run lifts that.
+    const parallel = work.some((step) => promiseOf(step) !== undefined) ? 1 : (state.flow.parallel ?? WAVE);
+
+    await pool(work, parallel, async (step) => {
       emit({ type: "step_start", step: step.id });
       const watch = (note: Note) => emit({ type: "output", step: step.id, ...note });
       const chosen = harnessFor(state.flow, step, harness, options.harnesses);
       const record = await runStep(step, state, cwd, chosen, watch, feedback);
+      // ADR 0005: the state on disk is the run, so a wave that dies keeps what settled.
+      state.steps[step.id] = record;
+      save();
       emit({ type: "step_end", step: step.id, status: record.status === "failed" ? "failed" : "done" });
-      return record;
-    });
-
-    work.forEach((step, index) => {
-      state.steps[step.id] = records[index] as StepRecord;
     });
 
     const failures = work.filter((step) => state.steps[step.id]?.status === "failed");
-    // A step that cycles on a failure goes back instead of ending the run.
-    const retry = failures.length === 1 ? retryOf(failures[0] as Step, state) : undefined;
-    if (failures.length > 0 && !retry) {
-      state.status = "failed";
-      close();
-      emit({ type: "run_end", status: state.status });
-      return state;
-    }
-    if (retry) {
-      const step = failures[0] as Step;
-      const record = state.steps[step.id] as StepRecord;
-      if (retry.count > retry.cycle.limit) {
-        // Invariant 4: the retry stops here. A failure carries no value to accept.
-        if (retry.cycle.policy === "accept") {
+    if (failures.length > 0) {
+      // A step that cycles on a failure goes back instead of ending the run, and
+      // every failure in the wave takes its own cycle.
+      const retries = failures.flatMap((step) => {
+        const retry = retryOf(step, state);
+        return retry ? [{ step, retry }] : [];
+      });
+      const spent = retries.filter(({ retry }) => retry.count > retry.cycle.limit);
+
+      // A failure past its limit, or one with no cycle, has no way back.
+      if (spent.length > 0 || retries.length < failures.length) {
+        // Invariant 4: the retry stops here. A failure carries no value to accept,
+        // so only `escalate` has somewhere to go: it asks a person for the value.
+        // A stop takes one step, and a failed record that lives through the stop
+        // runs again past its limit. So a wave with a second failure fails.
+        const asking =
+          failures.length === 1 ? spent.find(({ retry }) => retry.cycle.policy === "escalate") : undefined;
+        if (!asking) {
           state.status = "failed";
           close();
           emit({ type: "run_end", status: state.status });
           return state;
         }
-        state.history = [...(state.history ?? []), { step: step.id, record }];
-        delete state.steps[step.id];
-        return stop(state, step.id, questionFor(step, retry.cycle, record), close, emit);
+        const record = state.steps[asking.step.id] as StepRecord;
+        state.history = [...(state.history ?? []), { step: asking.step.id, record }];
+        delete state.steps[asking.step.id];
+        return stop(state, asking.step.id, questionFor(asking.step, asking.retry.cycle, record), close, emit);
       }
-      state.cycles[retry.key] = retry.count;
-      // A retry that drops the reason for it makes the same mistake again.
-      state.feedback = { step: step.id, to: retry.cycle.to, value: { error: record.error } };
-      goBackTo(retry.cycle.to, state, sorted);
-      emit({ type: "cycle", step: step.id, to: retry.cycle.to, count: retry.count });
+
+      // A retry that drops the reason for it makes the same mistake again. The
+      // record goes to history when the step goes back, so read the error first.
+      state.feedback = retries.map(({ step, retry }) => ({
+        step: step.id,
+        to: retry.cycle.to,
+        value: { error: (state.steps[step.id] as StepRecord).error },
+      }));
+      for (const { step, retry } of retries) {
+        state.cycles[retry.key] = retry.count;
+        goBackTo(retry.cycle.to, state, sorted);
+        emit({ type: "cycle", step: step.id, to: retry.cycle.to, count: retry.count });
+      }
       save();
       continue;
     }
 
-    // One wave settles one cycle. A second would fight the first for the same steps.
-    const turning = work.find((step) => {
+    const voters = work.filter((step) => {
       const cycle = cycleOf(step);
       const record = state.steps[step.id] as StepRecord;
       if (!cycle || cycle.when === "failed" || record.answeredByPerson) return false;
       return matches(cycle.when as Match, record.value);
     });
+    // One wave settles one cycle. A second would fight the first for the same
+    // steps, so the run goes back to the earliest target and runs the rest again.
+    const place = (step: Step) => sorted.findIndex((one) => one.id === (cycleOf(step) as Cycle).to);
+    const [turning] = [...voters].sort((one, other) => place(one) - place(other));
 
     if (turning) {
+      // A vote the run does not act on is still information, so the record holds it.
+      for (const other of voters) {
+        if (other !== turning) (state.steps[other.id] as StepRecord).votedToCycle = (cycleOf(other) as Cycle).to;
+      }
       const cycle = cycleOf(turning) as Cycle;
       const record = state.steps[turning.id] as StepRecord;
       const key = `${turning.id}->${cycle.to}`;
@@ -273,7 +299,7 @@ async function execute(state: RunState, cwd: string, options: RunOptions): Promi
       } else {
         state.cycles[key] = count;
         // A cycle that drops the reason for it sends the step back blind.
-        state.feedback = { step: turning.id, to: cycle.to, value: record.value };
+        state.feedback = [{ step: turning.id, to: cycle.to, value: record.value }];
         goBackTo(cycle.to, state, sorted);
         emit({ type: "cycle", step: turning.id, to: cycle.to, count });
       }
@@ -303,20 +329,18 @@ function stop(
   return state;
 }
 
-/** Runs at most `limit` at once, and keeps the answers in the order it was given. */
-async function pool<T, R>(items: T[], limit: number, work: (item: T) => Promise<R>): Promise<R[]> {
-  const answers = new Array<R>(items.length);
+/** Runs at most `limit` items at once. */
+async function pool<T>(items: T[], limit: number, work: (item: T) => Promise<void>): Promise<void> {
   let next = 0;
   const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
     for (;;) {
       const index = next;
       next += 1;
       if (index >= items.length) return;
-      answers[index] = await work(items[index] as T);
+      await work(items[index] as T);
     }
   });
   await Promise.all(workers);
-  return answers;
 }
 
 /** The step names a harness, then the flow does, then the run does. */
@@ -361,16 +385,21 @@ function questionFor(step: Step, cycle: Cycle, record: StepRecord): string {
 }
 
 /**
- * ponytail: clears every step from the target onward, not only the steps that
- * depend on it. A run is sequential, so the extra work is never done twice.
+ * Clears the target and every step that needs it, so a branch that the cycle
+ * does not touch keeps its work and spends no tokens twice.
  */
 function goBackTo(target: string, state: RunState, sorted: Step[]): void {
-  const from = sorted.findIndex((step) => step.id === target);
+  // A sorted step comes after everything it needs, so one pass finds them all.
+  const again = new Set([target]);
+  for (const step of sorted) {
+    if (step.needs.some((need) => again.has(need))) again.add(step.id);
+  }
+
   const dropped = state.history ?? [];
-  for (const later of sorted.slice(from)) {
-    const record = state.steps[later.id];
-    if (record) dropped.push({ step: later.id, record });
-    delete state.steps[later.id];
+  for (const step of sorted.filter((one) => again.has(one.id))) {
+    const record = state.steps[step.id];
+    if (record) dropped.push({ step: step.id, record });
+    delete state.steps[step.id];
   }
   state.history = dropped;
 }
@@ -393,7 +422,7 @@ async function runStep(
   const at = () => ({ startedAt, endedAt: new Date().toISOString() });
   const inputs = Object.fromEntries(step.needs.map((need) => [need, state.steps[need]?.value]));
   // Only the step the cycle went back to hears why it went back.
-  if (feedback && feedback.to === step.id) inputs[feedback.step] = feedback.value;
+  for (const one of feedback ?? []) if (one.to === step.id) inputs[one.step] = one.value;
 
   const before = take(state.flow.workspace, cwd);
 
@@ -419,8 +448,7 @@ async function runStep(
 
   // Invariant 5: what the step really did, not what it says it did.
   const touched = changed(before, take(state.flow.workspace, cwd));
-  const promised = step.kind === "agent" || step.kind === "call" ? step.changes : undefined;
-  const broken = brokenPromise(promised, touched);
+  const broken = brokenPromise(promiseOf(step), touched);
   if (broken) {
     return {
       ...at(),
@@ -439,6 +467,11 @@ async function runStep(
   if (result.cost !== undefined) record.cost = result.cost;
   if (touched.length > 0) record.changed = touched;
   return record;
+}
+
+/** What a step promises about the workspace. Only these two kinds promise. */
+function promiseOf(step: Step): Changes | undefined {
+  return step.kind === "agent" || step.kind === "call" ? step.changes : undefined;
 }
 
 /**

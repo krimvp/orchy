@@ -1782,6 +1782,292 @@ test("a cycle still refuses to send the run forward", () => {
   assert.ok(problems.some((p) => p.includes('cycles to "two", which does not run before it')));
 });
 
+// ── The wave ─────────────────────────────────────────────────────────────────
+
+/** Answers by the id of the step, one value for each turn. An Error value throws. */
+function byStep(answers: Record<string, unknown[]>): Harness & { seen: AgentRequest[] } {
+  const seen: AgentRequest[] = [];
+  const turns: Record<string, number> = {};
+  return {
+    seen,
+    toTrajectory: () => undefined,
+    async run(request: AgentRequest): Promise<AgentResult> {
+      seen.push(request);
+      const list = answers[request.step] ?? [];
+      const turn = turns[request.step] ?? 0;
+      turns[request.step] = turn + 1;
+      const value = list[Math.min(turn, list.length - 1)];
+      if (value instanceof Error) throw value;
+      return { value };
+    },
+  };
+}
+
+test("a wave that holds a promise runs one step at a time, so no step breaks the promise of another", async () => {
+  const cwd = gitWorkspace();
+  let running = 0;
+  let peak = 0;
+  const pair: Harness = {
+    toTrajectory: () => undefined,
+    async run(request) {
+      running += 1;
+      peak = Math.max(peak, running);
+      // The writer writes while the quiet step waits, which is what a wave does.
+      if (request.step === "writer") {
+        await wait(20);
+        writeFileSync(join(cwd, "writer-made-this.txt"), "the writer wrote this");
+      } else await wait(60);
+      running -= 1;
+      return { value: { summary: request.step } };
+    },
+  };
+
+  const state = await run(
+    flow("wave-promise", {
+      parallel: 2,
+      workspace: { kind: "git", path: "." },
+      steps: [
+        agent({ id: "writer", prompt: "step.md", tools: ["write"], returns: Summary }),
+        agent({ id: "innocent", prompt: "step.md", tools: ["read"], returns: Summary, changes: "nothing" }),
+      ],
+    }),
+    { cwd, harness: pair },
+  );
+
+  assert.equal(state.steps.innocent?.error, undefined);
+  assert.equal(state.status, "done");
+  assert.equal(peak, 1);
+});
+
+test("a step record reaches the disk as the step settles, so a wave that dies keeps it", async () => {
+  const cwd = workspace();
+  let runId = "";
+  const slower: Harness = {
+    toTrajectory: () => undefined,
+    async run(request) {
+      if (request.step === "slow") await wait(40);
+      return { value: { summary: request.step } };
+    },
+  };
+
+  // The second step of the wave kills the run, as a crash does.
+  await assert.rejects(
+    () =>
+      run(
+        flow("dies", {
+          steps: [
+            agent({ id: "fast", prompt: "step.md", tools: ["read"], returns: Summary }),
+            agent({ id: "slow", prompt: "step.md", tools: ["read"], returns: Summary }),
+          ],
+        }),
+        {
+          cwd,
+          harness: slower,
+          onEvent: (event) => {
+            if (event.type === "run_start") runId = event.runId;
+            if (event.type === "step_end" && event.step === "slow") throw new Error("the run died");
+          },
+        },
+      ),
+    /the run died/,
+  );
+
+  const onDisk = JSON.parse(readFileSync(join(cwd, ".orchy", "runs", runId, "state.json"), "utf8"));
+  assert.equal(onDisk.steps.fast?.status, "done");
+});
+
+function twoFlaky(): Flow {
+  return flow("two-flaky", {
+    steps: [
+      agent({
+        id: "one",
+        prompt: "step.md",
+        tools: ["read"],
+        returns: Summary,
+        cycle: { to: "one", when: "failed", limit: 2, policy: "accept" },
+      }),
+      agent({
+        id: "two",
+        prompt: "step.md",
+        tools: ["read"],
+        returns: Summary,
+        cycle: { to: "two", when: "failed", limit: 2, policy: "accept" },
+      }),
+    ],
+  });
+}
+
+test("two steps that fail in one wave both retry", async () => {
+  const cwd = workspace();
+  const harness = byStep({
+    one: [new Error("the API answered 503"), { summary: "one" }],
+    two: [new Error("the API answered 500"), { summary: "two" }],
+  });
+
+  const state = await run(twoFlaky(), { cwd, harness });
+
+  assert.equal(state.status, "done");
+  assert.deepEqual(state.steps.one?.value, { summary: "one" });
+  assert.deepEqual(state.steps.two?.value, { summary: "two" });
+});
+
+test("each step that retries in a wave hears its own error", async () => {
+  const cwd = workspace();
+  const harness = byStep({
+    one: [new Error("the API answered 503"), { summary: "one" }],
+    two: [new Error("the API answered 500"), { summary: "two" }],
+  });
+
+  await run(twoFlaky(), { cwd, harness });
+
+  const second = (id: string) => harness.seen.filter((request) => request.step === id)[1]?.prompt ?? "";
+  assert.match(second("one"), /503/);
+  assert.ok(!second("one").includes("500"));
+  assert.match(second("two"), /500/);
+});
+
+test("a failure with no way back fails the run, even beside a failure that would ask a person", async () => {
+  const cwd = workspace();
+  const harness = byStep({
+    start: [{ summary: "start" }],
+    // It passes, the cycle sends it back, and it fails beside the spent step.
+    hard: [{ summary: "ok" }, new Error("the disk is full")],
+    soft: [new Error("the API answered 503")],
+  });
+
+  const state = await run(
+    flow("mixed-failures", {
+      steps: [
+        agent({ id: "start", prompt: "step.md", tools: ["read"], returns: Summary }),
+        agent({ id: "hard", needs: ["start"], prompt: "step.md", tools: ["read"], returns: Summary }),
+        agent({
+          id: "soft",
+          needs: ["start"],
+          prompt: "step.md",
+          tools: ["read"],
+          returns: Summary,
+          cycle: { to: "start", when: "failed", limit: 1, policy: "escalate" },
+        }),
+      ],
+    }),
+    { cwd, harness },
+  );
+
+  assert.equal(state.status, "failed");
+  // The run is over, so the failed step waits on no disk to run again.
+  await assert.rejects(() => resume(state.runId, { summary: "a person wrote this" }, { cwd, harness }), /is failed/);
+  assert.equal(harness.seen.filter((request) => request.step === "hard").length, 2);
+});
+
+test("two failures that reach the limit of their cycle run no step past that limit", async () => {
+  const cwd = workspace();
+  const harness = byStep({
+    one: [new Error("the API answered 503")],
+    two: [new Error("the API answered 500")],
+  });
+
+  const state = await run(
+    flow("two-spent", {
+      steps: [
+        agent({
+          id: "one",
+          prompt: "step.md",
+          tools: ["read"],
+          returns: Summary,
+          cycle: { to: "one", when: "failed", limit: 1, policy: "escalate" },
+        }),
+        agent({
+          id: "two",
+          prompt: "step.md",
+          tools: ["read"],
+          returns: Summary,
+          cycle: { to: "two", when: "failed", limit: 1, policy: "escalate" },
+        }),
+      ],
+    }),
+    { cwd, harness },
+  );
+
+  assert.equal(state.status, "failed");
+  await assert.rejects(() => resume(state.runId, { summary: "a person wrote this" }, { cwd, harness }), /is failed/);
+  // One turn, and the one retry that the limit allows.
+  assert.equal(harness.seen.filter((request) => request.step === "two").length, 2);
+});
+
+test("a wave with two votes to cycle goes back to the earliest target and keeps the other vote", async () => {
+  const cwd = workspace();
+  const harness = byStep({
+    first: [{ summary: "v1" }, { summary: "v2" }],
+    second: [{ summary: "s1" }, { summary: "s2" }],
+    near: [{ approved: false }, { approved: true }],
+    far: [{ approved: false }, { approved: true }],
+  });
+
+  const state = await run(
+    flow("panel", {
+      steps: [
+        agent({ id: "first", prompt: "step.md", tools: ["read"], returns: Summary }),
+        agent({ id: "second", needs: ["first"], prompt: "step.md", tools: ["read"], returns: Summary }),
+        agent({
+          id: "near",
+          needs: ["second"],
+          prompt: "step.md",
+          tools: ["read"],
+          returns: Verdict,
+          cycle: { to: "second", when: { approved: false }, limit: 2, policy: "accept" },
+        }),
+        agent({
+          id: "far",
+          needs: ["second"],
+          prompt: "step.md",
+          tools: ["read"],
+          returns: Verdict,
+          cycle: { to: "first", when: { approved: false }, limit: 2, policy: "accept" },
+        }),
+      ],
+    }),
+    { cwd, harness },
+  );
+
+  assert.equal(state.status, "done");
+  // "near" votes first, and "far" votes for the earlier step, so "far" wins.
+  assert.equal(state.cycles["far->first"], 1);
+  assert.equal(state.cycles["near->second"], undefined);
+  const vote = state.history?.find((one) => one.step === "near");
+  assert.equal(vote?.record.votedToCycle, "second");
+});
+
+test("a cycle keeps the work of a branch that does not need the step it goes back to", async () => {
+  const cwd = workspace();
+  const harness = byStep({
+    code: [{ summary: "v1" }, { summary: "v2" }],
+    aside: [{ summary: "aside" }],
+    review: [{ approved: false }, { approved: true }],
+  });
+
+  const state = await run(
+    flow("branch", {
+      steps: [
+        agent({ id: "code", prompt: "step.md", tools: ["write"], returns: Summary }),
+        agent({ id: "aside", prompt: "step.md", tools: ["read"], returns: Summary }),
+        agent({
+          id: "review",
+          needs: ["code"],
+          prompt: "step.md",
+          tools: ["read"],
+          returns: Verdict,
+          cycle: { to: "code", when: { approved: false }, limit: 2, policy: "accept" },
+        }),
+      ],
+    }),
+    { cwd, harness },
+  );
+
+  assert.equal(state.status, "done");
+  assert.deepEqual(state.steps.aside?.value, { summary: "aside" });
+  assert.equal(harness.seen.filter((request) => request.step === "aside").length, 1);
+});
+
 test("the narrower harness wins: the step, then the flow, then the run", async () => {
   const cwd = workspace();
   const one = fakeHarness({ summary: "one" });
