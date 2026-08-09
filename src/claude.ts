@@ -5,7 +5,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { type Metrics, SCHEMA_VERSION, type Step, type Trajectory, totalMetrics } from "./atif.ts";
-import type { Harness } from "./harness.ts";
+import { type Harness, type Watch, notesOf } from "./harness.ts";
+import { tail } from "./tail.ts";
 
 const run = promisify(execFile);
 
@@ -35,7 +36,7 @@ interface Answer {
  * contract as JSON Schema directly, so no schema conversion happens at all.
  */
 export const claude: Harness = {
-  async run(request) {
+  async run(request, watch) {
     const tools = [
       ...new Set(
         request.tools.flatMap((name) => {
@@ -66,10 +67,16 @@ export const claude: Harness = {
       ...(request.model ? ["--model", request.model] : []),
     ];
 
-    const { stdout } = await run("claude", args, {
-      cwd: request.cwd,
-      maxBuffer: 64 * 1024 * 1024,
-    });
+    // Claude writes its transcript one line at a time, so the record of the
+    // step is also the report of it. The command itself does not change.
+    const stop = watch ? tail(() => findTranscript(sessionId), (line) => report(line, watch)) : undefined;
+
+    let stdout: string;
+    try {
+      ({ stdout } = await run("claude", args, { cwd: request.cwd, maxBuffer: 64 * 1024 * 1024 }));
+    } finally {
+      stop?.();
+    }
 
     let answer: Answer;
     try {
@@ -132,6 +139,19 @@ export const claude: Harness = {
     };
   },
 };
+
+/** One line of the transcript, as notes. A line that says nothing reports nothing. */
+function report(line: string, watch: Watch): void {
+  let entry: Entry;
+  try {
+    entry = JSON.parse(line) as Entry;
+  } catch {
+    return;
+  }
+  if (!entry.message?.role) return;
+  const step = toStep(entry, 0);
+  if (step) for (const note of notesOf(step)) watch(note);
+}
 
 function findTranscript(sessionId: string): string | undefined {
   const projects = join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "projects");

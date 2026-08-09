@@ -96,6 +96,11 @@ The database that the daemon builds from the runs on disk. It answers a list and
 a search. The state on disk stays the run.
 _Avoid_: Database, store, cache, registry
 
+**Note**:
+One thing a step says while it works. A note is a view, and the trajectory is
+the record.
+_Avoid_: Log line, message, chunk, token
+
 **Trajectory**:
 The full record of what a step did, from the first prompt to the last tool call.
 Orchy writes a trajectory in the ATIF format.

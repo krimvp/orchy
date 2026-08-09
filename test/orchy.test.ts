@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { Type } from "@sinclair/typebox";
 import { type AgentStep, type CallStep, type Flow, agent, call, expandFanout, expandFlows, flow, gate, resolvePaths, validate } from "../src/flow.ts";
 import type { AgentRequest, AgentResult, Harness } from "../src/harness.ts";
-import { resume, run } from "../src/run.ts";
+import { notesOf } from "../src/harness.ts";
+import { type RunEvent, resume, run } from "../src/run.ts";
+import { tail } from "../src/tail.ts";
 import { claude } from "../src/claude.ts";
 import { pi } from "../src/pi.ts";
 import { parseFlow } from "../src/yaml.ts";
@@ -373,6 +375,96 @@ test("a resume names the run again, so a parent process follows it", async () =>
   assert.equal(events[0], "run_start");
 });
 
+// -- What a step reports while it works --
+
+const wait = (millis: number) => new Promise((done) => setTimeout(done, millis));
+
+test("tail reads a file as it grows, and holds a line that is half written", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "orchy-tail-"));
+  const file = join(directory, "session.jsonl");
+  const seen: string[] = [];
+
+  const stop = tail(
+    () => (existsSync(file) ? file : undefined),
+    (line) => seen.push(line),
+  );
+  writeFileSync(file, "one\ntwo\nthr");
+  await wait(400);
+  assert.deepEqual(seen, ["one", "two"]);
+
+  appendFileSync(file, "ee\nfour\n");
+  await wait(400);
+  stop();
+
+  assert.deepEqual(seen, ["one", "two", "three", "four"]);
+});
+
+test("a harness reports what a step does, and the run passes it on", async () => {
+  const cwd = workspace();
+  const talking: Harness = {
+    toTrajectory: () => undefined,
+    async run(_request, watch) {
+      watch?.({ kind: "tool", text: "Read package.json" });
+      watch?.({ kind: "text", text: "the file holds a name" });
+      return { value: { summary: "v" } };
+    },
+  };
+
+  const events: RunEvent[] = [];
+  const one = flow("one", {
+    steps: [agent({ id: "look", prompt: "step.md", tools: ["read"], returns: Summary })],
+  });
+  const state = await run(one, { cwd, harness: talking, onEvent: (event) => events.push(event) });
+
+  assert.equal(state.status, "done");
+  const output = events.filter((event) => event.type === "output");
+  assert.deepEqual(
+    output.map((event) => `${event.kind}: ${event.text}`),
+    ["tool: Read package.json", "text: the file holds a name"],
+  );
+  assert.equal(
+    output.every((event) => event.step === "look"),
+    true,
+  );
+});
+
+test("a deterministic step reports what it does through the same events", async () => {
+  const cwd = workspace();
+  writeFileSync(join(cwd, "tells.ts"), `export default (_i, say) => { say("half way"); return { count: 1 }; };\n`);
+
+  const events: RunEvent[] = [];
+  const one = flow("one", {
+    steps: [call({ id: "work", module: "tells.ts", returns: Type.Object({ count: Type.Number() }) })],
+  });
+  await run(one, { cwd, onEvent: (event) => events.push(event) });
+
+  const output = events.filter((event) => event.type === "output");
+  assert.deepEqual(output.map((event) => event.text), ["half way"]);
+});
+
+test("notesOf turns one step of a trajectory into what a person reads", () => {
+  const notes = notesOf({
+    step_id: 1,
+    timestamp: "",
+    source: "agent",
+    message: "I will read the file.",
+    reasoning_content: "the name is in the file",
+    tool_calls: [{ tool_call_id: "1", function_name: "Read", arguments: { path: "a.ts" } }],
+  });
+
+  assert.deepEqual(notes, [
+    { kind: "reasoning", text: "the name is in the file" },
+    { kind: "text", text: "I will read the file." },
+    { kind: "tool", text: 'Read {"path":"a.ts"}' },
+  ]);
+});
+
+test("a note carries a line, not a file", () => {
+  const [note] = notesOf({ step_id: 1, timestamp: "", source: "agent", message: "x".repeat(900) });
+  assert.equal(note?.text.length, 401);
+  assert.equal(note?.text.endsWith("…"), true);
+});
+
 // -- The workspace and invariant 5 --
 
 function gitWorkspace(): string {
@@ -620,6 +712,28 @@ test("ATIF reads a pi session file into steps, tool calls, and metrics", async (
     total_steps: 3,
   });
   assert.equal(atif.steps[0].subagent_trajectory_ref.trajectory_id, child.trajectory_id);
+});
+
+test("the trajectory marks the run of a step that a cycle threw away", async () => {
+  const cwd = workspace();
+  const state = await run(reviewFlow(2, "accept"), {
+    cwd,
+    harness: fakeHarness({ summary: "v1" }, { approved: false }, { summary: "v2" }, { approved: true }),
+  });
+
+  const atif = JSON.parse(readFileSync(join(cwd, ".orchy", "runs", state.runId, "trajectory.json"), "utf8"));
+  const marks = atif.steps.map((step: { extra: { orchy: { step: string; dropped?: boolean } } }) => [
+    step.extra.orchy.step,
+    step.extra.orchy.dropped ?? false,
+  ]);
+
+  // The first run of each step is the one the cycle threw away.
+  assert.deepEqual(marks, [
+    ["code", true],
+    ["review", true],
+    ["code", false],
+    ["review", false],
+  ]);
 });
 
 test("a prompt and a module resolve against the flow file, not the working directory", () => {

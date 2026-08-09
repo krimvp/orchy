@@ -9,13 +9,14 @@ import {
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import { type Metrics, SCHEMA_VERSION, type Step, type Trajectory, totalMetrics } from "./atif.ts";
-import type { Harness } from "./harness.ts";
+import { type Harness, notesOf } from "./harness.ts";
+import { tail } from "./tail.ts";
 
 const SUBMIT = "submit_result";
 const TOOLS = new Set(["read", "bash", "edit", "write", "grep", "find", "ls"]);
 
 export const pi: Harness = {
-  async run(request) {
+  async run(request, watch) {
     let value: unknown;
 
     const submit = defineTool({
@@ -67,9 +68,14 @@ export const pi: Harness = {
       model,
     });
 
+    // Pi writes its session one line at a time, so the record of the step is
+    // also the report of it.
+    const stop = watch ? tail(() => fileOf(sessionManager), (line) => report(line, watch)) : undefined;
+
     try {
       await session.prompt(request.prompt);
     } finally {
+      stop?.();
       session.dispose();
     }
 
@@ -117,6 +123,28 @@ export const pi: Harness = {
     };
   },
 };
+
+/** The session file appears after the session starts, so this may find nothing yet. */
+function fileOf(sessionManager: ReturnType<typeof SessionManager.create>): string | undefined {
+  try {
+    return sessionManager.getSessionFile() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** One line of the session, as notes. A line that says nothing reports nothing. */
+function report(line: string, watch: (note: { kind: "text" | "reasoning" | "tool" | "result"; text: string }) => void) {
+  let entry: Record<string, unknown>;
+  try {
+    entry = JSON.parse(line) as Record<string, unknown>;
+  } catch {
+    return;
+  }
+  if (entry.type !== "message") return;
+  const step = toStep(entry.message as PiMessage | undefined, 0, String(entry.timestamp ?? ""));
+  if (step) for (const note of notesOf(step)) watch(note);
+}
 
 interface PiContent {
   type: string;

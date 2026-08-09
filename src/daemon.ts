@@ -13,6 +13,16 @@ const RUNS = 4;
 
 const CLI = resolve(import.meta.dirname, "cli.ts");
 
+/**
+ * How many notes a run keeps while it works. The output of a step is a view,
+ * and the trajectory is the record, so the daemon holds the last of it in
+ * memory and writes none of it to the index.
+ */
+const NOTES = 500;
+
+/** How many runs keep their notes. An older run has its trajectory instead. */
+const RUNS_HELD = 20;
+
 /** A run that the daemon accepted. It holds a ticket until a child gives it a run id. */
 export interface Ticket {
   ticket: number;
@@ -54,6 +64,7 @@ export function daemon(root: string) {
   store.index(runs);
 
   const jobs = new Map<number, Job>();
+  const notes = new Map<string, StoredEvent[]>();
   const queue: Job[] = [];
   const listeners = new Set<(notice: Notice) => void>();
   let running = 0;
@@ -93,6 +104,20 @@ export function daemon(root: string) {
       told();
     }
     if (!job.runId) return;
+
+    // The output of a step is a view, so it stays in memory and out of the index.
+    if (event.type === "output") {
+      const held = notes.get(job.runId) ?? [];
+      const note = { ...event, at: new Date().toISOString() };
+      held.push(note);
+      if (held.length > NOTES) held.splice(0, held.length - NOTES);
+      notes.set(job.runId, held);
+      // Memory holds the last few runs. The trajectory of an older run holds more.
+      for (const old of [...notes.keys()].slice(0, notes.size - RUNS_HELD)) notes.delete(old);
+      tell({ kind: "event", runId: job.runId, event: note });
+      return;
+    }
+
     const stored = store.addEvent(job.runId, event);
     if (event.type !== "step_start") record(job);
     tell({ kind: "event", runId: job.runId, event: stored });
@@ -173,6 +198,9 @@ export function daemon(root: string) {
       job.child.kill("SIGTERM");
       return true;
     },
+
+    /** What the steps of a run said while they worked, as far back as memory holds. */
+    notes: (runId: string): StoredEvent[] => notes.get(runId) ?? [],
 
     pending: (): Ticket[] => [...jobs.values()].map(ticketOf),
 

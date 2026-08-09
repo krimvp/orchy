@@ -1,5 +1,5 @@
+import type { Step, Trajectory } from "./atif.ts";
 import type { TSchema } from "@sinclair/typebox";
-import type { Trajectory } from "./atif.ts";
 
 /**
  * The name of every adapter. The names live apart from the adapters, so the
@@ -28,11 +28,51 @@ export interface AgentResult {
 }
 
 /**
+ * One thing a step did, while it did it. A note is a view and not a record:
+ * the trajectory holds the whole of it, and a note is short enough to read.
+ */
+export interface Note {
+  kind: "text" | "reasoning" | "tool" | "result";
+  text: string;
+}
+
+export type Watch = (note: Note) => void;
+
+/** A note carries a line, not a file. The trajectory holds the whole of it. */
+const MOST = 400;
+
+/**
+ * The notes of one step of a trajectory. Both adapters read their own record
+ * as it grows, and both turn it into an ATIF step already, so both report what
+ * they do through this one function.
+ */
+export function notesOf(step: Step): Note[] {
+  const notes: Note[] = [];
+  if (step.reasoning_content) notes.push({ kind: "reasoning", text: cut(step.reasoning_content) });
+  if (step.source === "agent" && step.message.trim()) notes.push({ kind: "text", text: cut(step.message) });
+  for (const call of step.tool_calls ?? []) {
+    notes.push({ kind: "tool", text: cut(`${call.function_name} ${JSON.stringify(call.arguments)}`) });
+  }
+  for (const result of step.observation?.results ?? []) {
+    if (result.content.trim()) notes.push({ kind: "result", text: cut(result.content) });
+  }
+  return notes;
+}
+
+function cut(text: string): string {
+  const flat = text.trim();
+  return flat.length > MOST ? `${flat.slice(0, MOST)}…` : flat;
+}
+
+/**
  * ADR 0002 budgets a few members. A second harness cost the second one: a
  * trajectory has a different shape in every harness, so only the adapter can
  * read it.
+ *
+ * `watch` is the second argument that the plan reserved for the live output of
+ * a step. An adapter that reports nothing still answers the same.
  */
 export interface Harness {
-  run(request: AgentRequest): Promise<AgentResult>;
+  run(request: AgentRequest, watch?: Watch): Promise<AgentResult>;
   toTrajectory(handle: string, trajectoryId: string, version: string): Trajectory | undefined;
 }

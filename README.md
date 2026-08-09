@@ -141,8 +141,9 @@ orchy daemon         # http://127.0.0.1:4000
 
 The daemon holds a queue, starts each run as a child process, and serves a
 page. On the page you register a flow file, start a run, watch each step as it
-runs, answer a gate in a form built from its contract, read the value, the cost,
-and the changed files of every step, and edit a flow as a drawing.
+runs, read what a step says while it works, answer a gate in a form built from
+its contract, read the value, the cost, and the changed files of every step,
+open the trajectory of every run of every step, and edit a flow as a drawing.
 
 - **A run in a child process.** A run that hangs or dies takes nothing with it.
   Four runs start at the same time. See [ADR
@@ -154,6 +155,10 @@ and the changed files of every step, and edit a flow as a drawing.
   same YAML back. It refuses to write a flow that `validate()` rejects, and it
   reads a flow in TypeScript without writing one. See [ADR
   0010](./docs/adr/0010-the-editor-writes-the-same-yaml-file.md).
+- **A step reports by reading its own record.** An adapter reads the file that
+  its harness already writes, so the live report and the trajectory come from
+  one parser, and no harness is started a different way. See [ADR
+  0011](./docs/adr/0011-a-step-reports-by-reading-its-own-record.md).
 
 The daemon listens on `127.0.0.1` only. It starts an agent that can hold `bash`,
 so anyone who reaches the port runs code on the machine. It has no user and no
@@ -261,16 +266,18 @@ Early, and honest about it.
 back, a gate and `orchy resume`, an escalation to a person, a panel of three
 models at once, a flow inside a flow, and a workspace that proves what changed.
 
-**Driven in a browser:** the daemon, the queue, the live events, the gate form,
-the step view, and the editor. A test drives each one through the API, and a
-flow of deterministic steps stands in for a model.
+**Driven in a browser:** the daemon, the queue, the live events, the notes a
+step reports while it works, the gate form, the step view, the trajectory view,
+and the editor. A test drives each one through the API, and a flow of
+deterministic steps stands in for a model.
 
 **Covered by tests only:** the `none` workspace, and the `docs-audit`,
 `release-notes`, and `decision` examples.
 
-**Not built:** the output of an agent while a step runs, a scheduler, an
-OpenTelemetry exporter, a third harness, a sandbox, and any user or password on
-the daemon. Invariant 1 names the sandbox gap rather than hiding it.
+**Not built:** a scheduler, an OpenTelemetry exporter, a third harness, a
+sandbox, and any user or password on the daemon. Invariant 1 names the sandbox
+gap rather than hiding it. A note arrives when the harness writes a line, so a
+step reports by the turn and not by the word.
 
 The API can still change, and the name on npm belongs to another package.
 

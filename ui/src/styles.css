@@ -948,6 +948,175 @@ button:disabled {
   }
 }
 
+/* -- what a step says while it works -- */
+
+.output {
+  max-height: 340px;
+  overflow: auto;
+  padding: 6px 0;
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  box-shadow: var(--shadow-2);
+  font-size: 13px;
+}
+
+.output .note {
+  display: flex;
+  gap: 12px;
+  padding: 3px 16px;
+  animation: slide 0.35s var(--ease) both;
+}
+
+.output .step {
+  flex: none;
+  width: 110px;
+  color: var(--text-3);
+  font-size: 11px;
+  text-align: right;
+  padding-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.output .text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.output .reasoning .text {
+  color: var(--text-3);
+  font-style: italic;
+}
+
+.output .tool .text {
+  color: var(--accent);
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.output .result .text {
+  color: var(--text-2);
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+/* -- the record of a run -- */
+
+.attempt {
+  border-top: 1px solid var(--hairline);
+}
+
+.attempt:first-of-type {
+  border-top: 0;
+}
+
+.attempt > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 2px;
+  cursor: pointer;
+  list-style: none;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.attempt > summary::-webkit-details-marker {
+  display: none;
+}
+
+.attempt > summary::before {
+  content: "›";
+  color: var(--text-3);
+  transition: transform 0.25s var(--ease);
+}
+
+.attempt[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+/* A run that a cycle dropped is still a cost, and it reads as the past. */
+.attempt.dropped > summary b {
+  color: var(--text-2);
+  text-decoration: line-through;
+  text-decoration-color: var(--text-3);
+}
+
+.attempt .spend {
+  margin-left: auto;
+  color: var(--text-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.turns {
+  padding: 4px 0 16px 22px;
+}
+
+.turn {
+  display: flex;
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.turn .who {
+  flex: none;
+  width: 58px;
+  color: var(--text-3);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding-top: 3px;
+}
+
+.turn.agent .who {
+  color: var(--accent);
+}
+
+.turn .said {
+  min-width: 0;
+  flex: 1;
+}
+
+.turn .what,
+.turn .thought {
+  margin: 0 0 6px;
+  font-size: 13px;
+  white-space: pre-wrap;
+}
+
+.turn .thought {
+  color: var(--text-3);
+  font-style: italic;
+}
+
+.turn .call {
+  margin-bottom: 6px;
+}
+
+.turn .call code {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.turn .call pre,
+.turn .result {
+  margin: 5px 0 0;
+  max-height: 190px;
+}
+
+.turn .result {
+  color: var(--text-2);
+}
+
 /* -- what a page shows while it reads -- */
 
 .skeleton {

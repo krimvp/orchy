@@ -25,6 +25,8 @@ function report(event: RunEvent): void {
       return console.error(`◆ ${event.runId}`);
     case "step_start":
       return console.error(`▶ ${event.step}`);
+    case "output":
+      return console.error(`  ${event.step} │ ${event.text.split("\n")[0]}`);
     case "step_end":
       return console.error(`${event.status === "done" ? "✓" : "✗"} ${event.step}`);
     case "cycle":

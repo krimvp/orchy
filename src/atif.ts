@@ -47,7 +47,7 @@ export function toAtif(state: RunState, version: string, toTrajectory: ToTraject
   const steps: Step[] = [];
   const spend: Metrics[] = [];
 
-  for (const { step, record } of attempts(state)) {
+  for (const { step, record, dropped } of attempts(state)) {
     const child = record.trajectory
       ? toTrajectory(step, record.trajectory, `${state.runId}:${steps.length + 1}:${step}`, version)
       : undefined;
@@ -75,6 +75,8 @@ export function toAtif(state: RunState, version: string, toTrajectory: ToTraject
           changed: record.changed,
           disagreement: record.disagreement,
           answeredByPerson: record.answeredByPerson,
+          // A cycle threw this run of the step away. It is still a cost.
+          dropped: dropped || undefined,
           startedAt: record.startedAt,
           endedAt: record.endedAt,
         },
@@ -97,11 +99,12 @@ export function toAtif(state: RunState, version: string, toTrajectory: ToTraject
  * Every run of every step, in the order they happened. A cycle runs a step more
  * than once, and a record that is dropped from the state is still a cost.
  */
-function attempts(state: RunState): Array<{ step: string; record: StepRecord }> {
+function attempts(state: RunState): Array<{ step: string; record: StepRecord; dropped?: boolean }> {
   const current = state.flow.steps
     .filter((step) => state.steps[step.id])
     .map((step) => ({ step: step.id, record: state.steps[step.id] as StepRecord }));
-  return [...(state.history ?? []), ...current].sort((a, b) => a.record.startedAt.localeCompare(b.record.startedAt));
+  const gone = (state.history ?? []).map((one) => ({ ...one, dropped: true }));
+  return [...gone, ...current].sort((a, b) => a.record.startedAt.localeCompare(b.record.startedAt));
 }
 
 function modelOf(children: Trajectory[]): string {

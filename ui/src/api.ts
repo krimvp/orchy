@@ -98,6 +98,53 @@ export interface RunState {
   history?: Array<{ step: string; record: StepRecord }>;
 }
 
+export interface Metrics {
+  prompt_tokens: number;
+  completion_tokens: number;
+  cached_tokens?: number;
+  cost_usd?: number;
+}
+
+export interface ToolCall {
+  tool_call_id: string;
+  function_name: string;
+  arguments: Record<string, unknown>;
+}
+
+/** One turn of a trajectory, in the ATIF format that Orchy writes. */
+export interface Turn {
+  step_id: number;
+  timestamp: string;
+  source: "user" | "agent" | "system";
+  message: string;
+  reasoning_content?: string;
+  tool_calls?: ToolCall[];
+  observation?: { results: Array<{ source_call_id: string; content: string }> };
+  metrics?: Metrics;
+  subagent_trajectory_ref?: { trajectory_id: string };
+  extra?: {
+    orchy?: {
+      step: string;
+      status: string;
+      changed?: string[];
+      disagreement?: string;
+      answeredByPerson?: boolean;
+      dropped?: boolean;
+      startedAt: string;
+      endedAt: string;
+    };
+  };
+}
+
+export interface Atif {
+  schema_version: string;
+  trajectory_id: string;
+  agent: { name: string; version: string; model_name: string };
+  steps: Turn[];
+  subagent_trajectories?: Atif[];
+  final_metrics: Metrics & { total_steps: number };
+}
+
 export interface Health {
   root: string;
   adapters: string[];
@@ -136,7 +183,7 @@ export const api = {
     call<{ problems: string[] }>("/api/validate", { method: "POST", body: JSON.stringify({ flow }) }),
   runs: () => call<RunRow[]>("/api/runs"),
   run: (runId: string) => call<{ row: RunRow | null; state: RunState }>(`/api/runs/${runId}`),
-  trajectory: (runId: string) => call<Record<string, unknown>>(`/api/runs/${runId}/trajectory`),
+  trajectory: (runId: string) => call<Atif>(`/api/runs/${runId}/trajectory`),
   resume: (runId: string, value: unknown) =>
     call<Ticket>(`/api/runs/${runId}/resume`, { method: "POST", body: JSON.stringify({ value }) }),
   stop: (runId: string) => call<{ stopped: boolean }>(`/api/runs/${runId}/stop`, { method: "POST" }),

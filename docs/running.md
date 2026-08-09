@@ -243,6 +243,24 @@ orchy resume <run id> '{"approved":true}'
 Orchy checks the value against the contract of the gate, so a wrong value is
 refused before the run continues.
 
+## Say what a step does
+
+A component takes the values of the steps before it, and a way to say what it
+does. A component that says nothing ignores the second argument.
+
+```ts
+export default (inputs, say) => {
+  say("reading the tickets");
+  const tickets = read();
+  say(`${tickets.length} tickets`);
+  return { tickets };
+};
+```
+
+An agent step needs nothing: the adapter reads the record that the harness
+writes and reports each turn as it lands. See [ADR
+0011](./adr/0011-a-step-reports-by-reading-its-own-record.md).
+
 ## Read the record
 
 Each run writes two files to `.orchy/runs/<run id>/`:
@@ -273,7 +291,14 @@ On the page:
    Answer it, and the run continues. This is `orchy resume` under a form.
 5. Choose a step to read its value, its error, its length, and the files it
    changed.
-6. Press **Edit** on a flow to draw it. The editor writes the same YAML file.
+6. **What the steps say** shows each note as it arrives, while the run works. A
+   note is a view: the daemon keeps the last of them in memory and writes none
+   of them to the index.
+7. **Trajectory** draws the record: every run of every step, opening on the
+   turns that the harness took, with the reasoning, the tool calls and their
+   arguments, the results, and the tokens of each turn. A run that a cycle threw
+   away is marked as one, because it is still a cost.
+8. Press **Edit** on a flow to draw it. The editor writes the same YAML file.
    It refuses to write a flow that `validate()` rejects, and it will not write a
    flow in TypeScript.
 

@@ -237,7 +237,11 @@ function stream(daemon: Daemon, response: ServerResponse, request: IncomingMessa
   });
   const write = (value: unknown) => response.write(`data: ${JSON.stringify(value)}\n\n`);
 
-  if (runId) for (const event of daemon.store.events(runId)) write({ kind: "event", runId, event });
+  if (runId) {
+    // What the run did and what it said, back in the order it happened.
+    const past = [...daemon.store.events(runId), ...daemon.notes(runId)].sort((a, b) => a.at.localeCompare(b.at));
+    for (const event of past) write({ kind: "event", runId, event });
+  }
   write({ kind: "queue", pending: daemon.pending() });
 
   const stop = daemon.watch((notice) => {

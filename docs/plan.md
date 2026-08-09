@@ -197,9 +197,11 @@ each line, a child process of the daemon writes to that stream, and the daemon
 keeps every event and sends it to the UI. A run names itself with `run_start`
 first, so the daemon knows the run that a child drives.
 
-The UI does not show the output of an agent while a step runs. Orchy does not
-carry that output today, because nothing reads it. The adapter grows a second
-argument when something does, which breaks nothing.
+A step says what it does while it does it, through an `output` event. The
+adapter takes the second argument that this plan reserved for it, and it reports
+by reading the record that the harness already writes. A deterministic step
+reports the same way, because a component takes that argument as well. See [ADR
+0011](./adr/0011-a-step-reports-by-reading-its-own-record.md).
 
 ## Measurement
 
@@ -216,9 +218,11 @@ they happened.
 Each step record holds `startedAt` and `endedAt`, so a reader gets the duration
 as well as the tokens.
 
-The UI of the daemon reads the trajectory, and shows the cost and the tokens of
-a run beside its status. Orchy ships no exporter. A user converts ATIF to
-OpenTelemetry spans with a tool that already does it.
+The UI of the daemon draws the trajectory. Each run of each step opens on the
+turns that the harness took: the reasoning, the tool calls with their arguments,
+the results, and the tokens of each turn. A run that a cycle threw away is
+marked as one, because it is still a cost. Orchy ships no exporter. A user
+converts ATIF to OpenTelemetry spans with a tool that already does it.
 
 ## Milestones
 
@@ -262,6 +266,14 @@ database indexes the runs on disk, and the state on disk stays the run. See [ADR
 the same YAML file that a person reads, so a flow lives in one place. See [ADR
 0010](./adr/0010-the-editor-writes-the-same-yaml-file.md).
 
+**M7 — what a step says, and the record it leaves. Done.** A step reports while
+it works, and the page shows each note as it arrives. The page also draws the
+trajectory: every run of every step, opening on the turns that the harness took,
+with the reasoning, the tool calls, the results, and the tokens of each turn. A
+run that a cycle threw away is marked as one. An adapter reports by reading the
+record that it already writes, so no harness is started a different way. See
+[ADR 0011](./adr/0011-a-step-reports-by-reading-its-own-record.md).
+
 ## The proof flows
 
 Two flows prove the design, and they stress different parts.
@@ -285,8 +297,6 @@ Orchy does not ship these until a real flow needs them.
 - Retries and timeouts for a step.
 - A remote sandbox workspace.
 - A scheduler. Nothing starts a run except a person and the command line.
-- The live output of an agent while a step runs. The UI shows the events of a
-  run, and the value of a step when the step ends.
 - A user, a password, and a daemon that listens beyond this machine.
 
 ## Defaults

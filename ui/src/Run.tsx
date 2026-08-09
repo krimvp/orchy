@@ -1,13 +1,18 @@
-import { type CSSProperties, useEffect, useState } from "react";
+import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { type RunEvent, type RunState, type Schema, type Step, type StepRecord, api, useLoad, useNotices } from "./api";
 import { Graph, type Mark } from "./Graph";
 import { Loading, length, when } from "./Runs";
+import { Trajectory } from "./Trajectory";
 
 export function Run({ runId }: { runId: string }) {
-  const { events } = useNotices(runId);
+  const { events: all } = useNotices(runId);
   const { value, error, again } = useLoad(() => api.run(runId), [runId]);
   const [chosen, setChosen] = useState<string>();
   const [fault, setFault] = useState<string>();
+
+  // What the run did, and what its steps said while they did it.
+  const events = all.filter((event) => event.type !== "output");
+  const output = all.filter((event) => event.type === "output");
 
   useEffect(() => {
     again();
@@ -87,6 +92,13 @@ export function Run({ runId }: { runId: string }) {
       )}
       {fault && <p className="bad">{fault}</p>}
 
+      {output.length > 0 && (
+        <>
+          <h2>What the steps say</h2>
+          <Output notes={output} live={state.status === "running"} />
+        </>
+      )}
+
       <div className="split">
         <div>
           <h2>Step</h2>
@@ -120,7 +132,39 @@ export function Run({ runId }: { runId: string }) {
           </ul>
         </div>
       </div>
+
+      <h2>Trajectory</h2>
+      {/* Orchy writes the trajectory wherever the run stops, so there is none to ask for yet. */}
+      {state.status === "running" ? (
+        <p className="empty">Orchy writes the trajectory wherever the run stops.</p>
+      ) : (
+        <Trajectory runId={runId} at={events.length} />
+      )}
     </section>
+  );
+}
+
+/**
+ * What a step says while it works. The daemon keeps this in memory only, so an
+ * older run shows its trajectory instead.
+ */
+function Output({ notes, live }: { notes: RunEvent[]; live: boolean }) {
+  const foot = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (live) foot.current?.scrollIntoView({ block: "nearest" });
+  }, [notes.length, live]);
+
+  return (
+    <div className="output">
+      {notes.map((note, index) => (
+        <div key={index} className={`note ${String(note.kind)}`}>
+          <span className="step">{String(note.step)}</span>
+          <span className="text">{String(note.text)}</span>
+        </div>
+      ))}
+      <div ref={foot} />
+    </div>
   );
 }
 

@@ -161,6 +161,10 @@ Know these before you change the runner.
   rule in `validate()` or in the runner, never in the daemon or in the UI.
 - **The index is not the run.** The state on disk is. See [ADR
   0009](./docs/adr/0009-the-database-indexes-the-runs-on-disk.md).
+- **A note is not the record.** The trajectory is. An adapter reports by reading
+  the file that its harness already writes, so never start a harness a different
+  way to get output. See [ADR
+  0011](./docs/adr/0011-a-step-reports-by-reading-its-own-record.md).
 - **Five invariants** carry the value of the project. Read them in
   [docs/plan.md](./docs/plan.md) before you touch the runner.
 

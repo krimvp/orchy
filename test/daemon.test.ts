@@ -11,6 +11,14 @@ import { formatFlow, parseFlow } from "../src/yaml.ts";
 
 const COUNT = `export default (inputs: Record<string, unknown>) => ({ count: Object.keys(inputs).length });\n`;
 
+/** A component that says what it does, so a test proves the whole chain without a model. */
+const TELLS = `export default (inputs: Record<string, unknown>, say: (text: string) => void) => {
+  say("reading the ticket");
+  say("writing the answer");
+  return { count: Object.keys(inputs).length };
+};
+`;
+
 const NUMBER = { type: "object", required: ["count"], properties: { count: { type: "number" } } };
 
 /** A flow of two deterministic steps and a gate, so a test needs no model. */
@@ -32,6 +40,7 @@ const FLOW = {
 function project(flow: unknown = FLOW): string {
   const root = mkdtempSync(join(tmpdir(), "orchy-daemon-"));
   writeFileSync(join(root, "count.ts"), COUNT);
+  writeFileSync(join(root, "tells.ts"), TELLS);
   writeFileSync(join(root, "flow.yaml"), formatFlow(flow as never));
   return root;
 }
@@ -50,9 +59,36 @@ async function running(root: string) {
     return { code: response.status, body: (await response.json()) as never };
   };
 
+  /** Opens the stream of a run, keeps what it gives back, and lets go. */
+  const read = async (path: string): Promise<Array<{ kind: string; event: { type: string; text?: string } }>> => {
+    const control = new AbortController();
+    let text = "";
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}${path}`, { signal: control.signal });
+      const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+      const giveUp = setTimeout(() => control.abort(), 2000);
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        text += Buffer.from(value).toString();
+        // The replay ends with the run, so there is no need to wait for more.
+        if (text.includes('"run_end"')) break;
+      }
+      clearTimeout(giveUp);
+    } catch {
+      // The stream never ends by itself, so letting go is the normal way out.
+    }
+    control.abort();
+    return text
+      .split("\n")
+      .filter((line) => line.startsWith("data: "))
+      .map((line) => JSON.parse(line.slice(6)) as { kind: string; event: { type: string } });
+  };
+
   return {
     engine,
     call,
+    read,
     close: () =>
       new Promise<void>((done) => {
         engine.close();
@@ -117,6 +153,56 @@ test("the daemon keeps every event of a run, and gives them again after the run"
       events.map((event) => event.type),
       ["run_start", "step_start", "step_end", "waiting"],
     );
+  } finally {
+    await site.close();
+  }
+});
+
+test("a step reports what it does, and the daemon holds it apart from the index", async () => {
+  const talking = {
+    name: "talking",
+    steps: [{ id: "work", kind: "call", module: "tells.ts", returns: NUMBER }],
+  };
+  const site = await running(project(talking));
+  try {
+    await site.call("/api/flows", { method: "POST", body: JSON.stringify({ path: "flow.yaml" }) });
+    await site.call("/api/flows/1/runs", { method: "POST", body: "{}" });
+    await until(async () => ((await site.call("/api/runs")).body as Array<{ status: string }>)[0]?.status === "done");
+
+    const [row] = (await site.call("/api/runs")).body as Array<{ runId: string }>;
+    const runId = row?.runId as string;
+
+    const said = site.engine.notes(runId);
+    assert.deepEqual(
+      said.map((note) => (note as unknown as { text: string }).text),
+      ["reading the ticket", "writing the answer"],
+    );
+    assert.equal((said[0] as unknown as { step: string }).step, "work");
+
+    // The index keeps what the run did. What a step said is a view, not a record.
+    const kinds = site.engine.store.events(runId).map((event) => event.type);
+    assert.deepEqual(kinds, ["run_start", "step_start", "step_end", "run_end"]);
+  } finally {
+    await site.close();
+  }
+});
+
+test("the stream of a run gives back what it did and what it said, in order", async () => {
+  const talking = {
+    name: "talking",
+    steps: [{ id: "work", kind: "call", module: "tells.ts", returns: NUMBER }],
+  };
+  const site = await running(project(talking));
+  try {
+    await site.call("/api/flows", { method: "POST", body: JSON.stringify({ path: "flow.yaml" }) });
+    await site.call("/api/flows/1/runs", { method: "POST", body: "{}" });
+    await until(async () => ((await site.call("/api/runs")).body as Array<{ status: string }>)[0]?.status === "done");
+    const [row] = (await site.call("/api/runs")).body as Array<{ runId: string }>;
+
+    const replay = await site.read(`/api/runs/${row?.runId}/events`);
+    const types = replay.filter((one) => one.kind === "event").map((one) => one.event.type);
+
+    assert.deepEqual(types, ["run_start", "step_start", "output", "output", "step_end", "run_end"]);
   } finally {
     await site.close();
   }

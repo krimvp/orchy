@@ -18,7 +18,7 @@ import {
   order,
   validate,
 } from "./flow.ts";
-import type { Harness } from "./harness.ts";
+import type { Harness, Note } from "./harness.ts";
 import { pi } from "./pi.ts";
 import { toAtif } from "./atif.ts";
 import { changed, take } from "./workspace.ts";
@@ -75,6 +75,8 @@ export type RunEvent =
   /** A resume emits this as well, so a parent process learns the run it drives. */
   | { type: "run_start"; runId: string }
   | { type: "step_start"; step: string }
+  /** What a step reports while it works. The trajectory holds the whole of it. */
+  | { type: "output"; step: string; kind: Note["kind"]; text: string }
   | { type: "step_end"; step: string; status: "done" | "failed" }
   | { type: "cycle"; step: string; to: string; count: number }
   | { type: "waiting"; step: string; question: string }
@@ -175,7 +177,8 @@ async function execute(state: RunState, cwd: string, options: RunOptions): Promi
 
     const records = await pool(work, state.flow.parallel ?? WAVE, async (step) => {
       emit({ type: "step_start", step: step.id });
-      const record = await runStep(step, state, cwd, harnessFor(step, harness, options.harnesses), feedback);
+      const watch = (note: Note) => emit({ type: "output", step: step.id, ...note });
+      const record = await runStep(step, state, cwd, harnessFor(step, harness, options.harnesses), watch, feedback);
       emit({ type: "step_end", step: step.id, status: record.status });
       return record;
     });
@@ -299,6 +302,7 @@ async function runStep(
   state: RunState,
   cwd: string,
   harness: Harness,
+  watch: (note: Note) => void,
   feedback?: RunState["feedback"],
 ): Promise<StepRecord> {
   const startedAt = new Date().toISOString();
@@ -313,15 +317,18 @@ async function runStep(
   try {
     result =
       step.kind === "agent"
-        ? await harness.run({
-            step: step.id,
-            prompt: buildPrompt(step, inputs, cwd),
-            tools: step.tools,
-            returns: step.returns,
-            cwd,
-            model: step.model,
-          })
-        : { value: await callModule(step as CallStep, inputs, cwd) };
+        ? await harness.run(
+            {
+              step: step.id,
+              prompt: buildPrompt(step, inputs, cwd),
+              tools: step.tools,
+              returns: step.returns,
+              cwd,
+              model: step.model,
+            },
+            watch,
+          )
+        : { value: await callModule(step as CallStep, inputs, cwd, watch) };
   } catch (error) {
     return { ...at(), status: "failed", error: String(error) };
   }
@@ -354,7 +361,16 @@ function buildPrompt(step: AgentStep, inputs: Record<string, unknown>, cwd: stri
   return `${text}\n\n## The values of the steps before this one\n\n\`\`\`json\n${JSON.stringify(inputs, null, 2)}\n\`\`\`\n`;
 }
 
-async function callModule(step: CallStep, inputs: Record<string, unknown>, cwd: string): Promise<unknown> {
+/**
+ * A component takes the values of the steps before it, and a way to say what it
+ * does. A component that says nothing ignores the second argument.
+ */
+async function callModule(
+  step: CallStep,
+  inputs: Record<string, unknown>,
+  cwd: string,
+  watch: (note: Note) => void,
+): Promise<unknown> {
   const module = await import(pathToFileURL(resolve(cwd, step.module)).href);
-  return module.default(inputs);
+  return module.default(inputs, (text: string) => watch({ kind: "text", text: String(text) }));
 }
