@@ -2,7 +2,9 @@ import { isAbsolute, resolve } from "node:path";
 import type { Static, TSchema } from "@sinclair/typebox";
 import type { Workspace } from "./workspace.ts";
 
-export type ToolName = "read" | "bash" | "edit" | "write" | "grep" | "find" | "ls";
+export const TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls", "web"] as const;
+
+export type ToolName = (typeof TOOLS)[number];
 
 /**
  * `when` is a partial match against the value of the step, not an expression.
@@ -250,6 +252,7 @@ export async function expandFlows(flow: Flow, load: (path: string) => Promise<Fl
  */
 export function validate(flow: Flow): string[] {
   const problems: string[] = [];
+  const known = new Set<string>(TOOLS);
   if (!flow.name) problems.push("the flow has no name");
   if (flow.steps.length === 0) problems.push("the flow has no steps");
 
@@ -285,6 +288,11 @@ export function validate(flow: Flow): string[] {
       continue;
     }
     if (fanout.length === 0) problems.push(`step "${step.id}" fans out to nothing`);
+    for (const member of fanout) {
+      for (const name of member.tools ?? []) {
+        if (!known.has(name)) problems.push(`member "${member.name}" of "${step.id}" asks for the tool "${name}"`);
+      }
+    }
     if (new Set(fanout.map((one) => one.name)).size !== fanout.length) {
       problems.push(`step "${step.id}" has two members with one name`);
     }
@@ -293,6 +301,14 @@ export function validate(flow: Flow): string[] {
     }
   }
   if (problems.length > 0) return problems;
+
+  for (const step of flow.steps) {
+    if (step.kind !== "agent") continue;
+    for (const name of step.tools) {
+      // A tool no harness knows must fail here, not vanish inside an adapter.
+      if (!known.has(name)) problems.push(`step "${step.id}" asks for the tool "${name}", which does not exist`);
+    }
+  }
 
   const records = flow.workspace !== undefined && flow.workspace.kind !== "none";
   for (const step of flow.steps) {

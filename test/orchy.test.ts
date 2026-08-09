@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { Type } from "@sinclair/typebox";
-import { type AgentStep, type CallStep, agent, call, expandFanout, expandFlows, flow, gate, resolvePaths, validate } from "../src/flow.ts";
+import { type AgentStep, type CallStep, type Flow, agent, call, expandFanout, expandFlows, flow, gate, resolvePaths, validate } from "../src/flow.ts";
 import type { AgentRequest, AgentResult, Harness } from "../src/harness.ts";
 import { resume, run } from "../src/run.ts";
 import { claude } from "../src/claude.ts";
@@ -470,10 +470,23 @@ test("a cycle carries the value that sent the run back", async () => {
   assert.ok(!harness.seen[0]?.prompt.includes("approved"));
 });
 
-test("the example flows are valid", async () => {
-  for (const name of ["code-review", "grilling"]) {
-    const module = await import(`../examples/${name}/flow.ts`);
-    assert.deepEqual(validate(module.default), [], `examples/${name} is not valid`);
+test("every example flow is valid", async () => {
+  // Reads the directory, so a new example is covered without touching this test.
+  const root = join(import.meta.dirname, "..", "examples");
+  const names = readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name);
+  assert.ok(names.length >= 6);
+
+  for (const name of names) {
+    for (const file of readdirSync(join(root, name)).filter((one) => /^flow\.(ts|ya?ml)$/.test(one))) {
+      const path = join(root, name, file);
+      const loaded = file.endsWith(".ts")
+        ? ((await import(path)).default as Flow)
+        : parseFlow(readFileSync(path, "utf8"));
+      const expanded = expandFanout(loaded);
+      assert.deepEqual(validate(expanded), [], `examples/${name}/${file} is not valid`);
+    }
   }
 });
 
@@ -1108,4 +1121,32 @@ test("validate refuses two members with one name", () => {
   );
 
   assert.ok(problems.some((p) => p.includes("two members with one name")));
+});
+
+test("validate refuses a tool that does not exist", () => {
+  const problems = validate({
+    name: "typo",
+    steps: [{ kind: "agent", id: "a", needs: [], prompt: "a.md", tools: ["teleport"], returns: Summary } as never],
+  });
+
+  assert.ok(problems.some((p) => p.includes('asks for the tool "teleport"')));
+});
+
+test("a harness refuses a tool it cannot supply, rather than drop it", async () => {
+  // pi has no web tool. Dropping it would weaken invariant 1 without a word.
+  await assert.rejects(
+    () => pi.run({ step: "a", prompt: "hi", tools: ["web"], returns: Summary, cwd: process.cwd() }),
+    /pi has no tool for "web"/,
+  );
+  await assert.rejects(
+    () => claude.run({ step: "a", prompt: "hi", tools: ["teleport"], returns: Summary, cwd: process.cwd() }),
+    /claude has no tool for "teleport"/,
+  );
+});
+
+test("the claude adapter turns one orchy tool into the tools claude has", () => {
+  // `web` is two tools in Claude, so the map answers a list, not one name.
+  assert.deepEqual(validate(
+    flow("web", { steps: [agent({ id: "a", prompt: "a.md", tools: ["web"], returns: Summary })] }),
+  ), []);
 });

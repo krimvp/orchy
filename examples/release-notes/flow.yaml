@@ -1,0 +1,48 @@
+# Turn a range of commits into release notes a reader understands.
+# A deterministic step reads git, so no model spends tokens on it.
+name: release-notes
+workspace: { kind: git, path: . }
+
+steps:
+  - id: log
+    kind: call
+    module: log.ts
+    returns:
+      type: object
+      required: [range, commits]
+      properties:
+        range: { type: string }
+        commits:
+          type: array
+          items:
+            type: object
+            required: [hash, subject]
+            properties:
+              hash: { type: string }
+              subject: { type: string }
+
+  - id: draft
+    kind: agent
+    needs: [log]
+    prompt: prompts/draft.md
+    tools: [read, grep, find]
+    returns: &notes
+      type: object
+      required: [markdown, headline]
+      properties:
+        markdown: { type: string }
+        headline: { type: string }
+
+  - id: check
+    kind: agent
+    needs: [draft, log]
+    prompt: prompts/check.md
+    tools: [read, grep]
+    changes: false
+    returns:
+      type: object
+      required: [approved, findings]
+      properties:
+        approved: { type: boolean }
+        findings: { type: array, items: { type: string } }
+    cycle: { to: draft, when: { approved: false }, limit: 2, policy: accept }

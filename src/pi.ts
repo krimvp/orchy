@@ -12,6 +12,7 @@ import { type Metrics, SCHEMA_VERSION, type Step, type Trajectory, totalMetrics 
 import type { Harness } from "./harness.ts";
 
 const SUBMIT = "submit_result";
+const TOOLS = new Set(["read", "bash", "edit", "write", "grep", "find", "ls"]);
 
 export const pi: Harness = {
   async run(request) {
@@ -27,6 +28,11 @@ export const pi: Harness = {
         return { content: [{ type: "text" as const, text: "Recorded." }], details: undefined };
       },
     });
+
+    for (const name of request.tools) {
+      // Dropping a tool a step asked for would weaken invariant 1 in silence.
+      if (!TOOLS.has(name)) throw new Error(`pi has no tool for "${name}"`);
+    }
 
     // Orchy must load the resources itself. Without this, the extensions and the
     // skills of the user never load, so a custom provider is unknown and Pi falls

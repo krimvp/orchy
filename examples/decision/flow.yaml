@@ -1,0 +1,48 @@
+# Three advisors argue a decision from fixed stances, then one brief, then a
+# person decides. It touches no files and needs no workspace.
+name: decision
+parallel: 3
+
+steps:
+  - id: advisor
+    kind: agent
+    prompt: prompts/advise.md
+    tools: [read]
+    returns: &opinion
+      type: object
+      required: [stance, position, risks, confidence]
+      properties:
+        stance: { type: string }
+        position: { type: string }
+        risks: { type: array, items: { type: string } }
+        confidence: { type: number, minimum: 0, maximum: 1 }
+    fanout:
+      - { name: builder, prompt: prompts/builder.md }
+      - { name: skeptic, prompt: prompts/skeptic.md }
+      - { name: operator, prompt: prompts/operator.md }
+
+  - id: brief
+    kind: agent
+    needs: [advisor]
+    prompt: prompts/brief.md
+    tools: [read]
+    returns:
+      type: object
+      required: [recommendation, disagreement, reversible]
+      properties:
+        recommendation: { type: string }
+        disagreement: { type: array, items: { type: string } }
+        reversible: { type: boolean }
+
+  - id: decide
+    kind: gate
+    needs: [brief]
+    question: >
+      Read the brief. Answer with {"choice":"yes"} or {"choice":"no"} and a
+      reason.
+    returns:
+      type: object
+      required: [choice, reason]
+      properties:
+        choice: { type: string, enum: [yes, no] }
+        reason: { type: string }

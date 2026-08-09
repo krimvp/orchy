@@ -1,4 +1,4 @@
-export { WAVE, agent, call, cycleOf, expandFanout, fanoutOf, expandFlows, flow, gate, order, resolvePaths, validate } from "./flow.ts";
+export { TOOLS, WAVE, agent, call, cycleOf, expandFanout, fanoutOf, expandFlows, flow, gate, order, resolvePaths, validate } from "./flow.ts";
 export { changed, take } from "./workspace.ts";
 export type { Snapshot, Workspace } from "./workspace.ts";
 export type { AgentStep, CallStep, Cycle, Flow, FlowStep, GateStep, Member, Step, ToolName } from "./flow.ts";

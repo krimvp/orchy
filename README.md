@@ -135,7 +135,7 @@ const state = await run(
 - [docs/adr](./docs/adr) — every decision that is hard to reverse, and why.
 - [CONTEXT.md](./CONTEXT.md) — the words this project uses.
 - [AGENTS.md](./AGENTS.md) — how to work in this repository.
-- [examples](./examples) — a code and review flow, and a grilling session.
+- [examples](./examples) — seven flows, from code review to research.
 
 ## State
 

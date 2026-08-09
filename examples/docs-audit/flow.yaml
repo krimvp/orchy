@@ -1,0 +1,35 @@
+# Find a document that disagrees with the code. Every step is read-only, so
+# every step promises to change nothing and the workspace checks the promise.
+name: docs-audit
+workspace: { kind: git, path: . }
+
+steps:
+  - id: auditor
+    kind: agent
+    prompt: prompts/audit.md
+    tools: [read, grep, find, ls]
+    changes: false
+    returns: &report
+      type: object
+      required: [checked, disagreements]
+      properties:
+        checked: { type: array, items: { type: string } }
+        disagreements:
+          type: array
+          items:
+            type: object
+            required: [document, claim, code, detail]
+            properties:
+              document: { type: string }
+              claim: { type: string }
+              code: { type: string }
+              detail: { type: string }
+    fanout:
+      - { name: readme, prompt: prompts/audit-readme.md }
+      - { name: docs, prompt: prompts/audit-docs.md }
+
+  - id: report
+    kind: call
+    needs: [auditor]
+    module: report.ts
+    returns: *report

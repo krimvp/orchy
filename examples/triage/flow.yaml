@@ -1,0 +1,41 @@
+# Sort an incoming issue, then let a person confirm the call.
+# It touches no files, so it declares no workspace.
+name: triage
+
+steps:
+  - id: read
+    kind: agent
+    prompt: prompts/read.md
+    tools: [read]
+    returns:
+      type: object
+      required: [summary, kind, severity, missing]
+      properties:
+        summary: { type: string }
+        kind: { type: string, enum: [bug, feature, question, noise] }
+        severity: { type: string, enum: [low, medium, high] }
+        missing: { type: array, items: { type: string } }
+
+  - id: confirm
+    kind: gate
+    needs: [read]
+    question: >
+      Do you agree with the sort? Answer with {"agreed":true} or with
+      {"agreed":false,"kind":"bug","severity":"high"} to correct it.
+    returns:
+      type: object
+      required: [agreed]
+      properties:
+        agreed: { type: boolean }
+        kind: { type: string }
+        severity: { type: string }
+
+  - id: label
+    kind: call
+    needs: [read, confirm]
+    module: label.ts
+    returns:
+      type: object
+      required: [labels]
+      properties:
+        labels: { type: array, items: { type: string } }

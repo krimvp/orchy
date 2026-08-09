@@ -10,14 +10,15 @@ import type { Harness } from "./harness.ts";
 const run = promisify(execFile);
 
 /** Invariant 1 crosses the two vocabularies here. Claude has no separate list tool. */
-const TOOLS: Record<string, string> = {
-  read: "Read",
-  write: "Write",
-  edit: "Edit",
-  bash: "Bash",
-  grep: "Grep",
-  find: "Glob",
-  ls: "Glob",
+const TOOLS: Record<string, string[]> = {
+  read: ["Read"],
+  write: ["Write"],
+  edit: ["Edit"],
+  bash: ["Bash"],
+  grep: ["Grep"],
+  find: ["Glob"],
+  ls: ["Glob"],
+  web: ["WebSearch", "WebFetch"],
 };
 
 interface Answer {
@@ -35,7 +36,16 @@ interface Answer {
  */
 export const claude: Harness = {
   async run(request) {
-    const tools = [...new Set(request.tools.map((name) => TOOLS[name]).filter(Boolean) as string[])];
+    const tools = [
+      ...new Set(
+        request.tools.flatMap((name) => {
+          const mapped = TOOLS[name];
+          // Dropping a tool a step asked for would weaken invariant 1 in silence.
+          if (!mapped) throw new Error(`claude has no tool for "${name}"`);
+          return mapped;
+        }),
+      ),
+    ];
     // A fresh id keeps a step out of the transcript of whatever session started it.
     const sessionId = randomUUID();
 
