@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { Flow } from "./flow.ts";
+import { type Flow, resolvePaths } from "./flow.ts";
 import { type RunEvent, type RunState, resume, run } from "./run.ts";
 import { parseFlow } from "./yaml.ts";
 
@@ -13,8 +13,10 @@ A flow file is TypeScript or YAML.`;
 
 async function load(file: string): Promise<Flow> {
   const path = resolve(file);
-  if (/\.ya?ml$/.test(path)) return parseFlow(readFileSync(path, "utf8"));
-  return (await import(pathToFileURL(path).href)).default as Flow;
+  const flow = /\.ya?ml$/.test(path)
+    ? parseFlow(readFileSync(path, "utf8"))
+    : ((await import(pathToFileURL(path).href)).default as Flow);
+  return resolvePaths(flow, dirname(path));
 }
 
 function report(event: RunEvent): void {

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { Type } from "@sinclair/typebox";
-import { agent, call, flow, gate, validate } from "../src/flow.ts";
+import { agent, call, flow, gate, resolvePaths, validate } from "../src/flow.ts";
 import type { AgentRequest, AgentResult, Harness } from "../src/pi.ts";
 import { resume, run } from "../src/run.ts";
 import { parseFlow } from "../src/yaml.ts";
@@ -574,4 +574,19 @@ test("ATIF reads a pi session file into steps, tool calls, and metrics", async (
     total_steps: 3,
   });
   assert.equal(atif.steps[0].subagent_trajectory_ref.trajectory_id, child.trajectory_id);
+});
+
+test("a prompt and a module resolve against the flow file, not the working directory", () => {
+  const resolved = resolvePaths(
+    flow("assets", {
+      steps: [
+        agent({ id: "a", prompt: "prompts/ask.md", tools: ["read"], returns: Summary }),
+        call({ id: "b", needs: ["a"], module: "/already/absolute.ts", returns: Summary }),
+      ],
+    }),
+    "/flows/grilling",
+  );
+
+  assert.equal((resolved.steps[0] as { prompt: string }).prompt, "/flows/grilling/prompts/ask.md");
+  assert.equal((resolved.steps[1] as { module: string }).module, "/already/absolute.ts");
 });

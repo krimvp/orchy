@@ -55,6 +55,11 @@ no cost for one call, so `cost_usd` in the trajectory stays at zero.
 orchy run flow.yaml        # or flow.ts
 ```
 
+A `prompt` path and a `module` path are relative to the flow file, so a flow in
+its own directory finds its own prompts. The working directory is where a step
+acts, which is a different thing. So you run a flow from the directory you want
+it to work in, wherever the flow file sits.
+
 The command prints the events to the error stream and the run state to the
 output stream. It ends with 0 when the run finishes or waits, and 1 when the run
 fails.

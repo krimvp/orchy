@@ -1,3 +1,4 @@
+import { isAbsolute, resolve } from "node:path";
 import type { Static, TSchema } from "@sinclair/typebox";
 import type { Workspace } from "./workspace.ts";
 
@@ -70,6 +71,23 @@ export function gate<S extends TSchema>(step: Declared<GateStep<S>>): GateStep<S
 
 export function flow(name: string, definition: { workspace?: Workspace; steps: Step[] }): Flow {
   return { name, workspace: definition.workspace, steps: definition.steps };
+}
+
+/**
+ * A prompt and a module belong to the flow, so their paths are relative to the
+ * flow file. The working directory is where a step acts, which is a different
+ * thing. Call this after loading a flow from a file.
+ */
+export function resolvePaths(flow: Flow, directory: string): Flow {
+  const at = (path: string) => (isAbsolute(path) ? path : resolve(directory, path));
+  return {
+    ...flow,
+    steps: flow.steps.map((step) => {
+      if (step.kind === "agent") return { ...step, prompt: at(step.prompt) };
+      if (step.kind === "call") return { ...step, module: at(step.module) };
+      return step;
+    }),
+  };
 }
 
 export function cycleOf(step: Step): Cycle | undefined {
