@@ -1,5 +1,5 @@
 import { type CSSProperties, useEffect } from "react";
-import { type RunRow, api, useLoad, useNotices } from "./api";
+import { type Change, type RunRow, api, useLoad, useNotices } from "./api";
 
 export function Runs() {
   const { events, pending } = useNotices();
@@ -111,6 +111,11 @@ export function when(at: string): string {
 export function took(run: { startedAt: string; endedAt: string | null }): string {
   if (!run.endedAt) return "—";
   return length(new Date(run.endedAt).getTime() - new Date(run.startedAt).getTime());
+}
+
+/** `deleted docs/x, added docs/y`. The record names the verb, and not only the path. */
+export function said(changed: Change[]): string {
+  return changed.map((one) => `${one.how} ${one.path}`).join(", ");
 }
 
 export function length(millis: number): string {

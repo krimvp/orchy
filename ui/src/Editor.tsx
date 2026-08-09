@@ -1,9 +1,25 @@
 import { type CSSProperties, useEffect, useState } from "react";
-import { type Cycle, type Flow, type Member, type Schema, type Step, api, useLoad } from "./api";
+import {
+  type Changes,
+  type Computed,
+  type Cycle,
+  type Flow,
+  type Member,
+  type Schema,
+  type Step,
+  api,
+  computedOf,
+  membersOf,
+  useLoad,
+} from "./api";
 import { Graph } from "./Graph";
+import { Contract } from "./Run";
 import { Loading } from "./Runs";
 
 const KINDS: Array<Step["kind"]> = ["agent", "call", "gate", "flow"];
+
+/** The set of operators lives in the runner, so the page points at it and holds no copy. */
+const MATCH = "A match holds the value itself, or one operator. The daemon names the operators when a match breaks.";
 
 /** A choice of a few, shown at once. A person sees every option and the one that holds. */
 function Segmented<T extends string>({
@@ -38,6 +54,7 @@ export function Editor({ id }: { id: number }) {
   const [problems, setProblems] = useState<string[]>([]);
   const [note, setNote] = useState<string>();
   const [fault, setFault] = useState<string>();
+  const [starting, setStarting] = useState(false);
 
   useEffect(() => {
     if (loaded.value) {
@@ -104,6 +121,13 @@ export function Editor({ id }: { id: number }) {
     });
   };
 
+  // The flow says what it takes, so the page asks for those values and no others.
+  const start = (values?: Record<string, unknown>) =>
+    api
+      .startFlow(id, values)
+      .then(() => (setStarting(false), setFault(undefined), setNote("The run is in the queue.")))
+      .catch((problem: Error) => (setNote(undefined), setFault(problem.message)));
+
   const save = () =>
     api
       .saveFlow(id, flow)
@@ -125,7 +149,7 @@ export function Editor({ id }: { id: number }) {
         <button className="go" disabled={!editable || problems.length > 0} onClick={() => void save()}>
           Save
         </button>
-        <button onClick={() => void api.startFlow(id).then(() => setNote("The run is in the queue."))}>Run</button>
+        <button onClick={() => (flow.takes ? setStarting(true) : void start())}>Run</button>
         <button className="quiet" onClick={add}>
           Add a step
         </button>
@@ -139,6 +163,17 @@ export function Editor({ id }: { id: number }) {
           )}
         </span>
       </div>
+
+      {starting && flow.takes && (
+        <div className="panel gate">
+          <h2>This run takes values</h2>
+          <Contract
+            schema={flow.takes}
+            label="Start the run"
+            onSend={(values) => void start(values as Record<string, unknown>)}
+          />
+        </div>
+      )}
 
       {!editable && <p className="bad">This flow is TypeScript. The editor reads it and writes YAML only.</p>}
       {note && <p className="good">{note}</p>}
@@ -210,7 +245,7 @@ export function Editor({ id }: { id: number }) {
                 onChange={(e) => setFlow({ ...flow, model: e.target.value || undefined })}
               />
             </label>
-            <label className="field" style={{ marginBottom: 0 }}>
+            <label className="field">
               <span>Steps at once</span>
               <input
                 type="number"
@@ -219,6 +254,33 @@ export function Editor({ id }: { id: number }) {
                 onChange={(e) => setFlow({ ...flow, parallel: Number(e.target.value) })}
               />
             </label>
+            <label className="field" style={{ marginBottom: 0 }}>
+              <span>Budget, in dollars</span>
+              <input
+                type="number"
+                min={0}
+                step={0.01}
+                placeholder="no budget"
+                value={flow.budget ?? ""}
+                onChange={(e) => setFlow({ ...flow, budget: e.target.value === "" ? undefined : Number(e.target.value) })}
+              />
+            </label>
+
+            <ChangesFields
+              title="Every step promises to change"
+              changes={flow.changes}
+              onChange={(changes) => setFlow({ ...flow, changes })}
+            />
+            <SchemaFields
+              title="Takes values from the run"
+              schema={flow.takes}
+              onChange={(takes) => setFlow({ ...flow, takes })}
+            />
+            <SchemaFields
+              title="Returns the value of the step it ends with"
+              schema={flow.returns}
+              onChange={(returns) => setFlow({ ...flow, returns })}
+            />
           </div>
         </div>
 
@@ -373,32 +435,18 @@ function StepFields({
       )}
 
       {(step.kind === "agent" || step.kind === "call") && (
-        <div className="field set">
-          <span>Promises to change</span>
-          <Segmented
-            value={step.changes === undefined ? "absent" : step.changes === "nothing" ? "nothing" : "paths"}
-            options={[
-              { value: "absent", label: "no promise" },
-              { value: "nothing", label: "nothing" },
-              { value: "paths", label: "these paths" },
-            ]}
-            onChange={(kind) =>
-              onChange({
-                changes: kind === "absent" ? undefined : kind === "nothing" ? "nothing" : { paths: ["docs"] },
-              })
-            }
+        <>
+          <ChangesFields
+            title="Promises to change"
+            changes={step.changes}
+            onChange={(changes) => onChange({ changes })}
           />
-          {step.changes !== undefined && step.changes !== "nothing" && (
-            <input
-              style={{ marginTop: 10 }}
-              value={step.changes.paths.join(", ")}
-              placeholder="docs, README.md"
-              onChange={(e) =>
-                onChange({ changes: { paths: e.target.value.split(",").map((one) => one.trim()).filter(Boolean) } })
-              }
-            />
-          )}
-        </div>
+          <SchemaFields
+            title="Takes values that must reach it"
+            schema={step.takes}
+            onChange={(takes) => onChange({ takes })}
+          />
+        </>
       )}
 
       {step.kind !== "flow" && (
@@ -423,18 +471,100 @@ function StepFields({
           {step.when && (
             <div style={{ marginTop: 14 }}>
               <Json value={step.when} onChange={(value) => onChange({ when: value as Step["when"] })} rows={4} />
+              <span className="note small">{MATCH}</span>
             </div>
           )}
         </div>
       )}
 
-      {(step.kind === "agent" || step.kind === "call") && <CycleFields step={step} flow={flow} onChange={onChange} />}
+      {/* A gate cycles as well, because a person sends the run back. */}
+      {step.kind !== "flow" && <CycleFields step={step} flow={flow} onChange={onChange} />}
 
       {(step.kind === "agent" || step.kind === "call") && <FanoutFields step={step} onChange={onChange} />}
 
       <button className="danger" onClick={onRemove} style={{ marginTop: 18 }}>
         Delete this step
       </button>
+    </div>
+  );
+}
+
+/**
+ * The promise of invariant 5. A flow holds one for every step that declares
+ * none, and a step holds its own, so both draw the same control.
+ */
+function ChangesFields({
+  title,
+  changes,
+  onChange,
+}: {
+  title: string;
+  changes?: Changes;
+  onChange: (changes?: Changes) => void;
+}) {
+  const kind =
+    changes === undefined ? "absent" : changes === "nothing" ? "nothing" : "except" in changes ? "except" : "paths";
+  const paths = typeof changes === "object" ? ("except" in changes ? changes.except : changes.paths) : [];
+  const write = (list: string[]) => onChange(kind === "except" ? { except: list } : { paths: list });
+
+  return (
+    <div className="field set">
+      <span>{title}</span>
+      <Segmented
+        value={kind}
+        options={[
+          { value: "absent", label: "no promise" },
+          { value: "nothing", label: "nothing" },
+          { value: "paths", label: "only these paths" },
+          { value: "except", label: "everything but these" },
+        ]}
+        onChange={(next) => {
+          if (next === "absent") return onChange(undefined);
+          if (next === "nothing") return onChange("nothing");
+          const list = paths.length > 0 ? paths : ["docs"];
+          onChange(next === "except" ? { except: list } : { paths: list });
+        }}
+      />
+      {(kind === "paths" || kind === "except") && (
+        <input
+          style={{ marginTop: 10 }}
+          value={paths.join(", ")}
+          placeholder="docs, README.md"
+          onChange={(e) => write(e.target.value.split(",").map((one) => one.trim()).filter(Boolean))}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * A contract is JSON Schema, so the editor writes the schema itself. A builder
+ * for a schema is a second language beside the one that a file already holds.
+ */
+function SchemaFields({
+  title,
+  schema,
+  onChange,
+}: {
+  title: string;
+  schema?: Schema;
+  onChange: (schema?: Schema) => void;
+}) {
+  return (
+    <div className="field set">
+      <label className="tick">
+        <input
+          type="checkbox"
+          checked={Boolean(schema)}
+          onChange={(e) => onChange(e.target.checked ? OBJECT : undefined)}
+        />
+        <span>{title}</span>
+      </label>
+      {schema && (
+        <div style={{ marginTop: 14 }}>
+          <Json value={schema} onChange={(value) => onChange(value as Schema)} rows={7} />
+        </div>
+      )}
     </div>
   );
 }
@@ -522,6 +652,7 @@ function CycleFields({
                 onChange={(value) => onChange({ cycle: { ...cycle, when: value as Record<string, unknown> } })}
                 rows={3}
               />
+              <span className="note small">{MATCH}</span>
             </div>
           )}
         </div>
@@ -531,21 +662,34 @@ function CycleFields({
 }
 
 function FanoutFields({ step, onChange }: { step: Step; onChange: (patch: Partial<Step>) => void }) {
-  const members = step.fanout ?? [];
+  const members = membersOf(step);
+  const computed = computedOf(step);
   const set = (index: number, patch: Partial<Member>) =>
-    onChange({ fanout: members.map((one, at) => (at === index ? { ...one, ...patch } : one)) });
+    onChange({ fanout: (members ?? []).map((one, at) => (at === index ? { ...one, ...patch } : one)) });
 
   return (
     <div className="field set">
-      <label className="tick">
-        <input
-          type="checkbox"
-          checked={members.length > 0}
-          onChange={(e) => onChange({ fanout: e.target.checked ? [{ name: "one" }] : undefined })}
-        />
-        <span>Runs once for each member</span>
-      </label>
-      {members.length > 0 && (
+      <span>Runs once for each member</span>
+      <Segmented
+        value={members ? "members" : computed ? "computed" : "absent"}
+        options={[
+          { value: "absent", label: "no fanout" },
+          { value: "members", label: "these members" },
+          { value: "computed", label: "a list a step returns" },
+        ]}
+        onChange={(kind) =>
+          onChange({
+            fanout:
+              kind === "absent"
+                ? undefined
+                : kind === "members"
+                  ? [{ name: "one" }]
+                  : { step: step.needs[0] ?? "", key: "" },
+          })
+        }
+      />
+      {computed && <ComputedFields step={step} computed={computed} onChange={onChange} />}
+      {members && (
         <div style={{ marginTop: 14 }}>
           {members.map((member, index) => (
             <div key={index} className="member">
@@ -592,6 +736,45 @@ function FanoutFields({ step, onChange }: { step: Step; onChange: (patch: Partia
   );
 }
 
+/**
+ * Where the run finds the list: a step that this step needs, and the key of the
+ * value of that step. The run expands this one, so the drawing shows no count.
+ */
+function ComputedFields({
+  step,
+  computed,
+  onChange,
+}: {
+  step: Step;
+  computed: Computed;
+  onChange: (patch: Partial<Step>) => void;
+}) {
+  return (
+    <div style={{ marginTop: 14 }}>
+      <label className="field">
+        <span>The step that returns the list</span>
+        <select
+          value={computed.step}
+          onChange={(e) => onChange({ fanout: { ...computed, step: e.target.value } })}
+        >
+          <option value="">choose a step this one needs</option>
+          {step.needs.map((need) => (
+            <option key={need}>{need}</option>
+          ))}
+        </select>
+      </label>
+      <label className="field" style={{ marginBottom: 0 }}>
+        <span>The key that holds the list</span>
+        <input
+          placeholder="packages"
+          value={computed.key}
+          onChange={(e) => onChange({ fanout: { ...computed, key: e.target.value } })}
+        />
+      </label>
+    </div>
+  );
+}
+
 /** Keeps the text while a person types, and reports the value when it parses. */
 /** Nothing when the text is not JSON, so a half-typed value writes no field. */
 function read(text: string): Record<string, unknown> | undefined {
@@ -630,7 +813,10 @@ function Json({ value, onChange, rows }: { value: unknown; onChange: (value: unk
 
 const OBJECT: Schema = { type: "object", required: [], properties: {} };
 
-/** A field that the new kind cannot hold must go, or the run refuses the step. */
+/**
+ * A field that the new kind cannot hold must go, or the run refuses the step. A
+ * field that the new kind holds must stay, or the editor drops it in silence.
+ */
 function retype(step: Step, kind: Step["kind"]): Partial<Step> {
   const bare: Partial<Step> = {
     kind,
@@ -641,15 +827,29 @@ function retype(step: Step, kind: Step["kind"]): Partial<Step> {
     tools: undefined,
     harness: undefined,
     model: undefined,
+    with: undefined,
+    takes: undefined,
     changes: undefined,
-    cycle: undefined,
     fanout: undefined,
     returns: step.returns ?? OBJECT,
   };
-  if (kind === "agent") return { ...bare, prompt: step.prompt ?? "prompts/step.md", tools: step.tools ?? ["read"] };
-  if (kind === "call") return { ...bare, module: step.module ?? "step.ts" };
+  // An agent step and a call step both act in the workspace, both take values,
+  // and both fan out. Every kind holds a cycle, so no kind drops one.
+  const acts = { with: step.with, takes: step.takes, changes: step.changes, fanout: step.fanout };
+  if (kind === "agent") {
+    return {
+      ...bare,
+      ...acts,
+      harness: step.harness,
+      model: step.model,
+      prompt: step.prompt ?? "prompts/step.md",
+      tools: step.tools ?? ["read"],
+    };
+  }
+  if (kind === "call") return { ...bare, ...acts, module: step.module ?? "step.ts" };
   if (kind === "gate") return { ...bare, question: step.question ?? "What do you decide?" };
-  return { ...bare, flow: step.flow ?? "inner/flow.yaml", returns: undefined };
+  // A flow step holds the values it passes down, and it holds no condition.
+  return { ...bare, with: step.with, when: undefined, flow: step.flow ?? "inner/flow.yaml", returns: undefined };
 }
 
 /** A key that holds nothing must leave the file, not sit in it as null. */

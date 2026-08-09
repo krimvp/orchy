@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import type { Cycle, Step } from "./api";
+import { type Cycle, type Step, computedOf, membersOf } from "./api";
 
 export type Mark = "done" | "failed" | "skipped" | "running" | "waiting" | "idle";
 
@@ -404,9 +404,7 @@ export function Graph({
         >
           <g className="lift">
             {/* A fanout is one step in the file and many in the run, so it stands as a stack. */}
-            {node.step.fanout && node.step.fanout.length > 1 && (
-              <rect className="box behind" x="5" y="-5" width={W} height={H} rx="12" />
-            )}
+            {stacked(node.step) && <rect className="box behind" x="5" y="-5" width={W} height={H} rx="12" />}
             <rect className="box" width={W} height={H} rx="12" />
             {marks[node.step.id] === "running" && (
               <rect className="halo" x="-4" y="-4" width={W + 8} height={H + 8} rx="16" />
@@ -438,12 +436,26 @@ function file(path: string): string {
   return short(path.split("/").pop() ?? path, 24);
 }
 
+/** A step that runs more than once stands as a stack, whoever names the list. */
+function stacked(step: Step): boolean {
+  const members = membersOf(step);
+  return members ? members.length > 1 : Boolean(computedOf(step));
+}
+
 function label(step: Step): string {
-  const many = step.fanout?.length ? ` ×${step.fanout.length}` : "";
+  // A computed fanout has no count until the run produces the list. See ADR 0017.
+  const many = countOf(step);
   if (step.kind === "agent") {
     return `${short([step.harness ?? "the default", step.model].filter(Boolean).join(" · "), 24)}${many}`;
   }
   if (step.kind === "call") return `${file(step.module ?? "call")}${many}`;
   if (step.kind === "gate") return "a person answers";
   return file(step.flow ?? "flow");
+}
+
+/** The number of members, or `×?` when the run computes the list. */
+function countOf(step: Step): string {
+  const members = membersOf(step);
+  if (members) return members.length > 0 ? ` ×${members.length}` : "";
+  return computedOf(step) ? " ×?" : "";
 }

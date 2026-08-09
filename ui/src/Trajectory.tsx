@@ -1,5 +1,5 @@
 import { type Atif, type Turn, api, useLoad } from "./api";
-import { length } from "./Runs";
+import { length, said } from "./Runs";
 
 /**
  * The record of a run, as ATIF holds it. Each root step is one run of one step,
@@ -55,7 +55,7 @@ function Attempt({ turn, trajectory }: { turn: Turn; trajectory: Atif }) {
       <div className="turns">
         {orchy?.changed && (
           <p className="note small">
-            Changed <span className="mono">{orchy.changed.join(", ")}</span>
+            Changed <span className="mono">{said(orchy.changed)}</span>
           </p>
         )}
         {child?.steps.map((one, index) => (

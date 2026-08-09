@@ -20,8 +20,29 @@ export interface Cycle {
   policy: "escalate" | "accept";
 }
 
-/** What a step promises to change in the workspace. */
-export type Changes = "nothing" | { paths: string[] };
+/**
+ * What a step promises to change in the workspace. `paths` names the only paths
+ * it changes, and `except` names the paths it must not change.
+ */
+export type Changes = "nothing" | { paths: string[] } | { except: string[] };
+
+/** One path that a step changed, and what it did to that path. */
+export interface Change {
+  path: string;
+  how: "added" | "changed" | "deleted" | "renamed" | "restored" | "moved";
+}
+
+/**
+ * Where a fanout finds its list when a step computes it: the step that holds
+ * the value, and the key in that value. The run expands this one.
+ */
+export interface Computed {
+  step: string;
+  key: string;
+}
+
+/** The members a file names, or where the run finds them. */
+export type Fanout = Member[] | Computed;
 
 export interface Step {
   id: string;
@@ -37,10 +58,22 @@ export interface Step {
   harness?: string;
   model?: string;
   with?: Record<string, unknown>;
+  /** The values that must reach the step, as JSON Schema. */
+  takes?: Schema;
   changes?: Changes;
   returns?: Schema;
   cycle?: Cycle;
-  fanout?: Member[];
+  fanout?: Fanout;
+}
+
+/** The members a file names, or nothing when a step computes the list. */
+export function membersOf(step: Step): Member[] | undefined {
+  return Array.isArray(step.fanout) ? step.fanout : undefined;
+}
+
+/** Where the run finds the list, or nothing when the file names the members. */
+export function computedOf(step: Step): Computed | undefined {
+  return step.fanout && !Array.isArray(step.fanout) ? step.fanout : undefined;
 }
 
 export type Workspace = { kind: "none" } | { kind: "git"; path: string };
@@ -51,6 +84,14 @@ export interface Flow {
   /** The harness and the model for a step that names neither. */
   harness?: string;
   model?: string;
+  /** The promise for an agent step and a call step that declares none. */
+  changes?: Changes;
+  /** The values a run supplies. Every step of the run reads them. */
+  takes?: Schema;
+  /** The value the flow produces, which is the value of the step it ends with. */
+  returns?: Schema;
+  /** What the run may spend, in dollars. A run that reaches it stops. */
+  budget?: number;
   parallel?: number;
   steps: Step[];
 }
@@ -96,14 +137,21 @@ export interface StepRecord {
   disagreement?: "accepted";
   /** Why a condition ruled the step out. */
   skipped?: string;
-  changed?: string[];
+  /** The step voted to cycle, and the run acted on a vote to an earlier step. */
+  votedToCycle?: string;
+  /** Each path the step changed, and what it did to that path. */
+  changed?: Change[];
   cost?: number;
 }
 
 export interface RunState {
   runId: string;
   flow: Flow;
+  /** The values this run supplies for what the flow takes. */
+  with?: Record<string, unknown>;
   status: string;
+  /** Why the run failed, when the fault belongs to the run and not to one step. */
+  error?: string;
   waitingFor?: string;
   question?: string;
   steps: Record<string, StepRecord>;
@@ -139,7 +187,7 @@ export interface Turn {
     orchy?: {
       step: string;
       status: string;
-      changed?: string[];
+      changed?: Change[];
       disagreement?: string;
       answeredByPerson?: boolean;
       dropped?: boolean;
@@ -191,7 +239,9 @@ export const api = {
       body: JSON.stringify({ flow }),
     }),
   removeFlow: (id: number) => call<unknown>(`/api/flows/${id}`, { method: "DELETE" }),
-  startFlow: (id: number) => call<Ticket>(`/api/flows/${id}/runs`, { method: "POST", body: "{}" }),
+  /** The values the flow takes ride with the request. The child checks them. */
+  startFlow: (id: number, values?: Record<string, unknown>) =>
+    call<Ticket>(`/api/flows/${id}/runs`, { method: "POST", body: JSON.stringify({ with: values }) }),
   validate: (flow: Flow) =>
     call<{ problems: string[] }>("/api/validate", { method: "POST", body: JSON.stringify({ flow }) }),
   runs: () => call<RunRow[]>("/api/runs"),

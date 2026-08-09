@@ -1,7 +1,7 @@
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { type RunEvent, type RunState, type Schema, type Step, type StepRecord, api, useLoad, useNotices } from "./api";
 import { Graph, type Mark } from "./Graph";
-import { Loading, length, when } from "./Runs";
+import { Loading, length, said, when } from "./Runs";
 import { Trajectory } from "./Trajectory";
 
 export function Run({ runId }: { runId: string }) {
@@ -55,13 +55,29 @@ export function Run({ runId }: { runId: string }) {
         </div>
         <div className="tile">
           <dt>Cost</dt>
-          <dd>{row?.cost ? `$${row.cost.toFixed(4)}` : "—"}</dd>
+          <dd>
+            {row?.cost ? `$${row.cost.toFixed(4)}` : "—"}
+            {/* A budget belongs to the run, so the spend reads against it. */}
+            {state.flow.budget !== undefined && (
+              <span style={{ color: "var(--text-3)" }}>/${state.flow.budget}</span>
+            )}
+          </dd>
         </div>
         <div className="tile">
           <dt>Tokens</dt>
           <dd>{row?.tokens ? row.tokens.toLocaleString() : "—"}</dd>
         </div>
       </dl>
+
+      {/* A fault of the run, and not of one step, such as a budget it reached. */}
+      {state.error && <p className="bad">{state.error}</p>}
+
+      {state.with && (
+        <details>
+          <summary>The values this run takes</summary>
+          <pre>{JSON.stringify(state.with, null, 2)}</pre>
+        </details>
+      )}
 
       <div className="row" style={{ "--i": 3 } as CSSProperties}>
         <a className="button" href={`/api/runs/${runId}/trajectory`} target="_blank" rel="noreferrer">
@@ -215,7 +231,7 @@ function Detail({
         {step.changes && (
           <>
             <dt>Promise</dt>
-            <dd>{step.changes === "nothing" ? "changes nothing" : `changes only ${step.changes.paths.join(", ")}`}</dd>
+            <dd>{promise(step.changes)}</dd>
           </>
         )}
         {step.cycle && (
@@ -240,10 +256,23 @@ function Detail({
             <dd>{length(new Date(record.endedAt).getTime() - new Date(record.startedAt).getTime())}</dd>
           </>
         )}
+        {record?.cost !== undefined && (
+          <>
+            <dt>Cost</dt>
+            <dd>${record.cost.toFixed(4)}</dd>
+          </>
+        )}
+        {/* One wave settles one cycle, so a second vote says what the run left. */}
+        {record?.votedToCycle && (
+          <>
+            <dt>Voted</dt>
+            <dd>to go back to {record.votedToCycle}, and the run went elsewhere</dd>
+          </>
+        )}
         {record?.changed && (
           <>
             <dt>Changed</dt>
-            <dd className="mono small">{record.changed.join(", ")}</dd>
+            <dd className="mono small">{said(record.changed)}</dd>
           </>
         )}
       </dl>
@@ -266,7 +295,6 @@ function Detail({
   );
 }
 
-/** A form for the contract of the gate, so a person answers without writing JSON. */
 function Answer({
   question,
   schema,
@@ -274,6 +302,28 @@ function Answer({
 }: {
   question: string;
   schema: Schema;
+  onSend: (value: unknown) => void;
+}) {
+  return (
+    <div className="panel gate">
+      <h2>This run waits for a person</h2>
+      <h3 style={{ marginBottom: 18 }}>{question}</h3>
+      <Contract schema={schema} label="Answer and continue" onSend={onSend} />
+    </div>
+  );
+}
+
+/**
+ * A form for a contract, so a person writes no JSON. A gate reads its own
+ * contract, and a run that takes values reads what the flow takes.
+ */
+export function Contract({
+  schema,
+  label,
+  onSend,
+}: {
+  schema: Schema;
+  label: string;
   onSend: (value: unknown) => void;
 }) {
   const properties = (schema.properties ?? {}) as Record<string, Schema>;
@@ -284,9 +334,7 @@ function Answer({
   const set = (key: string, next: unknown) => setValue((held) => ({ ...held, [key]: next }));
 
   return (
-    <div className="panel gate">
-      <h2>This run waits for a person</h2>
-      <h3 style={{ marginBottom: 18 }}>{question}</h3>
+    <>
       {!raw &&
         Object.entries(properties).map(([key, field]) => (
           <label key={key} className={field.type === "boolean" ? "field tick" : "field"}>
@@ -313,7 +361,7 @@ function Answer({
       {raw && <textarea rows={8} value={text} onChange={(e) => setText(e.target.value)} />}
       <div className="row" style={{ marginBottom: 0 }}>
         <button className="go" onClick={() => onSend(raw ? JSON.parse(text) : value)}>
-          Answer and continue
+          {label}
         </button>
         <button
           className="quiet"
@@ -325,8 +373,15 @@ function Answer({
           {raw ? "Use the form" : "Write JSON"}
         </button>
       </div>
-    </div>
+    </>
   );
+}
+
+/** The promise of a step, in the words that invariant 5 uses for it. */
+function promise(changes: NonNullable<Step["changes"]>): string {
+  if (changes === "nothing") return "changes nothing";
+  if ("except" in changes) return `changes nothing in ${changes.except.join(", ")}`;
+  return `changes only ${changes.paths.join(", ")}`;
 }
 
 function blank(properties: Record<string, Schema>): Record<string, unknown> {

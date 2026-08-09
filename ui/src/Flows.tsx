@@ -1,5 +1,6 @@
 import { type CSSProperties, useState } from "react";
-import { api, useLoad } from "./api";
+import { type Schema, api, useLoad } from "./api";
+import { Contract } from "./Run";
 import { Loading } from "./Runs";
 
 export function Flows() {
@@ -9,6 +10,7 @@ export function Flows() {
   const [harness, setHarness] = useState("pi");
   const [fault, setFault] = useState<string>();
   const [note, setNote] = useState<string>();
+  const [asking, setAsking] = useState<{ id: number; name: string; takes: Schema }>();
 
   const add = () =>
     api
@@ -16,10 +18,19 @@ export function Flows() {
       .then(() => (setPath(""), setFault(undefined), setNote(undefined), again()))
       .catch((problem: Error) => setFault(problem.message));
 
+  const begin = (id: number, values?: Record<string, unknown>) =>
+    api
+      .startFlow(id, values)
+      .then(() => (setAsking(undefined), setFault(undefined), setNote("The run is in the queue.")))
+      .catch((problem: Error) => (setNote(undefined), setFault(problem.message)));
+
+  // The flow says what it takes, so the page asks for those values and no others.
   const start = (id: number) =>
     api
-      .startFlow(id)
-      .then(() => (setFault(undefined), setNote("The run is in the queue.")))
+      .flow(id)
+      .then((one) =>
+        one.flow.takes ? setAsking({ id, name: one.flow.name, takes: one.flow.takes }) : void begin(id),
+      )
       .catch((problem: Error) => (setNote(undefined), setFault(problem.message)));
 
   return (
@@ -52,6 +63,18 @@ export function Flows() {
         {fault && <pre className="bad">{fault}</pre>}
         {note && <p className="good small">{note}</p>}
       </div>
+
+      {asking && (
+        <div className="panel gate">
+          <h2>The flow {asking.name} takes values</h2>
+          <Contract
+            key={asking.id}
+            schema={asking.takes}
+            label="Start the run"
+            onSend={(values) => void begin(asking.id, values as Record<string, unknown>)}
+          />
+        </div>
+      )}
 
       {!flows && <Loading />}
 
