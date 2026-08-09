@@ -131,6 +131,8 @@ export interface AgentStep<S extends TSchema = TSchema> extends Common, Acts {
   model?: string;
   /** A value the step holds. A fanout gives one to each member. */
   with?: Record<string, unknown>;
+  /** The values that must reach the step. Invariant 2 guards what goes in. */
+  takes?: TSchema;
   returns: S;
   cycle?: Cycle<S>;
 }
@@ -142,6 +144,8 @@ export interface CallStep<S extends TSchema = TSchema> extends Common, Acts {
   module: string;
   /** A value the step holds. The component takes it as its third argument. */
   with?: Record<string, unknown>;
+  /** The values that must reach the component. Invariant 2 guards what goes in. */
+  takes?: TSchema;
   returns: S;
   cycle?: Cycle<S>;
 }
@@ -455,9 +459,9 @@ const FLOW_HOLDS = [
 const HOLDS: Record<Step["kind"], { must: string[]; may: string[] }> = {
   agent: {
     must: ["prompt", "tools", "returns"],
-    may: ["needs", "when", "harness", "model", "with", "changes", "cycle", "fanout"],
+    may: ["needs", "when", "harness", "model", "with", "takes", "changes", "cycle", "fanout"],
   },
-  call: { must: ["module", "returns"], may: ["needs", "when", "with", "changes", "cycle", "fanout"] },
+  call: { must: ["module", "returns"], may: ["needs", "when", "with", "takes", "changes", "cycle", "fanout"] },
   gate: { must: ["question", "returns"], may: ["needs", "when", "cycle"] },
   flow: { must: ["flow"], may: ["needs", "with", "cycle"] },
 };
@@ -532,6 +536,10 @@ function shapeProblems(flow: Flow): string[] {
     // A missing one already has its own problem, so this one speaks for a wrong one.
     if (step.kind !== "flow" && returns !== undefined && !isSchema(returns)) {
       problems.push(`step "${step.id}" returns "${JSON.stringify(returns)}", which is not JSON Schema`);
+    }
+    const takes = (step as CallStep).takes;
+    if (takes !== undefined && !isSchema(takes)) {
+      problems.push(`step "${step.id}" takes ${JSON.stringify(takes)}, which is not JSON Schema`);
     }
     problems.push(...changesProblems(`step "${step.id}"`, (step as AgentStep).changes));
     problems.push(...memberProblems(step));
@@ -715,6 +723,7 @@ export function validate(flow: Flow): string[] {
   for (const step of flow.steps) {
     problems.push(...toolProblems(flow, step));
     problems.push(...modelProblems(flow, step));
+    problems.push(...takenProblems(flow, step));
     problems.push(...conditionProblems(flow, step));
   }
 
@@ -812,6 +821,37 @@ function modelProblems(flow: Flow, step: Step): string[] {
     if (!named || !reads || reads.reads.test(named)) return [];
     return [`${who} names the model "${named}", which the harness "${harness}" cannot read. ${reads.write}`];
   });
+}
+
+/**
+ * Invariant 2 the other way round: what a step takes, against the names that
+ * can reach it. A run supplies what the flow takes, and the step holds the
+ * rest, so a name in neither never arrives. The run checks the values
+ * themselves, because only a run holds them.
+ */
+function takenProblems(flow: Flow, step: Step): string[] {
+  const schema = (step as CallStep).takes as { required?: unknown } | undefined;
+  const required = Array.isArray(schema?.required) ? (schema.required as string[]) : [];
+  // A computed fanout makes the values of each member during the run, so the
+  // run checks that one.
+  if (required.length === 0 || computedOf(step)) return [];
+
+  const supplied = Object.keys((flow.takes?.properties as Record<string, unknown>) ?? {});
+  const own = (step as AgentStep).with;
+  const members = membersOf(step);
+  // Each member becomes a step of its own, and it holds its own values.
+  const wanted = members
+    ? members.map((one) => ({ who: `member "${one.name}" of "${step.id}"`, held: one.with ?? own, on: "the member" }))
+    : [{ who: `step "${step.id}"`, held: own, on: "the step" }];
+
+  return wanted.flatMap(({ who, held, on }) =>
+    required
+      .filter((name) => !supplied.includes(name) && !(held && Object.hasOwn(held, name)))
+      .map(
+        (name) =>
+          `${who} takes "${name}", and nothing supplies it. Add "${name}" to "takes" on the flow, or to "with" on ${on}.`,
+      ),
+  );
 }
 
 /**

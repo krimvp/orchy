@@ -104,7 +104,9 @@ _Avoid_: Output schema, signature, interface
 
 **Takes**:
 The values that a run supplies to a flow. A flow declares them as a schema.
-Every step of the run reads them, and a name in a prompt takes one.
+Every step of the run reads them, and a name in a prompt takes one. A step
+declares as a schema the values it must get, and Orchy checks them before the
+step starts.
 _Avoid_: Parameter, argument, input, variable
 
 **Policy**:

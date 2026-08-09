@@ -3291,3 +3291,178 @@ test("the pi adapter reports what a session spent, and nothing when no message p
   assert.equal(costOf(write({ input: 10, output: 2 })), undefined);
   assert.equal(costOf(join(cwd, "no-session.jsonl")), undefined);
 });
+
+// ── What a step takes ────────────────────────────────────────────────────────
+
+/** A flow whose values arrive, or do not, so a step can declare what it needs. */
+const Loose = Type.Object({ issue: Type.Optional(Type.Number()) });
+
+test("validate refuses a step that takes a value nothing supplies", () => {
+  const problems = validate(
+    flow("wired", {
+      takes: Issue,
+      steps: [call({ id: "open", module: "m.ts", returns: Summary, takes: Type.Object({ ticket: Type.Number() }) })],
+    }),
+  );
+
+  assert.ok(
+    problems.some((p) =>
+      p.includes(
+        'step "open" takes "ticket", and nothing supplies it. Add "ticket" to "takes" on the flow, or to "with" on the step.',
+      ),
+    ),
+  );
+});
+
+test("a step that takes a value the run does not supply fails before the module runs", async () => {
+  const cwd = workspace();
+  const ran = join(cwd, "ran.txt");
+  writeFileSync(
+    join(cwd, "m.ts"),
+    `import { writeFileSync } from "node:fs";
+     export default (inputs, say, values) => {
+       writeFileSync(${JSON.stringify(ran)}, "yes");
+       return { summary: String(values.issue) };
+     };`,
+  );
+
+  const state = await run(
+    flow("loose", { takes: Loose, steps: [call({ id: "open", module: "m.ts", returns: Summary, takes: Issue })] }),
+    { cwd, with: {} },
+  );
+
+  assert.equal(state.status, "failed");
+  assert.match(state.steps.open?.error ?? "", /the values that reach "open" break what it takes/);
+  assert.match(state.steps.open?.error ?? "", /must have required property 'issue'/);
+  assert.equal(existsSync(ran), false);
+});
+
+test("an agent step that takes a value it does not get spends no token", async () => {
+  const cwd = workspace();
+  const harness = fakeHarness({ summary: "done" });
+
+  const state = await run(
+    flow("loose", {
+      takes: Loose,
+      steps: [agent({ id: "a", prompt: "step.md", tools: ["read"], returns: Summary, takes: Issue })],
+    }),
+    { cwd, harness, with: {} },
+  );
+
+  assert.equal(state.status, "failed");
+  assert.match(state.steps.a?.error ?? "", /the values that reach "a" break what it takes/);
+  assert.equal(harness.seen.length, 0);
+});
+
+test("an item of a computed fanout is checked against what the step takes", async () => {
+  const cwd = auditWorkspace('{ packages: [{ name: "core", version: "1.2" }, { name: "cli" }] }');
+  const audited = auditFlow();
+  (audited.steps[1] as CallStep).takes = Type.Object({ name: Type.String(), version: Type.String() });
+
+  const state = await run(audited, { cwd });
+
+  assert.equal(state.status, "failed");
+  assert.equal(state.steps["audit/core"]?.status, "done");
+  assert.match(state.steps["audit/cli"]?.error ?? "", /the values that reach "audit\/cli" break what it takes/);
+  assert.match(state.steps["audit/cli"]?.error ?? "", /must have required property 'version'/);
+});
+
+test("a member of a fanout supplies what the step takes", async () => {
+  const cwd = workspace();
+  writeFileSync(join(cwd, "m.ts"), "export default (inputs, say, values) => ({ summary: values.package });");
+  const Package = Type.Object({ package: Type.String() });
+  const audit = (second: { name: string; with?: Record<string, unknown> }): Flow =>
+    flow("audit", {
+      steps: [
+        call({
+          id: "audit",
+          module: "m.ts",
+          returns: Summary,
+          takes: Package,
+          fanout: [{ name: "core", with: { package: "core" } }, second],
+        }),
+      ],
+    });
+
+  const good = audit({ name: "cli", with: { package: "cli" } });
+  assert.deepEqual(validate(good), []);
+  const state = await run(good, { cwd });
+  assert.equal(state.status, "done");
+  assert.deepEqual(state.steps["audit/cli"]?.value, { summary: "cli" });
+
+  assert.ok(
+    validate(audit({ name: "cli" })).some((p) =>
+      p.includes('member "cli" of "audit" takes "package", and nothing supplies it'),
+    ),
+  );
+});
+
+test("a step of a sub-flow takes the values the flow step supplies", async () => {
+  const cwd = workspace();
+  writeFileSync(join(cwd, "m.ts"), "export default (inputs, say, values) => ({ summary: String(values.issue) });");
+
+  const inner = flow("panel", {
+    takes: Issue,
+    steps: [call({ id: "open", module: "m.ts", returns: Summary, takes: Issue })],
+  });
+  const outer = await expandFlows(
+    flow("outer", {
+      steps: [{ kind: "flow", id: "sub", needs: [], flow: "./panel.yaml", with: { issue: 123 } }],
+    }),
+    async () => inner,
+  );
+
+  assert.deepEqual(validate(outer), []);
+  const state = await run(outer, { cwd });
+  assert.deepEqual(state.steps["sub/open"]?.value, { summary: "123" });
+});
+
+test("validate refuses what a step takes when it is not JSON Schema", () => {
+  const problems = validate(
+    parseFlow(
+      [
+        "name: bad",
+        "steps:",
+        "  - id: one",
+        "    kind: call",
+        "    module: m.ts",
+        "    takes: issue",
+        "    returns: { type: object }",
+      ].join("\n"),
+    ),
+  );
+
+  assert.ok(problems.some((p) => p.includes('step "one" takes "issue", which is not JSON Schema')));
+});
+
+test("a gate takes its value from a person, so it says only what it returns", () => {
+  const problems = validate(
+    flow("asked", {
+      steps: [{ kind: "gate", id: "ask", needs: [], question: "Is it right?", returns: Summary, takes: Issue } as never],
+    }),
+  );
+
+  assert.ok(
+    problems.some((p) =>
+      p.includes('step "ask" holds "takes", which a gate step cannot act on. Only an agent or a call step holds it.'),
+    ),
+  );
+});
+
+test("a file keeps what a step takes", () => {
+  const schema = "{ type: object, properties: { issue: { type: number } }, required: [issue] }";
+  const text = [
+    "name: kept",
+    `takes: ${schema}`,
+    "steps:",
+    "  - id: open",
+    "    kind: call",
+    "    module: m.ts",
+    `    takes: ${schema}`,
+    "    returns: { type: object }",
+  ].join("\n");
+
+  const parsed = parseFlow(text);
+  assert.deepEqual(validate(parsed), []);
+  assert.deepEqual(parseFlow(formatFlow(parsed)), parsed);
+});

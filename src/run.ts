@@ -43,6 +43,30 @@ function contractProblem(step: Step, value: unknown): string | undefined {
 }
 
 /**
+ * The other half of invariant 2: what a step takes, checked against the values
+ * that reach it, before a component runs and before a prompt is built. A
+ * component that reads a value that no longer arrives fails inside itself, and
+ * a model asks or guesses. `validate()` answers what a file already knows.
+ */
+function takenProblem(step: Step, values: Record<string, unknown>): string | undefined {
+  const schema = (step as CallStep).takes;
+  if (!schema) return undefined;
+  const problem = schemaProblem(schema, values);
+  return (
+    problem &&
+    `the values that reach "${step.id}" break what it takes ${problem}. Add it to "takes" on the flow, or to "with" on the step.`
+  );
+}
+
+/**
+ * The values a step works on: what the run takes, under what the step holds.
+ * The step is the narrower one, so it wins, by the same rule as the harness.
+ */
+function valuesOf(step: Step, state: RunState): Record<string, unknown> {
+  return { ...state.with, ...(step as AgentStep).with };
+}
+
+/**
  * A flow that declares `returns` is checked once, at the end. `validate()`
  * refuses a flow that declares it and ends in more than one step, so the step
  * that holds the value of the run is the one end.
@@ -633,6 +657,10 @@ async function runStep(
   // Only the step the cycle went back to hears why it went back.
   for (const one of feedback ?? []) if (one.to === step.id) inputs[one.step] = one.value;
 
+  const values = valuesOf(step, state);
+  const taken = takenProblem(step, values);
+  if (taken) return { ...at(), status: "failed", error: taken };
+
   const before = take(state.flow.workspace, cwd);
 
   let result: { value: unknown; trajectory?: string; cost?: number };
@@ -642,7 +670,7 @@ async function runStep(
         ? await harness.run(
             {
               step: step.id,
-              prompt: buildPrompt(step, inputs, cwd, state.with),
+              prompt: buildPrompt(step, inputs, cwd, values, state.with),
               tools: step.tools,
               returns: step.returns,
               cwd,
@@ -650,7 +678,7 @@ async function runStep(
             },
             watch,
           )
-        : { value: await callModule(step as CallStep, inputs, cwd, watch, state.with) };
+        : { value: await callModule(step as CallStep, inputs, cwd, watch, values) };
   } catch (error) {
     return { ...at(), status: "failed", error: String(error) };
   }
@@ -709,12 +737,10 @@ function buildPrompt(
   step: AgentStep,
   inputs: Record<string, unknown>,
   cwd: string,
+  values: Record<string, unknown>,
   takes?: Record<string, unknown>,
 ): string {
-  // A name in the prompt reads both. The step is the narrower one, so it wins,
-  // by the same rule as the harness of a step.
-  const named = { ...takes, ...step.with };
-  const parts = [fill(readFileSync(resolve(cwd, step.prompt), "utf8"), step.id, named)];
+  const parts = [fill(readFileSync(resolve(cwd, step.prompt), "utf8"), step.id, values)];
   if (takes) parts.push(block("The values this run takes", takes));
   // A member of a fanout differs by this value, so the step must read it.
   if (step.with) parts.push(block("The values this step holds", step.with));
@@ -749,21 +775,22 @@ function block(title: string, value: unknown): string {
 
 /**
  * A component takes the values of the steps before it, a way to say what it
- * does, and the values it works on: what the run takes, under what its own step
- * holds. A component that wants neither of the last two ignores them.
+ * does, and the values it works on. A component that wants neither of the last
+ * two ignores them, and one that needs them declares "takes" on the step.
  *
- * The two arrive as one value, and a prompt resolves a name the same way. So a
- * component reads one place whether its flow is the run or a step of another
- * flow, because expansion turns the values of a sub-flow into values of a step.
+ * The values of the run and the values of the step arrive as one value, and a
+ * prompt resolves a name the same way. So a component reads one place whether
+ * its flow is the run or a step of another flow, because expansion turns the
+ * values of a sub-flow into values of a step.
  */
 async function callModule(
   step: CallStep,
   inputs: Record<string, unknown>,
   cwd: string,
   watch: (note: Note) => void,
-  takes?: Record<string, unknown>,
+  values: Record<string, unknown>,
 ): Promise<unknown> {
   const module = await import(pathToFileURL(resolve(cwd, step.module)).href);
   const say = (text: string) => watch({ kind: "text", text: String(text) });
-  return module.default(inputs, say, { ...takes, ...step.with });
+  return module.default(inputs, say, values);
 }

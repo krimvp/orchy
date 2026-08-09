@@ -11,6 +11,9 @@ steps:
     prompt: prompts/audit.md
     tools: [read, grep, find, ls]
     changes: nothing
+    # The prompt reads the package out of the value the member holds. A member
+    # that supplies none would leave the model to guess one.
+    takes: { type: object, required: [package], properties: { package: { type: string } } }
     returns: &finding
       type: object
       required: [package, version, risky, notes]
