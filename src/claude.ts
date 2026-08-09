@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { type Metrics, SCHEMA_VERSION, type Step, type Trajectory, totalMetrics } from "./atif.ts";
-import { type Harness, type ToolName, type Watch, notesOf } from "./harness.ts";
+import { type Harness, MODELS, type ToolName, type Watch, notesOf } from "./harness.ts";
 import { tail } from "./tail.ts";
 
 const run = promisify(execFile);
@@ -51,6 +51,11 @@ export const claude: Harness = {
         }),
       ),
     ];
+    // `validate()` reads the same row, so a flow that names its harness hears
+    // this before the run starts.
+    if (request.model && !MODELS.claude.reads.test(request.model)) {
+      throw new Error(`claude wants a plain model name, not "${request.model}"`);
+    }
     // A fresh id keeps a step out of the transcript of whatever session started it.
     const sessionId = randomUUID();
 

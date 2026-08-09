@@ -31,7 +31,7 @@ import {
 } from "./flow.ts";
 import type { Harness, Note } from "./harness.ts";
 import { pi } from "./pi.ts";
-import { toAtif } from "./atif.ts";
+import { attempts, toAtif } from "./atif.ts";
 import { type Change, changed, take } from "./workspace.ts";
 
 const version = String(createRequire(import.meta.url)("../package.json").version);
@@ -59,6 +59,38 @@ function returnProblem(state: RunState): string | undefined {
   return problem && `the value of "${exit.id}" breaks what the flow "${state.flow.name}" returns ${problem}`;
 }
 
+/**
+ * Invariant 4 in dollars: a run stops at the budget that the flow declares. The
+ * run counts every attempt, so a run that a cycle threw away counts as well,
+ * and it counts the same records that the trajectory reports. See ADR 0019.
+ *
+ * A cost that no harness reported is not a cost of zero. A budget that reads it
+ * as zero is a budget that looks enforced and is not, so the run says so and
+ * stops. Only an agent step spends, so a call step and a gate report nothing.
+ */
+function budgetProblem(state: RunState): string | undefined {
+  const budget = state.flow.budget;
+  if (budget === undefined) return undefined;
+  const kinds = new Map(state.flow.steps.map((step) => [step.id, step.kind]));
+
+  let spent = 0;
+  for (const { step, record } of attempts(state)) {
+    const spends = kinds.get(step) === "agent" && record.status !== "skipped" && !record.answeredByPerson;
+    if (spends && record.cost === undefined) {
+      return `the flow "${state.flow.name}" has a budget, and step "${step}" reported no cost. Orchy does not enforce a budget that it cannot measure. Use a harness that reports a cost, or take "budget" off the flow.`;
+    }
+    spent += record.cost ?? 0;
+  }
+
+  if (spent < budget) return undefined;
+  return `the run reached the budget of the flow "${state.flow.name}": it spent ${money(spent)} of ${money(budget)}. It stops before the next step.`;
+}
+
+/** `$3.4`, and not `$3.400000000000001`. A cost is a sum of small numbers. */
+function money(amount: number): string {
+  return `$${Number(amount.toFixed(4))}`;
+}
+
 export interface StepRecord {
   /** A condition ruled a skipped step out, or a step it needs was skipped. */
   status: "done" | "failed" | "skipped";
@@ -77,7 +109,7 @@ export interface StepRecord {
   votedToCycle?: string;
   /** Invariant 5: each path the step changed, and what it did to that path. */
   changed?: Change[];
-  /** The cost of the step, when the trajectory of the harness does not hold it. */
+  /** What the step spent, when its harness reports it. A budget counts this. */
   cost?: number;
 }
 
@@ -223,6 +255,11 @@ async function execute(state: RunState, cwd: string, options: RunOptions, answer
     const ready = sorted.filter((step) => !settled(step.id) && step.needs.every(settled));
     if (ready.length === 0) break;
 
+    // The run settles here, so a run that reached its budget stops before it
+    // starts more work. A run whose last wave ended inside the budget is done.
+    const budget = budgetProblem(state);
+    if (budget) return fail(state, budget, close, emit);
+
     const ruled = ready.map((step) => [step, skipOf(step, state)] as const).filter(([, why]) => why !== undefined);
     if (ruled.length > 0) {
       const now = new Date().toISOString();
@@ -246,10 +283,7 @@ async function execute(state: RunState, cwd: string, options: RunOptions, answer
         emit({ type: "step_start", step: step.id });
         state.steps[step.id] = { status: "failed", startedAt: now, endedAt: now, error: problem };
         emit({ type: "step_end", step: step.id, status: "failed" });
-        state.status = "failed";
-        close();
-        emit({ type: "run_end", status: state.status });
-        return state;
+        return fail(state, undefined, close, emit);
       }
       // The expansion made new steps, so the order of the run holds them now.
       sorted = order(state.flow.steps);
@@ -303,12 +337,7 @@ async function execute(state: RunState, cwd: string, options: RunOptions, answer
         // runs again past its limit. So a wave with a second failure fails.
         const asking =
           failures.length === 1 ? spent.find(({ retry }) => retry.cycle.policy === "escalate") : undefined;
-        if (!asking) {
-          state.status = "failed";
-          close();
-          emit({ type: "run_end", status: state.status });
-          return state;
-        }
+        if (!asking) return fail(state, undefined, close, emit);
         const record = state.steps[asking.step.id] as StepRecord;
         state.history = [...(state.history ?? []), { step: asking.step.id, record }];
         delete state.steps[asking.step.id];
@@ -363,6 +392,20 @@ async function execute(state: RunState, cwd: string, options: RunOptions, answer
   const problem = returnProblem(state);
   state.status = problem ? "failed" : "done";
   if (problem) state.error = problem;
+  close();
+  emit({ type: "run_end", status: state.status });
+  return state;
+}
+
+/** The run ends here. `error` names a fault of the run, and not one of a step. */
+function fail(
+  state: RunState,
+  error: string | undefined,
+  close: () => void,
+  emit: (event: RunEvent) => void,
+): RunState {
+  state.status = "failed";
+  if (error) state.error = error;
   close();
   emit({ type: "run_end", status: state.status });
   return state;
@@ -614,24 +657,19 @@ async function runStep(
 
   // Invariant 5: what the step really did, not what it says it did.
   const touched = changed(before, take(state.flow.workspace, cwd));
+  const record: StepRecord = { ...at(), status: "done", value: result.value, trajectory: result.trajectory };
+  // A step that broke a rule spent its tokens all the same, so the record keeps
+  // the cost and the budget counts it. See ADR 0019.
+  if (result.cost !== undefined) record.cost = result.cost;
+  if (touched.length > 0) record.changed = touched;
+
   const broken = brokenPromise(changesOf(state.flow, step), touched);
-  if (broken) {
-    return {
-      ...at(),
-      status: "failed",
-      error: `step "${step.id}" ${broken}`,
-      value: result.value,
-      changed: touched,
-    };
-  }
+  if (broken) return { ...record, status: "failed", error: `step "${step.id}" ${broken}` };
 
   // Invariant 2: the value must match the contract of the step.
   const problem = contractProblem(step, result.value);
-  if (problem) return { ...at(), status: "failed", error: problem, value: result.value, changed: touched };
+  if (problem) return { ...record, status: "failed", error: problem };
 
-  const record: StepRecord = { ...at(), status: "done", value: result.value, trajectory: result.trajectory };
-  if (result.cost !== undefined) record.cost = result.cost;
-  if (touched.length > 0) record.changed = touched;
   return record;
 }
 

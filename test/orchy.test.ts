@@ -11,7 +11,7 @@ import { notesOf } from "../src/harness.ts";
 import { type RunEvent, type RunState, resume, run } from "../src/run.ts";
 import { tail } from "../src/tail.ts";
 import { claude } from "../src/claude.ts";
-import { pi } from "../src/pi.ts";
+import { costOf, pi } from "../src/pi.ts";
 import { formatFlow, parseFlow } from "../src/yaml.ts";
 
 const Summary = Type.Object({ summary: Type.String() });
@@ -3060,4 +3060,234 @@ test("a sub-flow carries the promise it sets into the flow that holds it", async
     expanded.steps.map((step) => (step as AgentStep).changes),
     ["nothing", { paths: ["docs"] }],
   );
+});
+
+// ── A run has a budget, and a harness reads a model name ─────────────────────
+
+/** A harness that reports what each turn spent. `undefined` reports nothing. */
+function costlyHarness(cost: number | undefined, ...values: unknown[]): Harness & { seen: AgentRequest[] } {
+  const seen: AgentRequest[] = [];
+  return {
+    seen,
+    toTrajectory: () => undefined,
+    async run(request: AgentRequest): Promise<AgentResult> {
+      seen.push(request);
+      return { value: values[(seen.length - 1) % values.length], trajectory: "/sessions/fake.jsonl", cost };
+    },
+  };
+}
+
+test("a run stops at the budget of the flow, and says what it spent", async () => {
+  const cwd = workspace();
+  const harness = costlyHarness(1, { summary: "done" });
+
+  const state = await run(
+    flow("spend", {
+      budget: 2,
+      steps: [
+        agent({ id: "one", prompt: "step.md", tools: ["read"], returns: Summary }),
+        agent({ id: "two", needs: ["one"], prompt: "step.md", tools: ["read"], returns: Summary }),
+        agent({ id: "three", needs: ["two"], prompt: "step.md", tools: ["read"], returns: Summary }),
+      ],
+    }),
+    { cwd, harness },
+  );
+
+  assert.equal(state.status, "failed");
+  assert.equal(harness.seen.length, 2);
+  assert.equal(state.steps.three, undefined);
+  assert.match(state.error ?? "", /it spent \$2 of \$2/);
+});
+
+test("the cost of a run that a cycle threw away counts against the budget", async () => {
+  const cwd = workspace();
+  const harness = costlyHarness(1, { summary: "v1" }, { approved: false }, { summary: "v2" }, { approved: true });
+
+  const state = await run({ ...reviewFlow(3, "accept"), budget: 3 }, { cwd, harness });
+
+  // Two runs of "code" and one of "review" reach the budget, and two of those
+  // three records are in the history that the cycle threw away.
+  assert.equal(state.status, "failed");
+  assert.equal(harness.seen.length, 3);
+  assert.equal(state.history?.length, 2);
+  assert.match(state.error ?? "", /it spent \$3 of \$3/);
+});
+
+test("a run with a budget stops when a step reports no cost", async () => {
+  const cwd = workspace();
+  const harness = fakeHarness({ summary: "done" });
+
+  const state = await run(
+    flow("blind", {
+      budget: 5,
+      steps: [
+        agent({ id: "one", prompt: "step.md", tools: ["read"], returns: Summary }),
+        agent({ id: "two", needs: ["one"], prompt: "step.md", tools: ["read"], returns: Summary }),
+      ],
+    }),
+    { cwd, harness },
+  );
+
+  assert.equal(state.status, "failed");
+  assert.equal(harness.seen.length, 1);
+  assert.match(state.error ?? "", /step "one" reported no cost/);
+});
+
+test("the cost of a step that breaks its contract counts against the budget", async () => {
+  const cwd = workspace();
+  const harness = costlyHarness(3, { summary: 42 });
+
+  const state = await run(
+    flow("retry", {
+      budget: 2,
+      steps: [
+        agent({
+          id: "a",
+          prompt: "step.md",
+          tools: ["read"],
+          returns: Summary,
+          cycle: { to: "a", when: "failed", limit: 3, policy: "accept" },
+        }),
+      ],
+    }),
+    { cwd, harness },
+  );
+
+  assert.equal(state.status, "failed");
+  assert.equal(harness.seen.length, 1);
+  assert.match(state.error ?? "", /it spent \$3 of \$2/);
+});
+
+test("validate refuses a budget that is not a number of dollars above zero", () => {
+  const budgeted = (budget: unknown) =>
+    validate({
+      name: "b",
+      budget,
+      steps: [agent({ id: "a", prompt: "p.md", tools: ["read"], returns: Summary })],
+    } as unknown as Flow);
+
+  assert.ok(budgeted(0).some((p) => p.includes("A budget is a number of dollars above zero")));
+  assert.ok(budgeted("5").some((p) => p.includes("A budget is a number of dollars above zero")));
+  assert.deepEqual(budgeted(0.5), []);
+});
+
+test("validate refuses a budget on a flow where no step spends", () => {
+  const problems = validate(
+    flow("free", { budget: 1, steps: [call({ id: "a", module: "m.ts", returns: Summary })] }),
+  );
+
+  assert.ok(problems.some((p) => p.includes("no step of it spends")));
+});
+
+test("a flow step that names a flow with a budget of its own is refused", async () => {
+  const inner = flow("panel", {
+    budget: 1,
+    steps: [agent({ id: "look", prompt: "look.md", tools: ["read"], returns: Verdict })],
+  });
+
+  await assert.rejects(
+    () =>
+      expandFlows(
+        flow("outer", { steps: [{ kind: "flow", id: "review", needs: [], flow: "./panel.yaml" }] }),
+        async () => inner,
+      ),
+    /has a budget, and step "review" holds it/,
+  );
+});
+
+test("a file keeps the budget of a flow", () => {
+  const text = [
+    "name: kept",
+    "budget: 2.5",
+    "steps:",
+    "  - id: code",
+    "    kind: agent",
+    "    prompt: p.md",
+    "    tools: [write]",
+    "    returns: { type: object }",
+  ].join("\n");
+
+  const parsed = parseFlow(text);
+  assert.deepEqual(validate(parsed), []);
+  assert.deepEqual(parseFlow(formatFlow(parsed)), parsed);
+});
+
+test("validate refuses a model name that the harness of the step cannot read", () => {
+  const named = (harness: string, model: string) =>
+    validate(
+      flow("m", {
+        harness,
+        model,
+        steps: [agent({ id: "a", prompt: "p.md", tools: ["read"], returns: Summary })],
+      }),
+    );
+
+  assert.ok(
+    named("pi", "opus").some((p) =>
+      p.includes('step "a" names the model "opus", which the harness "pi" cannot read. Write the provider and the model, as "openai/gpt-5".'),
+    ),
+  );
+  assert.ok(
+    named("claude", "openai/gpt-5").some((p) =>
+      p.includes('step "a" names the model "openai/gpt-5", which the harness "claude" cannot read. Write a plain model name, as "opus".'),
+    ),
+  );
+  assert.deepEqual(named("pi", "ollama/glm-5.2"), []);
+  assert.deepEqual(named("claude", "claude-opus-4-5"), []);
+
+  // A step that names its own harness and model is read by that harness.
+  const step = validate(
+    flow("m", {
+      harness: "claude",
+      steps: [agent({ id: "a", harness: "pi", model: "opus", prompt: "p.md", tools: ["read"], returns: Summary })],
+    }),
+  );
+  assert.ok(step.some((p) => p.includes('step "a" names the model "opus", which the harness "pi" cannot read')));
+});
+
+test("a member that overrides the model is read by the harness of that member", () => {
+  const panel = (member: { name: string; harness?: string; model?: string }) =>
+    validate(
+      flow("panel", {
+        harness: "pi",
+        model: "ollama/glm-5.2",
+        steps: [
+          agent({ id: "ask", prompt: "p.md", tools: ["read"], returns: Summary, fanout: [{ name: "one" }, member] }),
+        ],
+      }),
+    );
+
+  assert.ok(
+    panel({ name: "two", model: "opus" }).some((p) =>
+      p.includes('member "two" of "ask" names the model "opus", which the harness "pi" cannot read'),
+    ),
+  );
+  // The member takes the model of the step, and its own harness reads it.
+  assert.ok(
+    panel({ name: "two", harness: "claude" }).some((p) =>
+      p.includes('member "two" of "ask" names the model "ollama/glm-5.2", which the harness "claude" cannot read'),
+    ),
+  );
+  assert.deepEqual(panel({ name: "two", harness: "claude", model: "opus" }), []);
+});
+
+test("the pi adapter reports what a session spent, and nothing when no message priced it", () => {
+  const cwd = workspace();
+  const write = (usage: unknown) => {
+    const file = join(cwd, `${JSON.stringify(usage).length}.jsonl`);
+    writeFileSync(
+      file,
+      [
+        JSON.stringify({ type: "session", id: "s1", timestamp: "2026-01-01T00:00:00Z", cwd }),
+        JSON.stringify({ type: "message", message: { role: "assistant", content: [], usage } }),
+        JSON.stringify({ type: "message", message: { role: "assistant", content: [], usage } }),
+      ].join("\n"),
+    );
+    return file;
+  };
+
+  assert.equal(costOf(write({ input: 10, output: 2, cost: { total: 0.25 } })), 0.5);
+  // A provider that reports no price leaves the cost unknown, and not zero.
+  assert.equal(costOf(write({ input: 10, output: 2 })), undefined);
+  assert.equal(costOf(join(cwd, "no-session.jsonl")), undefined);
 });

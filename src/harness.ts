@@ -25,6 +25,18 @@ export const SUPPLIES: Record<AdapterName, readonly ToolName[]> = {
   claude: TOOLS,
 };
 
+/**
+ * What each adapter reads as a model name. The grammar of a name belongs to the
+ * harness, so this table lives beside the names, for the same reason as
+ * `SUPPLIES`: `validate()` reads it without loading the SDK of a harness. It
+ * checks the grammar and not the catalogue, because only the harness knows
+ * which models it has. See ADR 0019.
+ */
+export const MODELS: Record<AdapterName, { reads: RegExp; write: string }> = {
+  pi: { reads: /^[^/\s]+\/[^\s]+$/, write: 'Write the provider and the model, as "openai/gpt-5".' },
+  claude: { reads: /^[^/\s]+$/, write: 'Write a plain model name, as "opus".' },
+};
+
 export interface AgentRequest {
   step: string;
   prompt: string;

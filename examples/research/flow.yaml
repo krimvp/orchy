@@ -4,6 +4,9 @@
 name: research
 harness: claude
 model: claude-sonnet-5
+# Three readers, a writer on opus, and a cycle. The cycle limit bounds the
+# rounds, and this bounds the money. See ADR 0019.
+budget: 10
 parallel: 3
 
 steps:

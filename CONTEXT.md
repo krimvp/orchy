@@ -112,6 +112,11 @@ The choice that Orchy makes when a cycle reaches its limit and the steps still
 disagree. A policy sends the run to a gate, or accepts the disagreement.
 _Avoid_: Strategy, resolution, tie-break
 
+**Budget**:
+What a run may spend, in dollars. The flow declares one. Orchy counts every
+attempt, and a run that reaches the budget stops and fails.
+_Avoid_: Cap, quota, allowance, spend limit
+
 **Run**:
 One execution of one flow. A run survives a stop. Orchy writes the state of a
 run to disk after each step.

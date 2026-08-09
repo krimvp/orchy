@@ -9,7 +9,7 @@ import {
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import { type Metrics, SCHEMA_VERSION, type Step, type Trajectory, totalMetrics } from "./atif.ts";
-import { type Harness, SUPPLIES, type ToolName, notesOf } from "./harness.ts";
+import { type Harness, MODELS, SUPPLIES, type ToolName, notesOf } from "./harness.ts";
 import { tail } from "./tail.ts";
 
 const SUBMIT = "submit_result";
@@ -46,8 +46,12 @@ export const pi: Harness = {
     const modelRuntime = await ModelRuntime.create();
     let model: ReturnType<ModelRuntime["getModel"]>;
     if (request.model) {
+      // `validate()` reads the same row, so a flow that names its harness hears
+      // this before the run starts.
+      if (!MODELS.pi.reads.test(request.model)) {
+        throw new Error(`pi wants a model named "provider/model", not "${request.model}"`);
+      }
       const cut = request.model.indexOf("/");
-      if (cut < 1) throw new Error(`pi wants a model named "provider/model", not "${request.model}"`);
       const provider = request.model.slice(0, cut);
       const id = request.model.slice(cut + 1);
       model = modelRuntime.getModel(provider, id);
@@ -79,31 +83,20 @@ export const pi: Harness = {
     }
 
     if (value === undefined) throw new Error(`the step ended without a call to ${SUBMIT}`);
-    return { value, trajectory: sessionManager.getSessionFile() };
+    const file = sessionManager.getSessionFile();
+    return { value, trajectory: file, cost: costOf(file) };
   },
 
   /** A session file is data from another program, so read it defensively. */
   toTrajectory(path, trajectoryId, version) {
-    let lines: string[];
-    try {
-      lines = readFileSync(path, "utf8").split("\n").filter(Boolean);
-    } catch {
-      return undefined;
-    }
+    const found = messages(path);
+    if (!found) return undefined;
 
     const steps: Step[] = [];
     const metrics: Metrics[] = [];
     let model = "unknown";
 
-    for (const line of lines) {
-      let entry: Record<string, unknown>;
-      try {
-        entry = JSON.parse(line) as Record<string, unknown>;
-      } catch {
-        continue;
-      }
-      if (entry.type !== "message") continue;
-
+    for (const entry of found) {
       const message = entry.message as PiMessage | undefined;
       const step = toStep(message, steps.length + 1, String(entry.timestamp ?? ""));
       if (!step) continue;
@@ -122,6 +115,42 @@ export const pi: Harness = {
     };
   },
 };
+
+/** The message lines of a session file, or nothing when there is no file to read. */
+function messages(path: string): Array<Record<string, unknown>> | undefined {
+  let lines: string[];
+  try {
+    lines = readFileSync(path, "utf8").split("\n").filter(Boolean);
+  } catch {
+    return undefined;
+  }
+
+  const found: Array<Record<string, unknown>> = [];
+  for (const line of lines) {
+    try {
+      const entry = JSON.parse(line) as Record<string, unknown>;
+      if (entry.type === "message") found.push(entry);
+    } catch {
+      // A half-written line is not a message. The next read gets the whole one.
+    }
+  }
+  return found;
+}
+
+/**
+ * What the session spent, or nothing when no message carried a price. A cost of
+ * zero and a cost that no provider reported are different things, and a budget
+ * that reads the second as zero is a budget that is not enforced. See ADR 0019.
+ */
+export function costOf(path: string | undefined): number | undefined {
+  if (!path) return undefined;
+  let total: number | undefined;
+  for (const entry of messages(path) ?? []) {
+    const cost = (entry.message as PiMessage | undefined)?.usage?.cost?.total;
+    if (typeof cost === "number") total = (total ?? 0) + cost;
+  }
+  return total;
+}
 
 /** The session file appears after the session starts, so this may find nothing yet. */
 function fileOf(sessionManager: ReturnType<typeof SessionManager.create>): string | undefined {

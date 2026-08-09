@@ -99,7 +99,7 @@ export function toAtif(state: RunState, version: string, toTrajectory: ToTraject
  * Every run of every step, in the order they happened. A cycle runs a step more
  * than once, and a record that is dropped from the state is still a cost.
  */
-function attempts(state: RunState): Array<{ step: string; record: StepRecord; dropped?: boolean }> {
+export function attempts(state: RunState): Array<{ step: string; record: StepRecord; dropped?: boolean }> {
   const current = state.flow.steps
     .filter((step) => state.steps[step.id])
     .map((step) => ({ step: step.id, record: state.steps[step.id] as StepRecord }));

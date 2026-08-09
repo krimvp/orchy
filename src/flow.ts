@@ -1,7 +1,7 @@
 import { isAbsolute, resolve } from "node:path";
 import type { Static, TSchema } from "@sinclair/typebox";
 import { Ajv2020 } from "ajv/dist/2020.js";
-import { ADAPTERS, type AdapterName, SUPPLIES, TOOLS, type ToolName } from "./harness.ts";
+import { ADAPTERS, type AdapterName, MODELS, SUPPLIES, TOOLS, type ToolName } from "./harness.ts";
 import type { Workspace } from "./workspace.ts";
 
 /**
@@ -180,6 +180,8 @@ export interface Flow {
   takes?: TSchema;
   /** The value the flow produces, which is the value of the step it ends with. */
   returns?: TSchema;
+  /** What the run may spend, in dollars. A run that reaches it stops. ADR 0019. */
+  budget?: number;
   /** How many steps run at once. Eight when the flow does not say. */
   parallel?: number;
   steps: Step[];
@@ -211,6 +213,7 @@ export function flow(name: string, definition: Definition): Flow {
   if (definition.changes) built.changes = definition.changes;
   if (definition.takes) built.takes = definition.takes;
   if (definition.returns) built.returns = definition.returns;
+  if (definition.budget !== undefined) built.budget = definition.budget;
   if (definition.parallel !== undefined) built.parallel = definition.parallel;
   return built;
 }
@@ -376,6 +379,13 @@ export async function expandFlows(flow: Flow, load: (path: string) => Promise<Fl
     }
 
     const inner = expandFanout(await expandFlows(await load(step.flow), load));
+    // A budget belongs to the run, so no step can carry one. Expansion would
+    // drop it, and a budget that looks enforced and is not costs more than none.
+    if (inner.budget !== undefined) {
+      throw new Error(
+        `the flow at "${step.flow}" has a budget, and step "${step.id}" holds it. A budget belongs to the run, so only the flow that the run starts sets one.`,
+      );
+    }
     const takes = takesProblem(inner, step.with, `step "${step.id}"`);
     if (takes) throw new Error(takes);
 
@@ -424,7 +434,18 @@ export async function expandFlows(flow: Flow, load: (path: string) => Promise<Fl
   return { ...flow, steps: rename(steps, map) };
 }
 
-const FLOW_HOLDS = ["name", "workspace", "harness", "model", "changes", "takes", "returns", "parallel", "steps"];
+const FLOW_HOLDS = [
+  "name",
+  "workspace",
+  "harness",
+  "model",
+  "changes",
+  "takes",
+  "returns",
+  "budget",
+  "parallel",
+  "steps",
+];
 
 /**
  * What each kind of step holds. A field that this table does not name is a
@@ -482,6 +503,9 @@ function shapeProblems(flow: Flow): string[] {
   }
   if (flow.returns !== undefined && !isSchema(flow.returns)) {
     problems.push(`the flow returns ${JSON.stringify(flow.returns)}, which is not JSON Schema`);
+  }
+  if (flow.budget !== undefined && !(typeof flow.budget === "number" && flow.budget > 0)) {
+    problems.push(`the flow has a budget of ${JSON.stringify(flow.budget)}. A budget is a number of dollars above zero.`);
   }
   if (!Array.isArray(flow.steps)) return [...problems, "the flow has no steps"];
 
@@ -690,7 +714,14 @@ export function validate(flow: Flow): string[] {
 
   for (const step of flow.steps) {
     problems.push(...toolProblems(flow, step));
+    problems.push(...modelProblems(flow, step));
     problems.push(...conditionProblems(flow, step));
+  }
+
+  // A budget counts what a step spends, and only an agent step reports a cost.
+  // A budget over no such step is a rule that looks enforced and is not.
+  if (flow.budget !== undefined && !flow.steps.some((step) => step.kind === "agent" || step.kind === "flow")) {
+    problems.push("the flow has a budget, and no step of it spends. Only an agent step reports a cost.");
   }
 
   const records = flow.workspace !== undefined && flow.workspace.kind !== "none";
@@ -754,6 +785,32 @@ function toolProblems(flow: Flow, step: Step): string[] {
       }
       return [];
     });
+  });
+}
+
+/**
+ * The grammar of a model name belongs to the harness: Pi reads
+ * `provider/model`, and the `claude` command reads a plain name. A step that
+ * writes the wrong one used to learn it in the middle of a run, after an
+ * earlier step spent its tokens. `MODELS` in `harness.ts` names what each
+ * adapter reads, so the answer comes before the run. See ADR 0019.
+ */
+function modelProblems(flow: Flow, step: Step): string[] {
+  const model = modelOf(flow, step);
+  const wanted =
+    step.kind === "agent" ? [{ who: `step "${step.id}"`, harness: harnessOf(flow, step), model }] : [];
+  for (const member of membersOf(step) ?? []) {
+    // A member that overrides neither reads the same as its step, which the
+    // line above already answers.
+    if (!member.model && !member.harness) continue;
+    const harness = member.harness ?? harnessOf(flow, step);
+    wanted.push({ who: `member "${member.name}" of "${step.id}"`, harness, model: member.model ?? model });
+  }
+
+  return wanted.flatMap(({ who, harness, model: named }) => {
+    const reads = ADAPTERS.includes(harness as AdapterName) ? MODELS[harness as AdapterName] : undefined;
+    if (!named || !reads || reads.reads.test(named)) return [];
+    return [`${who} names the model "${named}", which the harness "${harness}" cannot read. ${reads.write}`];
   });
 }
 
