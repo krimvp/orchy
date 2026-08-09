@@ -126,8 +126,14 @@ the daemon serves that directory.
 
 ## How to write English
 
-All documents, comments, and commit messages use ASD-STE100 Simplified
-Technical English.
+Everything you write uses ASD-STE100 Simplified Technical English: a
+document, a comment, a commit message, an error message, and every answer
+you give a person.
+
+An answer follows the same rules as a document. A person who reads a plain
+answer reads a plain repository, and one voice keeps the two the same. Say
+what you did and what you found. Do not use a word that this list refuses,
+and do not fall back to loose English because an answer is not a file.
 
 - Use short sentences. Keep an instruction to 20 words or less. Keep a
   description to 25 words or less.
