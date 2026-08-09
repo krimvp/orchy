@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { Type } from "@sinclair/typebox";
-import { agent, call, flow, gate, resolvePaths, validate } from "../src/flow.ts";
+import { type AgentStep, agent, call, expandFanout, expandFlows, flow, gate, resolvePaths, validate } from "../src/flow.ts";
 import type { AgentRequest, AgentResult, Harness } from "../src/harness.ts";
 import { resume, run } from "../src/run.ts";
 import { claude } from "../src/claude.ts";
@@ -488,11 +488,10 @@ test("the YAML file and the TypeScript file produce the same flow", async () => 
   assert.deepEqual(fromFile, JSON.parse(JSON.stringify(fromCode)));
 });
 
-test("the YAML loader refuses a flow that is not valid", () => {
-  assert.throws(
-    () => parseFlow("name: broken\nsteps:\n  - id: a\n    kind: agent\n    needs: [ghost]\n"),
-    /is not valid/,
-  );
+test("a flow from YAML meets the same check as one from code", () => {
+  // The loader reads a fragment as well as a whole flow, so the run does the check.
+  const parsed = parseFlow("name: broken\nsteps:\n  - id: a\n    kind: agent\n    needs: [ghost]\n");
+  assert.ok(validate(parsed).some((problem) => problem.includes('needs "ghost"')));
 });
 
 test("a run writes an ATIF trajectory that holds one child for each agent step", async () => {
@@ -819,4 +818,137 @@ test("a step still waits for the steps it needs", async () => {
   );
 
   assert.deepEqual(order, ["start:a", "end:a", "start:b", "end:b"]);
+});
+
+// -- Fanout and sub-flows --
+
+test("a fanout becomes one step for each member, and references follow", () => {
+  const expanded = expandFanout(
+    flow("panel", {
+      steps: [
+        agent({ id: "code", prompt: "code.md", tools: ["write"], returns: Summary }),
+        agent({
+          id: "review",
+          needs: ["code"],
+          prompt: "review.md",
+          tools: ["read"],
+          returns: Verdict,
+          fanout: [
+            { name: "opus", harness: "claude", model: "claude-opus-4-5" },
+            { name: "glm", harness: "pi", model: "ollama/glm-5.2", prompt: "strict.md" },
+          ],
+        }),
+        call({ id: "verdict", needs: ["review"], module: "verdict.ts", returns: Verdict }),
+      ],
+    }),
+  );
+
+  assert.deepEqual(
+    expanded.steps.map((step) => step.id),
+    ["code", "review/opus", "review/glm", "verdict"],
+  );
+
+  const [, opus, glm, verdict] = expanded.steps as Array<AgentStep & { harness?: string; model?: string }>;
+  assert.equal(opus?.harness, "claude");
+  assert.equal(opus?.prompt, "review.md");
+  // A member overrides only what it names.
+  assert.equal(glm?.model, "ollama/glm-5.2");
+  assert.equal(glm?.prompt, "strict.md");
+  assert.deepEqual(verdict?.needs, ["review/opus", "review/glm"]);
+  assert.deepEqual(validate(expanded), []);
+});
+
+test("validate refuses a fanout that also cycles", () => {
+  const problems = validate(
+    flow("both", {
+      steps: [
+        agent({ id: "a", prompt: "a.md", tools: ["read"], returns: Verdict }),
+        agent({
+          id: "b",
+          needs: ["a"],
+          prompt: "b.md",
+          tools: ["read"],
+          returns: Verdict,
+          fanout: [{ name: "one" }],
+          cycle: { to: "a", when: { approved: false }, limit: 2, policy: "accept" },
+        }),
+      ],
+    }),
+  );
+
+  assert.ok(problems.some((p) => p.includes("both fans out and cycles")));
+});
+
+test("a sub-flow takes the id of its step as a prefix and joins the graph", async () => {
+  const inner = flow("panel", {
+    steps: [
+      agent({ id: "look", prompt: "look.md", tools: ["read"], returns: Verdict }),
+      call({ id: "sum", needs: ["look"], module: "sum.ts", returns: Verdict }),
+    ],
+  });
+
+  const expanded = await expandFlows(
+    flow("outer", {
+      steps: [
+        agent({ id: "code", prompt: "code.md", tools: ["write"], returns: Summary }),
+        { kind: "flow", id: "review", needs: ["code"], flow: "./panel.yaml" },
+        call({ id: "ship", needs: ["review"], module: "ship.ts", returns: Summary }),
+      ],
+    }),
+    async () => inner,
+  );
+
+  assert.deepEqual(
+    expanded.steps.map((step) => step.id),
+    ["code", "review/look", "review/sum", "ship"],
+  );
+  // The first step of the inner flow waits for whatever the outer step waited for.
+  assert.deepEqual(expanded.steps[1]?.needs, ["code"]);
+  assert.deepEqual(expanded.steps[2]?.needs, ["review/look"]);
+  // Whoever needed the sub-flow now needs the step it ends with.
+  assert.deepEqual(expanded.steps[3]?.needs, ["review/sum"]);
+  assert.deepEqual(validate(expanded), []);
+});
+
+test("a sub-flow that ends in more than one step is refused", async () => {
+  const inner = flow("two-ends", {
+    steps: [
+      agent({ id: "a", prompt: "a.md", tools: ["read"], returns: Verdict }),
+      agent({ id: "b", prompt: "b.md", tools: ["read"], returns: Verdict }),
+    ],
+  });
+
+  await assert.rejects(
+    () =>
+      expandFlows(
+        flow("outer", { steps: [{ kind: "flow", id: "sub", needs: [], flow: "./two.yaml" }] }),
+        async () => inner,
+      ),
+    /ends in 2 steps/,
+  );
+});
+
+test("a cycle inside a sub-flow points inside it after expansion", async () => {
+  const inner = flow("panel", {
+    steps: [
+      agent({ id: "look", prompt: "look.md", tools: ["read"], returns: Verdict }),
+      agent({
+        id: "judge",
+        needs: ["look"],
+        prompt: "judge.md",
+        tools: ["read"],
+        returns: Verdict,
+        cycle: { to: "look", when: { approved: false }, limit: 2, policy: "accept" },
+      }),
+    ],
+  });
+
+  const expanded = await expandFlows(
+    flow("outer", { steps: [{ kind: "flow", id: "review", needs: [], flow: "./panel.yaml" }] }),
+    async () => inner,
+  );
+
+  const judge = expanded.steps.find((step) => step.id === "review/judge") as AgentStep;
+  assert.equal(judge.cycle?.to, "review/look");
+  assert.deepEqual(validate(expanded), []);
 });

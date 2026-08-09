@@ -1,7 +1,7 @@
-export { agent, call, cycleOf, flow, gate, order, resolvePaths, validate } from "./flow.ts";
+export { agent, call, cycleOf, expandFanout, expandFlows, flow, gate, order, resolvePaths, validate } from "./flow.ts";
 export { changed, take } from "./workspace.ts";
 export type { Snapshot, Workspace } from "./workspace.ts";
-export type { AgentStep, CallStep, Cycle, Flow, GateStep, Step, ToolName } from "./flow.ts";
+export type { AgentStep, CallStep, Cycle, Flow, FlowStep, GateStep, Member, Step, ToolName } from "./flow.ts";
 export { read, resume, run } from "./run.ts";
 export { parseFlow } from "./yaml.ts";
 export { SCHEMA_VERSION, toAtif } from "./atif.ts";

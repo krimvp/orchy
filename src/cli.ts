@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { claude } from "./claude.ts";
-import { type Flow, resolvePaths } from "./flow.ts";
+import { type Flow, expandFlows, resolvePaths } from "./flow.ts";
 import type { Harness } from "./harness.ts";
 import { pi } from "./pi.ts";
 import { type RunEvent, type RunState, resume, run } from "./run.ts";
@@ -16,12 +16,13 @@ A flow file is TypeScript or YAML.`;
 
 const HARNESSES: Record<string, Harness> = { pi, claude };
 
-async function load(file: string): Promise<Flow> {
-  const path = resolve(file);
+async function load(file: string, from = process.cwd()): Promise<Flow> {
+  const path = resolve(from, file);
   const flow = /\.ya?ml$/.test(path)
     ? parseFlow(readFileSync(path, "utf8"))
     : ((await import(pathToFileURL(path).href)).default as Flow);
-  return resolvePaths(flow, dirname(path));
+  // A path inside a flow is relative to that flow, however deep it sits.
+  return expandFlows(resolvePaths(flow, dirname(path)), (inner) => load(inner, dirname(path)));
 }
 
 function report(event: RunEvent): void {

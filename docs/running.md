@@ -57,7 +57,61 @@ model, for example `ollama/glm-5.2`.
 
 A run refuses a harness it does not have before it runs any step.
 
-### More than one reviewer
+### More than one reviewer, in one step
+
+A `fanout` runs one step once for each member. A member names itself and
+overrides only what differs. Orchy turns the step into one step for each member
+before the run, so the ids read `reviewer/opus`, and a graphical editor draws
+the expanded graph.
+
+```yaml
+  - id: reviewer
+    kind: agent
+    prompt: prompts/review.md
+    tools: [read]
+    changes: false
+    returns: *verdict
+    fanout:
+      - { name: opus,   harness: claude, model: claude-opus-4-5 }
+      - { name: sonnet, harness: claude, model: claude-sonnet-5, prompt: prompts/review-strict.md }
+      - { name: glm,    harness: pi,     model: ollama/glm-5.2 }
+
+  - id: verdict
+    kind: call
+    needs: [reviewer]          # this becomes every member
+    module: verdict.ts
+    returns: *verdict
+```
+
+A step that needs `reviewer` needs every member, and the module reads them with
+`Object.values(inputs)`. The members run at the same time, because every step
+whose needs have passed runs together.
+
+A step cannot both fan out and cycle, because which member cycles is unclear.
+
+### A flow inside a flow
+
+A `kind: flow` step puts the steps of another file in its place. The id of the
+step becomes their prefix, so the same panel serves two flows without a clash.
+
+```yaml
+  - id: review
+    kind: flow
+    needs: [code]
+    flow: ./review-panel.yaml
+```
+
+The steps become `review/reviewer/opus`, `review/verdict`, and so on. A step
+that starts the inner flow waits for whatever the outer step waited for, and
+whoever needed `review` now needs the step the inner flow ends with.
+
+An inner flow must end in exactly one step, so that reference is never unclear.
+A cycle inside an inner flow stays inside it.
+
+An inner file is a fragment: it holds no workspace and the run checks the whole
+flow after it joins the parts.
+
+### More than one reviewer, written out
 
 A panel is a step for each reviewer and one step that counts the votes. Each
 reviewer names its own harness, model, and prompt. The rule for a disagreement

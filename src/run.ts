@@ -13,6 +13,7 @@ import {
   type GateStep,
   type Step,
   cycleOf,
+  expandFanout,
   order,
   validate,
 } from "./flow.ts";
@@ -31,6 +32,7 @@ const version = String(createRequire(import.meta.url)("../package.json").version
 const ajv = new Ajv2020({ strict: false });
 
 function contractProblem(step: Step, value: unknown): string | undefined {
+  if (step.kind === "flow") return `step "${step.id}" is a flow that no one expanded`;
   if (ajv.validate(step.returns, value)) return undefined;
   const [first] = ajv.errors ?? [];
   return `the value of "${step.id}" breaks the contract at "${first?.instancePath || "/"}": ${first?.message ?? "unknown"}`;
@@ -84,7 +86,12 @@ export interface RunOptions {
   onEvent?: (event: RunEvent) => void;
 }
 
-export async function run(flow: Flow, options: RunOptions = {}): Promise<RunState> {
+export async function run(input: Flow, options: RunOptions = {}): Promise<RunState> {
+  const flow = expandFanout(input);
+  // A sub-flow needs a file, so only the loader can expand one. Say so plainly.
+  const nested = flow.steps.find((step) => step.kind === "flow");
+  if (nested) throw new Error(`step "${nested.id}" holds a flow, and only loading a file expands one`);
+
   const problems = validate(flow);
   if (problems.length > 0) throw new Error(`the flow is not valid:\n- ${problems.join("\n- ")}`);
 
@@ -303,7 +310,7 @@ async function runStep(
 
   // Invariant 5: what the step really did, not what it says it did.
   const touched = changed(before, take(state.flow.workspace, cwd));
-  if (step.kind !== "gate" && step.changes === false && touched.length > 0) {
+  if ((step.kind === "agent" || step.kind === "call") && step.changes === false && touched.length > 0) {
     return {
       ...at(),
       status: "failed",

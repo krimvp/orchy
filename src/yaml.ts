@@ -1,5 +1,5 @@
 import { parse } from "yaml";
-import { type Flow, type Step, validate } from "./flow.ts";
+import type { Flow, Step } from "./flow.ts";
 
 /**
  * A file is a serialization of the flow data, not a friendlier language. Every
@@ -16,7 +16,7 @@ export function parseFlow(text: string): Flow {
   };
   if (raw.workspace) flow.workspace = raw.workspace;
 
-  const problems = validate(flow);
-  if (problems.length > 0) throw new Error(`the flow is not valid:\n- ${problems.join("\n- ")}`);
+  // No check here. A file can be a fragment of a larger flow, and a fragment
+  // holds no workspace and reaches steps it cannot see. The run checks the whole.
   return flow;
 }

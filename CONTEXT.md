@@ -47,6 +47,21 @@ One pass through a group of steps that repeat, such as code and then review. A
 flow sets a limit on the number of cycles.
 _Avoid_: Iteration, loop, round, retry
 
+**Fanout**:
+One step that runs once for each member of a list. Orchy turns it into one step
+for each member before the run.
+_Avoid_: Matrix, spread, parallel, map
+
+**Member**:
+One entry of a fanout. It names itself and overrides only what differs from the
+step.
+_Avoid_: Variant, instance, replica
+
+**Wave**:
+The set of steps that run at the same time, because every step they need has
+passed.
+_Avoid_: Batch, round, tier, level
+
 **Invariant**:
 A rule that Orchy enforces while a step runs. A broken invariant fails the step.
 _Avoid_: Constraint, guard, policy

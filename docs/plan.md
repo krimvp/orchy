@@ -138,6 +138,11 @@ into the run state. A later step reads it. Orchy passes no other state.
 disagree. `escalate` opens a gate. `accept` continues and records the
 disagreement.
 
+**Fanout** — a step that runs once for each member of a list. **A flow step** —
+a whole flow used as one step. Orchy turns both into plain steps before the run,
+so the runner knows neither, and a graphical editor draws the expanded graph.
+This is why they cost the runner nothing.
+
 **Workspace** — where a step acts, and the source of the record of what changed
 there. One field, no default. See [ADR
 0006](./adr/0006-one-workspace-field-with-no-default.md).

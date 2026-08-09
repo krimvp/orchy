@@ -25,8 +25,19 @@ interface Acts {
   changes?: false;
 }
 
+/** One member of a fanout. It overrides only what differs from the step. */
+export interface Member {
+  name: string;
+  harness?: string;
+  model?: string;
+  prompt?: string;
+  tools?: ToolName[];
+}
+
 export interface AgentStep<S extends TSchema = TSchema> extends Common, Acts {
   kind: "agent";
+  /** Runs this step once for each member. Orchy expands it before the run. */
+  fanout?: Member[];
   prompt: string;
   tools: ToolName[];
   /** Names an adapter. The run supplies the default when a step names none. */
@@ -51,7 +62,13 @@ export interface GateStep<S extends TSchema = TSchema> extends Common {
   returns: S;
 }
 
-export type Step = AgentStep | CallStep | GateStep;
+/** A whole flow as one step. Orchy expands it when it loads the file. */
+export interface FlowStep extends Common {
+  kind: "flow";
+  flow: string;
+}
+
+export type Step = AgentStep | CallStep | GateStep | FlowStep;
 
 export interface Flow {
   name: string;
@@ -95,7 +112,95 @@ export function resolvePaths(flow: Flow, directory: string): Flow {
 }
 
 export function cycleOf(step: Step): Cycle | undefined {
-  return step.kind === "gate" ? undefined : step.cycle;
+  return step.kind === "agent" || step.kind === "call" ? step.cycle : undefined;
+}
+
+/** Rewrites every reference to a step that expansion replaced with several. */
+function rename(steps: Step[], map: Map<string, string[]>): Step[] {
+  const spread = (names: string[]) => names.flatMap((name) => map.get(name) ?? [name]);
+  return steps.map((step) => {
+    const next = { ...step, needs: spread(step.needs) };
+    const cycle = cycleOf(next);
+    if (cycle) {
+      const to = map.get(cycle.to);
+      if (to) (next as AgentStep).cycle = { ...cycle, to: to[to.length - 1] as string };
+    }
+    return next;
+  });
+}
+
+/**
+ * Turns one step into one step for each member. This happens before the run, so
+ * the runner sees plain steps and a graphical editor draws the expanded graph.
+ */
+export function expandFanout(flow: Flow): Flow {
+  if (!flow.steps.some((step) => step.kind === "agent" && step.fanout)) return flow;
+
+  const map = new Map<string, string[]>();
+  const steps: Step[] = [];
+
+  for (const step of flow.steps) {
+    if (step.kind !== "agent" || !step.fanout) {
+      steps.push(step);
+      continue;
+    }
+    const { fanout, ...base } = step;
+    const names: string[] = [];
+    for (const member of fanout) {
+      const { name, ...overrides } = member;
+      const id = `${step.id}/${name}`;
+      names.push(id);
+      steps.push({ ...base, ...overrides, id });
+    }
+    map.set(step.id, names);
+  }
+
+  return { ...flow, steps: rename(steps, map) };
+}
+
+/**
+ * Puts the steps of another flow in place of one step. The ids of the inner
+ * flow take the id of the step as a prefix, so two uses never collide.
+ */
+export async function expandFlows(flow: Flow, load: (path: string) => Promise<Flow>): Promise<Flow> {
+  if (!flow.steps.some((step) => step.kind === "flow")) return flow;
+
+  const map = new Map<string, string[]>();
+  const steps: Step[] = [];
+
+  for (const step of flow.steps) {
+    if (step.kind !== "flow") {
+      steps.push(step);
+      continue;
+    }
+
+    const inner = expandFanout(await expandFlows(await load(step.flow), load));
+    const wanted = new Set(inner.steps.flatMap((one) => one.needs));
+    const exits = inner.steps.filter((one) => !wanted.has(one.id));
+    if (exits.length !== 1) {
+      throw new Error(
+        `the flow at "${step.flow}" ends in ${exits.length} steps, and step "${step.id}" needs exactly one`,
+      );
+    }
+
+    const id = (name: string) => `${step.id}/${name}`;
+    const own = new Set(inner.steps.map((one) => one.id));
+    for (const one of inner.steps) {
+      const moved = {
+        ...one,
+        id: id(one.id),
+        // A step that starts the inner flow waits for whatever the outer step waits for.
+        needs: one.needs.length === 0 ? step.needs : one.needs.map(id),
+      } as Step;
+      // A cycle inside a flow stays inside it.
+      const cycle = cycleOf(moved);
+      if (cycle && own.has(cycle.to)) (moved as AgentStep).cycle = { ...cycle, to: id(cycle.to) };
+      steps.push(moved);
+    }
+    map.set(step.id, [id((exits[0] as Step).id)]);
+  }
+
+  return { ...flow, steps: rename(steps, map) };
 }
 
 /**
@@ -125,9 +230,17 @@ export function validate(flow: Flow): string[] {
   problems.push(...findLoops(flow.steps));
   if (problems.length > 0) return problems;
 
+  for (const step of flow.steps) {
+    if (step.kind === "agent" && step.fanout) {
+      if (step.fanout.length === 0) problems.push(`step "${step.id}" fans out to nothing`);
+      if (step.cycle) problems.push(`step "${step.id}" both fans out and cycles, so which member cycles is unclear`);
+    }
+  }
+  if (problems.length > 0) return problems;
+
   const records = flow.workspace !== undefined && flow.workspace.kind !== "none";
   for (const step of flow.steps) {
-    if (step.kind !== "gate" && step.changes === false && !records) {
+    if ((step.kind === "agent" || step.kind === "call") && step.changes === false && !records) {
       problems.push(`step "${step.id}" promises to change nothing, but the flow has no workspace to check it`);
     }
   }
@@ -152,7 +265,7 @@ function checkWhen(step: Step, cycle: Cycle): string[] {
   const keys = Object.keys(cycle.when as Record<string, unknown>);
   if (keys.length === 0) return [`step "${step.id}" cycles on an empty condition, so it always cycles`];
 
-  const properties = (step as { returns: { properties?: Record<string, unknown> } }).returns.properties;
+  const properties = (step as { returns?: { properties?: Record<string, unknown> } }).returns?.properties;
   if (!properties) return [];
   return keys
     .filter((key) => !(key in properties))
