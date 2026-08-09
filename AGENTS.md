@@ -84,6 +84,12 @@ the daemon serves that directory.
   `validate()`. A copy of a rule falls behind.
 - The tool list and the harness list come from `GET /api/health`, for the same
   reason.
+- `styles.css` holds every colour as a token, once for light and once for dark.
+  A component names a token. No component names a colour.
+- Motion uses the two curves that the stylesheet declares, and it carries
+  meaning: a step that runs pulses, and a cycle keeps moving. Every animation
+  stops under `prefers-reduced-motion`, and nothing is invisible when it does.
+- The UI adds no package. React, and nothing else.
 
 ## Tests
 

@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { type CSSProperties, useEffect, useState } from "react";
 import { type RunEvent, type RunState, type Schema, type Step, type StepRecord, api, useLoad, useNotices } from "./api";
 import { Graph, type Mark } from "./Graph";
-import { length, when } from "./Runs";
+import { Loading, length, when } from "./Runs";
 
 export function Run({ runId }: { runId: string }) {
   const { events } = useNotices(runId);
@@ -14,38 +14,64 @@ export function Run({ runId }: { runId: string }) {
   }, [events.length, again]);
 
   if (error) return <p className="bad">{error}</p>;
-  if (!value) return <p className="empty">Reading the run…</p>;
+  if (!value) return <Loading lines={4} />;
 
   const { state, row } = value;
   const step = state.flow.steps.find((one) => one.id === chosen);
   const record = chosen ? state.steps[chosen] : undefined;
   const gate = state.waitingFor ? state.flow.steps.find((one) => one.id === state.waitingFor) : undefined;
+  const done = Object.values(state.steps).filter((one) => one.status === "done").length;
 
   return (
-    <section>
+    <section className="stagger">
       <h1>
-        {state.flow.name} <span className={`pill ${state.status}`}>{state.status}</span>
+        {state.flow.name}
+        <span className={`pill big ${state.status}`}>{state.status}</span>
       </h1>
-      <p className="note mono">{runId}</p>
-      <p className="note">
-        Started {when(state.steps[state.flow.steps[0]?.id ?? ""]?.startedAt ?? row?.startedAt ?? "")}
-        {row?.cost ? ` · $${row.cost.toFixed(4)}` : ""}
-        {row?.tokens ? ` · ${row.tokens.toLocaleString()} tokens` : ""}
-        {" · "}
-        <a href={`/api/runs/${runId}/trajectory`} target="_blank" rel="noreferrer">
-          trajectory
-        </a>
-        {state.status === "running" && (
-          <>
-            {" · "}
-            <button className="link" onClick={() => void api.stop(runId).then(again)}>
-              stop
-            </button>
-          </>
-        )}
+      <p className="note mono small" style={{ "--i": 1 } as CSSProperties}>
+        {runId}
       </p>
 
-      <Graph steps={state.flow.steps} marks={marksOf(state, events)} selected={chosen} onSelect={setChosen} />
+      <dl className="tiles" style={{ "--i": 2 } as CSSProperties}>
+        <div className="tile">
+          <dt>Started</dt>
+          <dd style={{ fontSize: 15 }}>{when(row?.startedAt ?? state.runId)}</dd>
+        </div>
+        <div className="tile">
+          <dt>Took</dt>
+          <dd>{row?.endedAt ? length(new Date(row.endedAt).getTime() - new Date(row.startedAt).getTime()) : "—"}</dd>
+        </div>
+        <div className="tile">
+          <dt>Steps done</dt>
+          <dd>
+            {done}
+            <span style={{ color: "var(--text-3)" }}>/{state.flow.steps.length}</span>
+          </dd>
+        </div>
+        <div className="tile">
+          <dt>Cost</dt>
+          <dd>{row?.cost ? `$${row.cost.toFixed(4)}` : "—"}</dd>
+        </div>
+        <div className="tile">
+          <dt>Tokens</dt>
+          <dd>{row?.tokens ? row.tokens.toLocaleString() : "—"}</dd>
+        </div>
+      </dl>
+
+      <div className="row" style={{ "--i": 3 } as CSSProperties}>
+        <a className="button" href={`/api/runs/${runId}/trajectory`} target="_blank" rel="noreferrer">
+          Read the trajectory
+        </a>
+        {state.status === "running" && (
+          <button className="danger" onClick={() => void api.stop(runId).then(again)}>
+            Stop this run
+          </button>
+        )}
+      </div>
+
+      <div className="canvas" style={{ "--i": 4 } as CSSProperties}>
+        <Graph steps={state.flow.steps} marks={marksOf(state, events)} selected={chosen} onSelect={setChosen} />
+      </div>
 
       {gate && (
         <Answer
@@ -64,15 +90,30 @@ export function Run({ runId }: { runId: string }) {
       <div className="split">
         <div>
           <h2>Step</h2>
-          {!step && <p className="empty">Choose a step in the drawing.</p>}
-          {step && <Detail step={step} record={record} history={attempts(state, step.id)} cycles={state.cycles} />}
+          {!step && (
+            <div className="panel">
+              <p className="empty" style={{ margin: 0 }}>
+                Choose a step in the drawing to read its value.
+              </p>
+            </div>
+          )}
+          {step && (
+            <Detail
+              key={step.id}
+              step={step}
+              record={record}
+              history={attempts(state, step.id)}
+              cycles={state.cycles}
+            />
+          )}
         </div>
         <div>
           <h2>Events</h2>
           <ul className="log">
             {events.map((event, index) => (
               <li key={index}>
-                <span className="mono small">{new Date(event.at).toLocaleTimeString()}</span> {say(event)}
+                <time>{new Date(event.at).toLocaleTimeString()}</time>
+                <span>{say(event)}</span>
               </li>
             ))}
             {events.length === 0 && <li className="empty">No event yet.</li>}
@@ -151,13 +192,15 @@ function Detail({
         )}
       </dl>
       {record?.error && <pre className="bad">{record.error}</pre>}
-      {record && "value" in record && <pre className="value">{JSON.stringify(record.value, null, 2)}</pre>}
+      {record && "value" in record && <pre>{JSON.stringify(record.value, null, 2)}</pre>}
       {!record && <p className="empty">This step has not ended yet.</p>}
       {history.length > 0 && (
         <details>
-          <summary>{history.length} attempt(s) that a cycle dropped</summary>
+          <summary>
+            {history.length} attempt{history.length === 1 ? "" : "s"} that a cycle dropped
+          </summary>
           {history.map((one, index) => (
-            <pre key={index} className="value small">
+            <pre key={index} className="small">
               {JSON.stringify(one.value, null, 2)}
             </pre>
           ))}
@@ -187,17 +230,17 @@ function Answer({
   return (
     <div className="panel gate">
       <h2>This run waits for a person</h2>
-      <p>{question}</p>
+      <h3 style={{ marginBottom: 18 }}>{question}</h3>
       {!raw &&
         Object.entries(properties).map(([key, field]) => (
-          <label key={key} className="field">
-            <span>{key}</span>
+          <label key={key} className={field.type === "boolean" ? "field tick" : "field"}>
             {field.type === "boolean" && (
               <input type="checkbox" checked={Boolean(value[key])} onChange={(e) => set(key, e.target.checked)} />
             )}
-            {field.type === "number" || field.type === "integer" ? (
+            <span>{key}</span>
+            {(field.type === "number" || field.type === "integer") && (
               <input type="number" value={String(value[key] ?? 0)} onChange={(e) => set(key, Number(e.target.value))} />
-            ) : null}
+            )}
             {field.type === "string" && (
               <input value={String(value[key] ?? "")} onChange={(e) => set(key, e.target.value)} />
             )}
@@ -212,11 +255,12 @@ function Answer({
           </label>
         ))}
       {raw && <textarea rows={8} value={text} onChange={(e) => setText(e.target.value)} />}
-      <div className="row">
+      <div className="row" style={{ marginBottom: 0 }}>
         <button className="go" onClick={() => onSend(raw ? JSON.parse(text) : value)}>
           Answer and continue
         </button>
         <button
+          className="quiet"
           onClick={() => {
             if (!raw) setText(JSON.stringify(value, null, 2));
             setRaw(!raw);

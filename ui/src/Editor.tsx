@@ -1,8 +1,34 @@
-import { useEffect, useState } from "react";
+import { type CSSProperties, useEffect, useState } from "react";
 import { type Cycle, type Flow, type Member, type Schema, type Step, api, useLoad } from "./api";
 import { Graph } from "./Graph";
+import { Loading } from "./Runs";
 
-const KINDS = ["agent", "call", "gate", "flow"] as const;
+const KINDS: Array<Step["kind"]> = ["agent", "call", "gate", "flow"];
+
+/** A choice of a few, shown at once. A person sees every option and the one that holds. */
+function Segmented<T extends string>({
+  value,
+  options,
+  onChange,
+}: {
+  value: T;
+  options: Array<{ value: T; label: string }>;
+  onChange: (value: T) => void;
+}) {
+  return (
+    <div className="segmented">
+      {options.map((option) => (
+        <button
+          key={option.value}
+          className={value === option.value ? "on" : ""}
+          onClick={() => onChange(option.value)}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 export function Editor({ id }: { id: number }) {
   const health = useLoad(() => api.health(), []);
@@ -33,7 +59,7 @@ export function Editor({ id }: { id: number }) {
   }, [flow]);
 
   if (loaded.error) return <p className="bad">{loaded.error}</p>;
-  if (!flow || !loaded.value) return <p className="empty">Reading the flow…</p>;
+  if (!flow || !loaded.value) return <Loading lines={4} />;
 
   const editable = loaded.value.editable;
   const step = flow.steps.find((one) => one.id === chosen);
@@ -60,7 +86,10 @@ export function Editor({ id }: { id: number }) {
     const name = free(flow, "step");
     setFlow({
       ...flow,
-      steps: [...flow.steps, { id: name, kind: "agent", needs: [], prompt: "prompts/step.md", tools: ["read"], returns: OBJECT }],
+      steps: [
+        ...flow.steps,
+        { id: name, kind: "agent", needs: [], prompt: "prompts/step.md", tools: ["read"], returns: OBJECT },
+      ],
     });
     setChosen(name);
   };
@@ -86,18 +115,32 @@ export function Editor({ id }: { id: number }) {
       .catch((problem: Error) => (setNote(undefined), setFault(problem.message)));
 
   return (
-    <section>
+    <section className="stagger">
       <h1>{flow.name}</h1>
-      <p className="note mono small">{loaded.value.row.path}</p>
-      {!editable && <p className="bad">This flow is TypeScript. The editor reads it and writes YAML only.</p>}
+      <p className="note mono small" style={{ "--i": 1 } as CSSProperties}>
+        {loaded.value.row.path}
+      </p>
 
-      <div className="row">
+      <div className="bar-actions" style={{ "--i": 2 } as CSSProperties}>
         <button className="go" disabled={!editable || problems.length > 0} onClick={() => void save()}>
           Save
         </button>
         <button onClick={() => void api.startFlow(id).then(() => setNote("The run is in the queue."))}>Run</button>
-        <button onClick={add}>Add a step</button>
+        <button className="quiet" onClick={add}>
+          Add a step
+        </button>
+        <span style={{ marginLeft: "auto" }}>
+          {problems.length === 0 ? (
+            <span className="pill done">valid</span>
+          ) : (
+            <span className="pill failed">
+              {problems.length} problem{problems.length === 1 ? "" : "s"}
+            </span>
+          )}
+        </span>
       </div>
+
+      {!editable && <p className="bad">This flow is TypeScript. The editor reads it and writes YAML only.</p>}
       {note && <p className="good">{note}</p>}
       {fault && <p className="bad">{fault}</p>}
       {problems.length > 0 && (
@@ -108,7 +151,9 @@ export function Editor({ id }: { id: number }) {
         </ul>
       )}
 
-      <Graph steps={flow.steps} selected={chosen} onSelect={setChosen} />
+      <div className="canvas" style={{ "--i": 3 } as CSSProperties}>
+        <Graph steps={flow.steps} selected={chosen} onSelect={setChosen} />
+      </div>
 
       <div className="split">
         <div>
@@ -118,27 +163,24 @@ export function Editor({ id }: { id: number }) {
               <span>Name</span>
               <input value={flow.name} onChange={(e) => setFlow({ ...flow, name: e.target.value })} />
             </label>
-            <label className="field">
+            <div className="field">
               <span>Workspace</span>
-              <select
+              <Segmented
                 value={flow.workspace?.kind ?? "absent"}
-                onChange={(e) =>
+                options={[
+                  { value: "absent", label: "not declared" },
+                  { value: "none", label: "none" },
+                  { value: "git", label: "git" },
+                ]}
+                onChange={(kind) =>
                   setFlow({
                     ...flow,
                     workspace:
-                      e.target.value === "absent"
-                        ? undefined
-                        : e.target.value === "none"
-                          ? { kind: "none" }
-                          : { kind: "git", path: "." },
+                      kind === "absent" ? undefined : kind === "none" ? { kind: "none" } : { kind: "git", path: "." },
                   })
                 }
-              >
-                <option value="absent">not declared</option>
-                <option value="none">none</option>
-                <option value="git">git</option>
-              </select>
-            </label>
+              />
+            </div>
             {flow.workspace?.kind === "git" && (
               <label className="field">
                 <span>Path</span>
@@ -148,7 +190,7 @@ export function Editor({ id }: { id: number }) {
                 />
               </label>
             )}
-            <label className="field">
+            <label className="field" style={{ marginBottom: 0 }}>
               <span>Steps at once</span>
               <input
                 type="number"
@@ -162,7 +204,13 @@ export function Editor({ id }: { id: number }) {
 
         <div>
           <h2>The step</h2>
-          {!step && <p className="empty">Choose a step in the drawing, or add one.</p>}
+          {!step && (
+            <div className="panel">
+              <p className="empty" style={{ margin: 0 }}>
+                Choose a step in the drawing, or add one.
+              </p>
+            </div>
+          )}
           {step && (
             <StepFields
               key={step.id}
@@ -198,7 +246,7 @@ function StepFields({
   onRename: (to: string) => void;
   onRemove: () => void;
 }) {
-  const earlier = flow.steps.filter((one) => one.id !== step.id);
+  const others = flow.steps.filter((one) => one.id !== step.id);
   return (
     <div className="panel">
       <label className="field">
@@ -206,29 +254,27 @@ function StepFields({
         <input value={step.id} onChange={(e) => onRename(e.target.value)} />
       </label>
 
-      <label className="field">
+      <div className="field">
         <span>Kind</span>
-        <select value={step.kind} onChange={(e) => onChange(retype(step, e.target.value as Step["kind"]))}>
-          {KINDS.map((kind) => (
-            <option key={kind}>{kind}</option>
-          ))}
-        </select>
-      </label>
+        <Segmented
+          value={step.kind}
+          options={KINDS.map((kind) => ({ value: kind, label: kind }))}
+          onChange={(kind) => onChange(retype(step, kind))}
+        />
+      </div>
 
       <div className="field">
         <span>Needs</span>
         <div className="ticks">
-          {earlier.length === 0 && <em className="empty">no other step</em>}
-          {earlier.map((one) => (
+          {others.length === 0 && <em className="empty">no other step</em>}
+          {others.map((one) => (
             <label key={one.id}>
               <input
                 type="checkbox"
                 checked={step.needs.includes(one.id)}
                 onChange={(e) =>
                   onChange({
-                    needs: e.target.checked
-                      ? [...step.needs, one.id]
-                      : step.needs.filter((need) => need !== one.id),
+                    needs: e.target.checked ? [...step.needs, one.id] : step.needs.filter((need) => need !== one.id),
                   })
                 }
               />
@@ -255,7 +301,11 @@ function StepFields({
           </label>
           <label className="field">
             <span>Model</span>
-            <input value={step.model ?? ""} onChange={(e) => onChange({ model: e.target.value || undefined })} />
+            <input
+              placeholder="the harness chooses"
+              value={step.model ?? ""}
+              onChange={(e) => onChange({ model: e.target.value || undefined })}
+            />
           </label>
           <div className="field">
             <span>Tools</span>
@@ -314,21 +364,17 @@ function StepFields({
       )}
 
       {step.kind !== "flow" && (
-        <div className="field">
+        <div className="field set">
           <span>Returns, as JSON Schema</span>
           <Json value={step.returns ?? OBJECT} onChange={(value) => onChange({ returns: value as Schema })} rows={9} />
         </div>
       )}
 
-      {(step.kind === "agent" || step.kind === "call") && (
-        <CycleFields step={step} flow={flow} onChange={onChange} />
-      )}
+      {(step.kind === "agent" || step.kind === "call") && <CycleFields step={step} flow={flow} onChange={onChange} />}
 
-      {(step.kind === "agent" || step.kind === "call") && (
-        <FanoutFields step={step} onChange={onChange} />
-      )}
+      {(step.kind === "agent" || step.kind === "call") && <FanoutFields step={step} onChange={onChange} />}
 
-      <button className="danger" onClick={onRemove}>
+      <button className="danger" onClick={onRemove} style={{ marginTop: 18 }}>
         Delete this step
       </button>
     </div>
@@ -347,23 +393,21 @@ function CycleFields({
   const others = flow.steps.filter((one) => one.id !== step.id);
   const cycle = step.cycle;
   return (
-    <div className="field group">
+    <div className="field set">
       <label className="tick">
         <input
           type="checkbox"
           checked={Boolean(cycle)}
           onChange={(e) =>
             onChange({
-              cycle: e.target.checked
-                ? { to: others[0]?.id ?? "", when: {}, limit: 3, policy: "escalate" }
-                : undefined,
+              cycle: e.target.checked ? { to: others[0]?.id ?? "", when: {}, limit: 3, policy: "escalate" } : undefined,
             })
           }
         />
         <span>Goes back to an earlier step</span>
       </label>
       {cycle && (
-        <>
+        <div style={{ marginTop: 14 }}>
           <label className="field">
             <span>Back to</span>
             <select value={cycle.to} onChange={(e) => onChange({ cycle: { ...cycle, to: e.target.value } })}>
@@ -381,17 +425,18 @@ function CycleFields({
               onChange={(e) => onChange({ cycle: { ...cycle, limit: Number(e.target.value) } })}
             />
           </label>
-          <label className="field">
-            <span>At the limit</span>
-            <select
-              value={cycle.policy}
-              onChange={(e) => onChange({ cycle: { ...cycle, policy: e.target.value as Cycle["policy"] } })}
-            >
-              <option value="escalate">ask a person</option>
-              <option value="accept">accept the disagreement</option>
-            </select>
-          </label>
           <div className="field">
+            <span>At the limit</span>
+            <Segmented
+              value={cycle.policy}
+              options={[
+                { value: "escalate" as Cycle["policy"], label: "ask a person" },
+                { value: "accept" as Cycle["policy"], label: "accept it" },
+              ]}
+              onChange={(policy) => onChange({ cycle: { ...cycle, policy } })}
+            />
+          </div>
+          <div className="field" style={{ marginBottom: 0 }}>
             <span>When the value holds</span>
             <Json
               value={cycle.when}
@@ -399,7 +444,7 @@ function CycleFields({
               rows={3}
             />
           </div>
-        </>
+        </div>
       )}
     </div>
   );
@@ -411,7 +456,7 @@ function FanoutFields({ step, onChange }: { step: Step; onChange: (patch: Partia
     onChange({ fanout: members.map((one, at) => (at === index ? { ...one, ...patch } : one)) });
 
   return (
-    <div className="field group">
+    <div className="field set">
       <label className="tick">
         <input
           type="checkbox"
@@ -420,26 +465,40 @@ function FanoutFields({ step, onChange }: { step: Step; onChange: (patch: Partia
         />
         <span>Runs once for each member</span>
       </label>
-      {members.map((member, index) => (
-        <div key={index} className="member">
-          <input placeholder="name" value={member.name} onChange={(e) => set(index, { name: e.target.value })} />
-          <input
-            placeholder="model"
-            value={member.model ?? ""}
-            onChange={(e) => set(index, { model: e.target.value || undefined })}
-          />
-          <input
-            placeholder={step.kind === "call" ? "module" : "prompt"}
-            value={(step.kind === "call" ? member.module : member.prompt) ?? ""}
-            onChange={(e) =>
-              set(index, step.kind === "call" ? { module: e.target.value || undefined } : { prompt: e.target.value || undefined })
-            }
-          />
-          <button onClick={() => onChange({ fanout: members.filter((_one, at) => at !== index) })}>Remove</button>
-        </div>
-      ))}
       {members.length > 0 && (
-        <button onClick={() => onChange({ fanout: [...members, { name: free2(members) }] })}>Add a member</button>
+        <div style={{ marginTop: 14 }}>
+          {members.map((member, index) => (
+            <div key={index} className="member">
+              <input placeholder="name" value={member.name} onChange={(e) => set(index, { name: e.target.value })} />
+              <input
+                placeholder="model"
+                value={member.model ?? ""}
+                onChange={(e) => set(index, { model: e.target.value || undefined })}
+              />
+              <input
+                placeholder={step.kind === "call" ? "module" : "prompt"}
+                value={(step.kind === "call" ? member.module : member.prompt) ?? ""}
+                onChange={(e) =>
+                  set(
+                    index,
+                    step.kind === "call"
+                      ? { module: e.target.value || undefined }
+                      : { prompt: e.target.value || undefined },
+                  )
+                }
+              />
+              <button
+                className="quiet"
+                onClick={() => onChange({ fanout: members.filter((_one, at) => at !== index) })}
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+          <button className="quiet" onClick={() => onChange({ fanout: [...members, { name: next(members) }] })}>
+            Add a member
+          </button>
+        </div>
       )}
     </div>
   );
@@ -453,7 +512,6 @@ function Json({ value, onChange, rows }: { value: unknown; onChange: (value: unk
   return (
     <>
       <textarea
-        className="mono"
         rows={rows}
         value={text}
         onChange={(e) => {
@@ -508,7 +566,7 @@ function free(flow: Flow, stem: string): string {
   return name;
 }
 
-function free2(members: Member[]): string {
+function next(members: Member[]): string {
   let count = members.length + 1;
   while (members.some((one) => one.name === `one-${count}`)) count += 1;
   return `one-${count}`;

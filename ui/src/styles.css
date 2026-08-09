@@ -1,87 +1,226 @@
+/*
+ * One system: a token for every colour, one accent, and two curves for motion.
+ * A component names a token. No component names a colour.
+ */
 :root {
-  --back: #0f1115;
-  --panel: #171a21;
-  --line: #262b36;
-  --text: #e6e8ee;
-  --soft: #9aa3b2;
-  --done: #3fb950;
-  --failed: #f85149;
-  --running: #d29922;
-  --waiting: #58a6ff;
-  --idle: #545b68;
-  color-scheme: dark;
+  --bg: #f2f2f4;
+  --bg-tint-a: rgba(10, 132, 255, 0.1);
+  --bg-tint-b: rgba(48, 209, 88, 0.08);
+  --surface: rgba(255, 255, 255, 0.72);
+  --surface-solid: #ffffff;
+  --raised: rgba(0, 0, 0, 0.035);
+  --hairline: rgba(0, 0, 0, 0.09);
+  --text: #1d1d1f;
+  --text-2: rgba(29, 29, 31, 0.6);
+  --text-3: rgba(29, 29, 31, 0.38);
+  --accent: #0071e3;
+  --green: #2aa745;
+  --red: #e5342a;
+  --orange: #c77700;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-2: 0 2px 6px rgba(0, 0, 0, 0.05), 0 12px 32px rgba(0, 0, 0, 0.07);
+  --shadow-3: 0 8px 20px rgba(0, 0, 0, 0.09), 0 24px 60px rgba(0, 0, 0, 0.1);
+
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 18px;
+  --r-xl: 24px;
+
+  /* The first curve settles a move. The second one gives a press its bounce. */
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0a0b0d;
+    --bg-tint-a: rgba(10, 132, 255, 0.16);
+    --bg-tint-b: rgba(94, 92, 230, 0.14);
+    --surface: rgba(255, 255, 255, 0.05);
+    --surface-solid: #17191e;
+    --raised: rgba(255, 255, 255, 0.06);
+    --hairline: rgba(255, 255, 255, 0.1);
+    --text: #f3f4f6;
+    --text-2: rgba(243, 244, 246, 0.62);
+    --text-3: rgba(243, 244, 246, 0.36);
+    --accent: #0a84ff;
+    --green: #30d158;
+    --red: #ff453a;
+    --orange: #ff9f0a;
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-2: 0 2px 8px rgba(0, 0, 0, 0.36), 0 14px 36px rgba(0, 0, 0, 0.4);
+    --shadow-3: 0 10px 30px rgba(0, 0, 0, 0.5), 0 30px 70px rgba(0, 0, 0, 0.5);
+
+    color-scheme: dark;
+  }
 }
 
 * {
   box-sizing: border-box;
 }
 
+html {
+  scroll-behavior: smooth;
+}
+
 body {
   margin: 0;
-  background: var(--back);
+  background: var(--bg);
   color: var(--text);
-  font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  letter-spacing: -0.01em;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
+
+/* Two soft lights behind the page. They move slowly, and they never distract. */
+.aurora {
+  position: fixed;
+  inset: -30vh -20vw;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(38vw 38vw at 18% 12%, var(--bg-tint-a), transparent 60%),
+    radial-gradient(32vw 32vw at 88% 8%, var(--bg-tint-b), transparent 60%);
+  filter: blur(20px);
+  animation: drift 24s var(--ease) infinite alternate;
+}
+
+@keyframes drift {
+  to {
+    transform: translate3d(-3%, 2%, 0) scale(1.08);
+  }
+}
+
+/* -- the bar -- */
 
 nav {
-  display: flex;
-  gap: 20px;
-  align-items: center;
-  padding: 12px 24px;
-  border-bottom: 1px solid var(--line);
   position: sticky;
   top: 0;
-  background: var(--back);
-  z-index: 2;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 10px 22px;
+  background: var(--surface);
+  backdrop-filter: saturate(180%) blur(24px);
+  -webkit-backdrop-filter: saturate(180%) blur(24px);
+  border-bottom: 1px solid var(--hairline);
 }
 
-nav strong {
-  letter-spacing: 0.04em;
-}
-
-nav a {
-  color: var(--soft);
+nav .brand {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--text);
   text-decoration: none;
 }
 
-nav a.here,
-nav a:hover {
+nav .tabs {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--raised);
+}
+
+nav .tabs a {
+  padding: 5px 16px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-2);
+  text-decoration: none;
+  transition: color 0.25s var(--ease), background 0.25s var(--ease);
+}
+
+nav .tabs a:hover {
   color: var(--text);
 }
 
-main {
-  padding: 24px;
-  max-width: 1280px;
-  margin: 0 auto;
+nav .tabs a.here {
+  color: var(--text);
+  background: var(--surface-solid);
+  box-shadow: var(--shadow-1);
 }
 
+nav .root {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-3);
+  max-width: 40ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+main {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 40px 22px 96px;
+  animation: enter 0.5s var(--ease) both;
+}
+
+@keyframes enter {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 10px, 0);
+  }
+}
+
+/* Each child of a section arrives a moment after the one before it. */
+.stagger > * {
+  animation: enter 0.55s var(--ease) both;
+  animation-delay: calc(var(--i, 0) * 45ms);
+}
+
+/* -- words -- */
+
 h1 {
-  font-size: 22px;
-  margin: 0 0 4px;
+  margin: 0 0 6px;
+  font-size: 32px;
+  font-weight: 650;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
   display: flex;
-  gap: 10px;
   align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 h2 {
-  font-size: 15px;
+  margin: 34px 0 12px;
+  font-size: 13px;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--soft);
-  margin: 24px 0 8px;
+  letter-spacing: 0.07em;
+  color: var(--text-3);
 }
 
 h3 {
-  margin: 0 0 8px;
-  font-size: 16px;
+  margin: 0 0 12px;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
 }
 
 a {
-  color: var(--waiting);
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
 }
 
 .mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  font-size: 0.92em;
+  letter-spacing: 0;
 }
 
 .small {
@@ -90,164 +229,379 @@ a {
 
 .note,
 .empty {
-  color: var(--soft);
+  color: var(--text-2);
   margin: 4px 0;
 }
 
+.empty {
+  color: var(--text-3);
+}
+
 .good {
-  color: var(--done);
+  color: var(--green);
 }
 
 .bad {
-  color: var(--failed);
+  color: var(--red);
   white-space: pre-wrap;
 }
 
 ul.list {
+  margin: 12px 0;
   padding-left: 20px;
 }
 
-/* the table of runs and flows */
-table.rows {
-  width: 100%;
-  border-collapse: collapse;
-  margin-top: 12px;
+ul.list li {
+  margin: 3px 0;
 }
 
-table.rows th {
-  text-align: left;
-  font-weight: 500;
-  font-size: 12px;
+/* -- the grouped list, for runs and flows -- */
+
+.group {
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border: 1px solid var(--hairline);
+  box-shadow: var(--shadow-2);
+  overflow: hidden;
+}
+
+.head,
+.line {
+  display: grid;
+  grid-template-columns: 118px minmax(120px, 1fr) 116px 80px 92px 100px 16px;
+  align-items: center;
+  gap: 16px;
+  padding: 0 18px;
+}
+
+/* A number reads down a column, so it sits to the right and keeps one width. */
+.head > :nth-child(n + 4),
+.line > :nth-child(n + 4) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.head {
+  height: 36px;
+  font-size: 11px;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--soft);
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--line);
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+  border-bottom: 1px solid var(--hairline);
 }
 
-table.rows td {
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--line);
-  vertical-align: middle;
+.line {
+  height: 58px;
+  border-bottom: 1px solid var(--hairline);
+  color: var(--text);
+  text-decoration: none;
+  transition: background 0.2s var(--ease);
 }
 
-table.rows tbody tr:hover {
-  background: var(--panel);
-  cursor: pointer;
+.line:last-child {
+  border-bottom: 0;
 }
+
+.line:hover {
+  background: var(--raised);
+  text-decoration: none;
+}
+
+.line .name {
+  font-weight: 550;
+  letter-spacing: -0.015em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.line .dim {
+  color: var(--text-2);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.line .go {
+  color: var(--text-3);
+  transition: transform 0.25s var(--spring), color 0.2s var(--ease);
+}
+
+.line:hover .go {
+  color: var(--text-2);
+  transform: translateX(3px);
+}
+
+.flow-line {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.flow-line:last-child {
+  border-bottom: 0;
+}
+
+.flow-line .grow {
+  flex: 1;
+  min-width: 0;
+}
+
+/* -- the status chip -- */
 
 .pill {
-  display: inline-block;
-  padding: 1px 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 11px 3px 9px;
   border-radius: 999px;
   font-size: 12px;
-  border: 1px solid;
-  text-transform: lowercase;
+  font-weight: 550;
+  letter-spacing: -0.005em;
+  background: var(--raised);
+  color: var(--text-2);
+  transition: color 0.3s var(--ease), background 0.3s var(--ease);
+}
+
+.pill::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
 }
 
 .pill.done {
-  color: var(--done);
-  border-color: var(--done);
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 14%, transparent);
 }
 .pill.failed {
-  color: var(--failed);
-  border-color: var(--failed);
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 14%, transparent);
 }
 .pill.running {
-  color: var(--running);
-  border-color: var(--running);
+  color: var(--orange);
+  background: color-mix(in srgb, var(--orange) 14%, transparent);
 }
 .pill.waiting {
-  color: var(--waiting);
-  border-color: var(--waiting);
-}
-.pill.stopped {
-  color: var(--soft);
-  border-color: var(--idle);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
-/* the drawing of a flow */
+/* A run on the way says so without a word. */
+.pill.running::before,
+.pill.waiting::before {
+  animation: throb 1.6s var(--ease) infinite;
+}
+
+@keyframes throb {
+  50% {
+    opacity: 0.25;
+    transform: scale(0.7);
+  }
+}
+
+.big.pill {
+  font-size: 13px;
+  padding: 5px 14px 5px 11px;
+}
+
+/* -- the tiles that carry the numbers of a run -- */
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(124px, 1fr));
+  gap: 10px;
+  margin: 22px 0;
+}
+
+.tile {
+  padding: 14px 16px;
+  border-radius: var(--r-md);
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  box-shadow: var(--shadow-1);
+}
+
+.tile dt {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+}
+
+.tile dd {
+  margin: 4px 0 0;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* -- the drawing of a flow -- */
+
+.canvas {
+  margin: 18px 0;
+  padding: 20px;
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border: 1px solid var(--hairline);
+  box-shadow: var(--shadow-2);
+  overflow-x: auto;
+}
+
 .graph {
-  width: 100%;
   height: auto;
-  margin: 16px 0;
   display: block;
 }
 
 .graph .box {
-  fill: var(--panel);
-  stroke: var(--idle);
-  stroke-width: 1.5;
+  fill: var(--surface-solid);
+  stroke: var(--hairline);
+  stroke-width: 1;
+  transition: stroke 0.45s var(--ease), fill 0.45s var(--ease);
 }
 
 .graph .box.behind {
-  fill: var(--back);
+  fill: var(--bg);
+  opacity: 0.9;
 }
 
 .graph .node {
   cursor: pointer;
+  animation: pop 0.5s var(--spring) both;
+  animation-delay: calc(var(--i, 0) * 60ms);
+}
+
+.graph .node .lift {
+  transition: transform 0.3s var(--spring);
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.graph .node:hover .lift {
+  transform: translateY(-2px) scale(1.02);
+}
+
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.96);
+  }
 }
 
 .graph .name {
   fill: var(--text);
-  font-size: 13px;
-  font-weight: 500;
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
 }
 
 .graph .kind {
-  fill: var(--soft);
+  fill: var(--text-3);
   font-size: 11px;
+  letter-spacing: 0;
 }
 
 .graph .node.done .box {
-  stroke: var(--done);
+  stroke: var(--green);
 }
 .graph .node.failed .box {
-  stroke: var(--failed);
+  stroke: var(--red);
 }
 .graph .node.waiting .box {
-  stroke: var(--waiting);
+  stroke: var(--accent);
 }
 .graph .node.running .box {
-  stroke: var(--running);
-  animation: beat 1.4s ease-in-out infinite;
-}
-.graph .node.chosen .box {
-  stroke-width: 3;
+  stroke: var(--orange);
 }
 
-@keyframes beat {
-  50% {
-    opacity: 0.45;
+.graph .node.chosen .box {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+/* A ring that grows and fades, so a step that runs reads at a glance. */
+.graph .halo {
+  fill: none;
+  stroke: var(--orange);
+  stroke-width: 1.5;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: halo 1.8s var(--ease) infinite;
+}
+
+@keyframes halo {
+  from {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.07);
   }
 }
 
 .graph .edge {
   fill: none;
-  stroke: var(--idle);
+  stroke: var(--text-3);
   stroke-width: 1.5;
+  stroke-dashoffset: 1;
+  stroke-dasharray: 1;
+  animation: draw 0.7s var(--ease) 0.15s forwards;
 }
 
+@keyframes draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* A cycle keeps moving, because it is the edge that sends the work back. */
 .graph .edge.cycle {
-  stroke: var(--running);
-  stroke-dasharray: 5 4;
+  stroke: var(--orange);
+  stroke-dasharray: 0.02 0.014;
+  stroke-dashoffset: 0;
+  animation: march 22s linear infinite;
+}
+
+@keyframes march {
+  to {
+    stroke-dashoffset: -1;
+  }
 }
 
 .graph .tip {
-  fill: var(--idle);
+  fill: var(--text-3);
 }
 
+/* The label sits on its own line, so it paints its background out first. */
 .graph .limit {
-  fill: var(--running);
+  fill: var(--orange);
+  stroke: var(--surface-solid);
+  stroke-width: 5;
+  paint-order: stroke fill;
   font-size: 11px;
+  font-weight: 600;
   text-anchor: middle;
 }
 
-/* panels and forms */
+/* -- panels and forms -- */
+
 .split {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 24px;
+  gap: 22px;
   align-items: start;
 }
 
@@ -258,175 +612,366 @@ table.rows tbody tr:hover {
 }
 
 .panel {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 16px;
+  padding: 20px;
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border: 1px solid var(--hairline);
+  box-shadow: var(--shadow-2);
+  animation: enter 0.45s var(--ease) both;
 }
 
 .panel.gate {
-  border-color: var(--waiting);
-  margin: 16px 0;
+  margin: 22px 0;
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  box-shadow: var(--shadow-3), 0 0 0 4px color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
-dl {
+.panel.gate h2 {
+  margin-top: 0;
+  color: var(--accent);
+}
+
+.panel dl {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 4px 16px;
-  margin: 0 0 12px;
+  gap: 7px 18px;
+  margin: 0 0 14px;
 }
 
-dt {
-  color: var(--soft);
+.panel dt {
+  color: var(--text-3);
   font-size: 13px;
 }
 
-dd {
+.panel dd {
   margin: 0;
   font-size: 13px;
 }
 
 pre {
-  background: var(--back);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 10px;
+  margin: 10px 0;
+  padding: 13px 15px;
+  border-radius: var(--r-md);
+  background: var(--raised);
+  border: 1px solid var(--hairline);
   overflow: auto;
   max-height: 340px;
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
   font-size: 12px;
-  margin: 8px 0;
+  line-height: 1.55;
+}
+
+details summary {
+  cursor: pointer;
+  color: var(--text-2);
+  font-size: 13px;
 }
 
 .field {
   display: block;
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 }
 
 .field > span {
   display: block;
-  color: var(--soft);
+  margin-bottom: 5px;
   font-size: 12px;
-  margin-bottom: 4px;
+  font-weight: 550;
+  color: var(--text-2);
 }
 
 .field.tick,
 label.tick {
   display: flex;
-  gap: 8px;
   align-items: center;
+  gap: 9px;
 }
 
 .field.tick > span,
 label.tick > span {
   margin: 0;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text);
 }
 
-.field.group {
-  border-top: 1px solid var(--line);
-  padding-top: 12px;
+.field.set {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--hairline);
 }
 
 .ticks {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 14px;
+  gap: 6px 16px;
 }
 
 .ticks label {
   display: flex;
-  gap: 5px;
   align-items: center;
+  gap: 6px;
   font-size: 13px;
+  color: var(--text-2);
 }
 
 .member {
   display: flex;
-  gap: 6px;
-  margin-bottom: 6px;
+  gap: 7px;
+  margin-bottom: 7px;
 }
 
 input,
 select,
 textarea {
-  background: var(--back);
-  color: var(--text);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 6px 9px;
-  font: inherit;
   width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-sm);
+  background: var(--surface-solid);
+  color: var(--text);
+  font: inherit;
+  letter-spacing: -0.01em;
+  transition: border-color 0.2s var(--ease), box-shadow 0.2s var(--ease);
+}
+
+input:focus,
+select:focus,
+textarea:focus,
+button:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3.5px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 textarea {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
   font-size: 12px;
+  line-height: 1.55;
   resize: vertical;
 }
 
 input[type="checkbox"] {
   width: auto;
-  accent-color: var(--waiting);
+  accent-color: var(--accent);
 }
+
+select {
+  appearance: none;
+  padding-right: 30px;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 15px) 55%, calc(100% - 10px) 55%;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+}
+
+/* -- the segmented control, for a choice of a few -- */
+
+.segmented {
+  display: inline-flex;
+  width: fit-content;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--r-sm);
+  background: var(--raised);
+}
+
+.segmented button {
+  padding: 5px 14px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  box-shadow: none;
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 500;
+  transition: background 0.25s var(--ease), color 0.25s var(--ease), box-shadow 0.25s var(--ease);
+}
+
+.segmented button.on {
+  background: var(--surface-solid);
+  color: var(--text);
+  box-shadow: var(--shadow-1);
+}
+
+/* -- buttons -- */
 
 button,
 a.button {
-  background: var(--panel);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-sm);
+  background: var(--surface-solid);
   color: var(--text);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 6px 12px;
   font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
   cursor: pointer;
   text-decoration: none;
-  white-space: nowrap;
+  box-shadow: var(--shadow-1);
+  transition: transform 0.22s var(--spring), background 0.2s var(--ease), box-shadow 0.2s var(--ease),
+    opacity 0.2s var(--ease);
 }
 
 button:hover,
 a.button:hover {
-  border-color: var(--soft);
+  box-shadow: var(--shadow-2);
+  text-decoration: none;
+}
+
+button:active,
+a.button:active {
+  transform: scale(0.96);
 }
 
 button.go {
-  border-color: var(--done);
-  color: var(--done);
+  border-color: transparent;
+  background: var(--accent);
+  color: #fff;
 }
 
 button.danger {
-  border-color: var(--failed);
-  color: var(--failed);
+  border-color: transparent;
+  background: color-mix(in srgb, var(--red) 14%, transparent);
+  color: var(--red);
+  box-shadow: none;
+}
+
+button.quiet {
+  padding: 5px 10px;
+  font-size: 13px;
+  background: none;
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--text-2);
+}
+
+button.quiet:hover {
+  background: var(--raised);
+  box-shadow: none;
+  color: var(--text);
 }
 
 button.link {
-  border: 0;
   padding: 0;
-  color: var(--waiting);
+  border: 0;
   background: none;
+  box-shadow: none;
+  color: var(--accent);
+  font-size: inherit;
 }
 
 button:disabled {
-  opacity: 0.45;
+  opacity: 0.4;
   cursor: not-allowed;
+  transform: none;
 }
 
 .row {
   display: flex;
-  gap: 8px;
+  gap: 9px;
   align-items: center;
-  margin: 12px 0;
+  flex-wrap: wrap;
+  margin: 14px 0;
 }
 
+.bar-actions {
+  position: sticky;
+  top: 62px;
+  z-index: 5;
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 16px 0;
+  padding: 10px 14px;
+  border-radius: var(--r-md);
+  background: var(--surface);
+  backdrop-filter: saturate(180%) blur(24px);
+  -webkit-backdrop-filter: saturate(180%) blur(24px);
+  border: 1px solid var(--hairline);
+  box-shadow: var(--shadow-1);
+}
+
+/* -- the log of events -- */
+
 .log {
-  list-style: none;
   margin: 0;
   padding: 0;
-  max-height: 420px;
+  list-style: none;
+  max-height: 430px;
   overflow: auto;
-  border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  box-shadow: var(--shadow-2);
 }
 
 .log li {
-  padding: 5px 10px;
-  border-bottom: 1px solid var(--line);
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  padding: 9px 16px;
+  border-bottom: 1px solid var(--hairline);
   font-size: 13px;
+  animation: slide 0.4s var(--ease) both;
+}
+
+.log li:last-child {
+  border-bottom: 0;
+}
+
+.log li time {
+  color: var(--text-3);
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  flex: none;
+}
+
+@keyframes slide {
+  from {
+    opacity: 0;
+    transform: translate3d(-6px, 0, 0);
+  }
+}
+
+/* -- what a page shows while it reads -- */
+
+.skeleton {
+  height: 15px;
+  margin: 10px 0;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--raised) 25%, var(--hairline) 37%, var(--raised) 63%);
+  background-size: 400% 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+
+@keyframes shimmer {
+  to {
+    background-position: -135% 0;
+  }
+}
+
+/* A person who turns motion off keeps every state, and loses every move. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  html {
+    scroll-behavior: auto;
+  }
 }

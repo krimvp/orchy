@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { type CSSProperties, useEffect } from "react";
 import { type RunRow, api, useLoad, useNotices } from "./api";
 
 export function Runs() {
@@ -9,78 +9,94 @@ export function Runs() {
     again();
   }, [events.length, pending.length, again]);
 
+  const onTheWay = runs?.filter((run) => run.status === "running" || run.status === "waiting").length ?? 0;
+
   return (
-    <section>
+    <section className="stagger">
       <h1>Runs</h1>
+      <p className="note" style={{ "--i": 1 } as CSSProperties}>
+        {runs ? `${runs.length} run${runs.length === 1 ? "" : "s"}` : "Reading the runs"}
+        {onTheWay > 0 ? ` · ${onTheWay} on the way` : ""}
+        {pending.length > 0 ? ` · ${pending.length} in the queue` : ""}
+      </p>
       {error && <p className="bad">{error}</p>}
 
       {pending.length > 0 && (
-        <table className="rows">
-          <thead>
-            <tr>
-              <th>Waiting to start</th>
-              <th>Flow</th>
-              <th>Queued</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {pending.map((ticket) => (
-              <tr key={ticket.ticket}>
-                <td>{ticket.error ? <span className="pill failed">did not start</span> : <span className="pill running">queued</span>}</td>
-                <td>{ticket.flowName}</td>
-                <td>{when(ticket.queuedAt)}</td>
-                <td>
-                  {ticket.error && (
-                    <>
-                      <pre className="bad small">{ticket.error}</pre>
-                      <button onClick={() => void api.forget(ticket.ticket).then(again)}>Dismiss</button>
-                    </>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="group" style={{ "--i": 2 } as CSSProperties}>
+          {pending.map((ticket) => (
+            <div key={ticket.ticket} className="flow-line">
+              <span className={`pill ${ticket.error ? "failed" : "running"}`}>
+                {ticket.error ? "did not start" : "queued"}
+              </span>
+              <div className="grow">
+                <div className="name">{ticket.flowName}</div>
+                {ticket.error && <pre className="bad small">{ticket.error}</pre>}
+              </div>
+              <span className="dim small">{when(ticket.queuedAt)}</span>
+              {ticket.error && (
+                <button className="quiet" onClick={() => void api.forget(ticket.ticket).then(again)}>
+                  Dismiss
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
       )}
 
+      {!runs && <Loading />}
+
       {runs?.length === 0 && (
-        <p className="empty">
-          No run yet. Register a flow in <a href="#/flows">Flows</a> and start it.
-        </p>
+        <div className="panel">
+          <h3>No run yet</h3>
+          <p className="note">Register a flow file, then start it. A run shows up here as it happens.</p>
+          <a className="button go" href="#/flows">
+            Open Flows
+          </a>
+        </div>
       )}
 
       {runs && runs.length > 0 && (
-        <table className="rows">
-          <thead>
-            <tr>
-              <th>Status</th>
-              <th>Flow</th>
-              <th>Started</th>
-              <th>Took</th>
-              <th>Cost</th>
-              <th>Tokens</th>
-              <th>Run</th>
-            </tr>
-          </thead>
-          <tbody>
-            {runs.map((run) => (
-              <tr key={run.runId} onClick={() => (location.hash = `#/runs/${run.runId}`)}>
-                <td>
-                  <span className={`pill ${run.status}`}>{run.status}</span>
-                </td>
-                <td>{run.flowName}</td>
-                <td>{when(run.startedAt)}</td>
-                <td>{took(run)}</td>
-                <td>{run.cost ? `$${run.cost.toFixed(4)}` : "—"}</td>
-                <td>{run.tokens ? run.tokens.toLocaleString() : "—"}</td>
-                <td className="mono">{run.runId.slice(0, 8)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="group" style={{ "--i": 3 } as CSSProperties}>
+          <div className="head">
+            <span>Status</span>
+            <span>Flow</span>
+            <span>Started</span>
+            <span>Took</span>
+            <span>Cost</span>
+            <span>Tokens</span>
+            <span />
+          </div>
+          {runs.map((run, index) => (
+            <a
+              key={run.runId}
+              className="line"
+              href={`#/runs/${run.runId}`}
+              style={{ "--i": index + 4 } as CSSProperties}
+            >
+              <span>
+                <span className={`pill ${run.status}`}>{run.status}</span>
+              </span>
+              <span className="name">{run.flowName}</span>
+              <span className="dim">{when(run.startedAt)}</span>
+              <span className="dim">{took(run)}</span>
+              <span className="dim">{run.cost ? `$${run.cost.toFixed(4)}` : "—"}</span>
+              <span className="dim">{run.tokens ? run.tokens.toLocaleString() : "—"}</span>
+              <span className="go">›</span>
+            </a>
+          ))}
+        </div>
       )}
     </section>
+  );
+}
+
+export function Loading({ lines = 3 }: { lines?: number }) {
+  return (
+    <div className="group" style={{ padding: 18 }}>
+      {Array.from({ length: lines }, (_one, index) => (
+        <div key={index} className="skeleton" style={{ width: `${88 - index * 16}%` }} />
+      ))}
+    </div>
   );
 }
 

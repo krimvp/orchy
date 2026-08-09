@@ -1,12 +1,13 @@
+import type { CSSProperties } from "react";
 import type { Step } from "./api";
 
 export type Mark = "done" | "failed" | "running" | "waiting" | "idle";
 
-const W = 168;
-const H = 46;
-const GAP_X = 64;
-const GAP_Y = 18;
-const PAD = 12;
+const W = 184;
+const H = 58;
+const GAP_X = 68;
+const GAP_Y = 22;
+const PAD = 14;
 
 interface Placed {
   step: Step;
@@ -55,8 +56,10 @@ export function Graph({
 
   const nodes = place(steps);
   const at = new Map(nodes.map((node) => [node.step.id, node]));
+  // A cycle arcs below the steps, so only a flow that holds one needs the room.
+  const room = steps.some((step) => step.cycle && at.has(step.cycle.to)) ? 40 : 0;
   const width = Math.max(...nodes.map((node) => node.x + W)) + PAD;
-  const height = Math.max(...nodes.map((node) => node.y + H)) + PAD + 34;
+  const height = Math.max(...nodes.map((node) => node.y + H)) + PAD + room;
 
   const needs = nodes.flatMap((node) =>
     node.step.needs.map((need) => {
@@ -70,6 +73,7 @@ export function Graph({
         <path
           key={`${need}->${node.step.id}`}
           className="edge"
+          pathLength={1}
           d={`M ${x1} ${y1} C ${x1 + GAP_X / 2} ${y1}, ${x2 - GAP_X / 2} ${y2}, ${x2} ${y2}`}
           markerEnd="url(#tip)"
         />
@@ -81,15 +85,16 @@ export function Graph({
     const cycle = node.step.cycle;
     const back = cycle && at.get(cycle.to);
     if (!cycle || !back) return [];
-    const y = Math.max(node.y, back.y) + H + 20;
+    const y = Math.max(node.y, back.y) + H + 24;
     return [
       <g key={`cycle-${node.step.id}`}>
         <path
           className="edge cycle"
+          pathLength={1}
           d={`M ${node.x + W / 2} ${node.y + H} C ${node.x + W / 2} ${y}, ${back.x + W / 2} ${y}, ${back.x + W / 2} ${back.y + H}`}
           markerEnd="url(#tip)"
         />
-        <text className="limit" x={(node.x + back.x + W) / 2} y={y - 2}>
+        <text className="limit" x={(node.x + back.x + W) / 2} y={y - 3}>
           {cycle.limit}×
         </text>
       </g>,
@@ -97,33 +102,39 @@ export function Graph({
   });
 
   return (
-    <svg className="graph" viewBox={`0 0 ${width} ${height}`} style={{ maxWidth: width }}>
+    <svg className="graph" viewBox={`0 0 ${width} ${height}`} width={width} height={height}>
       <defs>
-        <marker id="tip" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+        <marker id="tip" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto">
           <path d="M 0 0 L 8 4 L 0 8 z" className="tip" />
         </marker>
       </defs>
       {cycles}
       {needs}
-      {nodes.map((node) => (
+      {nodes.map((node, index) => (
         <g
           key={node.step.id}
           className={`node ${marks[node.step.id] ?? "idle"} ${selected === node.step.id ? "chosen" : ""}`}
+          style={{ "--i": index } as CSSProperties}
           transform={`translate(${node.x} ${node.y})`}
           onClick={() => onSelect?.(node.step.id)}
         >
-          {/* A fanout is one step in the file and many in the run, so it stands as a stack. */}
-          {node.step.fanout && node.step.fanout.length > 1 && (
-            <rect className="box behind" x="5" y="-5" width={W} height={H} rx="7" />
-          )}
-          <rect className="box" width={W} height={H} rx="7" />
-          <title>{node.step.id}</title>
-          <text className="name" x="11" y="20">
-            {short(node.step.id)}
-          </text>
-          <text className="kind" x="11" y="36">
-            {label(node.step)}
-          </text>
+          <g className="lift">
+            {/* A fanout is one step in the file and many in the run, so it stands as a stack. */}
+            {node.step.fanout && node.step.fanout.length > 1 && (
+              <rect className="box behind" x="5" y="-5" width={W} height={H} rx="12" />
+            )}
+            <rect className="box" width={W} height={H} rx="12" />
+            {marks[node.step.id] === "running" && (
+              <rect className="halo" x="-4" y="-4" width={W + 8} height={H + 8} rx="16" />
+            )}
+            <title>{node.step.id}</title>
+            <text className="name" x="15" y="25">
+              {short(node.step.id)}
+            </text>
+            <text className="kind" x="15" y="43">
+              {label(node.step)}
+            </text>
+          </g>
         </g>
       ))}
     </svg>
