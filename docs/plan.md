@@ -41,9 +41,15 @@ every step reference resolves, and that every `when` key exists in the schema of
 the step that it reads.
 
 The runner talks to a harness through an adapter with one method: `run(request)`
-returns a stream of events and a result. Orchy ships one adapter, for Pi. See
-[ADR 0001](./adr/0001-embed-pi-through-the-sdk.md) and [ADR
+returns the value of the step and the path of the trajectory. Orchy ships one
+adapter, for Pi. See [ADR 0001](./adr/0001-embed-pi-through-the-sdk.md) and [ADR
 0002](./adr/0002-keep-a-harness-adapter.md).
+
+The adapter gets the value of an agent step from a tool. It builds a
+`submit_result` tool whose parameters are the contract of the step, and it adds
+that tool to the list. The agent calls it once, and the arguments are the value.
+So a contract shapes the tool that the model sees, and Orchy does not parse
+prose.
 
 A run is local-first, and it also runs on a server and in CI. No part of a run
 needs a terminal.
@@ -148,10 +154,10 @@ spans with a tool that already does it.
 
 ## Milestones
 
-**M1 — a flow runs.** The API builds a flow as data. `validate()` checks it. The
-runner runs each step, through the Pi adapter for an agent step and directly for
-a deterministic step. It enforces rules 1 to 3, and writes the run state to disk
-after each step.
+**M1 — a flow runs. Done.** The API builds a flow as data. `validate()` checks
+it. The runner runs each step, through the Pi adapter for an agent step and
+through a module for a deterministic step. It enforces rules 1 to 3, and writes
+the run state to disk after each step. `orchy run <flow file>` runs a flow.
 
 **M2 — the cycle and the gate.** Rule 4. A step returns to an earlier step to a
 limit, and a policy decides what happens at the limit. A gate stops the run, and
