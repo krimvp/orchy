@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { Type } from "@sinclair/typebox";
 import { agent, call, flow, gate, resolvePaths, validate } from "../src/flow.ts";
-import type { AgentRequest, AgentResult, Harness } from "../src/pi.ts";
+import type { AgentRequest, AgentResult, Harness } from "../src/harness.ts";
 import { resume, run } from "../src/run.ts";
+import { claude } from "../src/claude.ts";
+import { pi } from "../src/pi.ts";
 import { parseFlow } from "../src/yaml.ts";
 
 const Summary = Type.Object({ summary: Type.String() });
@@ -24,6 +26,7 @@ function fakeHarness(...values: unknown[]): Harness & { seen: AgentRequest[] } {
   const seen: AgentRequest[] = [];
   return {
     seen,
+    toTrajectory: () => undefined,
     async run(request: AgentRequest): Promise<AgentResult> {
       seen.push(request);
       return { value: values[(seen.length - 1) % values.length], trajectory: "/sessions/fake.jsonl" };
@@ -361,6 +364,7 @@ function gitWorkspace(): string {
 /** A harness that writes a file before it answers, like an agent with `bash`. */
 function writingHarness(directory: string, name: string, value: unknown): Harness {
   return {
+    toTrajectory: () => undefined,
     async run() {
       writeFileSync(join(directory, name), "written by the step");
       return { value };
@@ -551,7 +555,12 @@ test("ATIF reads a pi session file into steps, tool calls, and metrics", async (
     flow("traced", { steps: [agent({ id: "a", prompt: "step.md", tools: ["read"], returns: Summary })] }),
     {
       cwd,
-      harness: { async run() { return { value: { summary: "done" }, trajectory: session }; } },
+      harness: {
+        async run() {
+          return { value: { summary: "done" }, trajectory: session };
+        },
+        toTrajectory: (handle, id, version) => pi.toTrajectory(handle, id, version),
+      },
     },
   );
 
@@ -589,4 +598,68 @@ test("a prompt and a module resolve against the flow file, not the working direc
 
   assert.equal((resolved.steps[0] as { prompt: string }).prompt, "/flows/grilling/prompts/ask.md");
   assert.equal((resolved.steps[1] as { module: string }).module, "/already/absolute.ts");
+});
+
+// -- The Claude adapter --
+
+test("the Claude adapter reads a transcript into ATIF", () => {
+  const home = mkdtempSync(join(tmpdir(), "orchy-claude-"));
+  const project = join(home, "projects", "-some-where");
+  mkdirSync(project, { recursive: true });
+
+  const sessionId = "11111111-2222-3333-4444-555555555555";
+  writeFileSync(
+    join(project, `${sessionId}.jsonl`),
+    [
+      JSON.stringify({ timestamp: "2026-01-01T00:00:01Z", message: { role: "user", content: "do it" } }),
+      JSON.stringify({
+        timestamp: "2026-01-01T00:00:02Z",
+        message: {
+          role: "assistant",
+          model: "claude-sonnet-5",
+          content: [
+            { type: "thinking", thinking: "considering" },
+            { type: "text", text: "reading" },
+            { type: "tool_use", id: "toolu_1", name: "Read", input: { file_path: "a.ts" } },
+          ],
+          usage: { input_tokens: 90, output_tokens: 12, cache_read_input_tokens: 4 },
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-01-01T00:00:03Z",
+        message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "body" }] },
+      }),
+    ].join("\n"),
+  );
+
+  const previous = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = home;
+  try {
+    const trajectory = claude.toTrajectory(sessionId, "run:1:a", "0.0.0");
+    assert.ok(trajectory);
+    assert.equal(trajectory.agent.name, "claude-code");
+    assert.equal(trajectory.agent.model_name, "claude-sonnet-5");
+    // A tool result arrives as a user message, so it must not become a user step.
+    assert.deepEqual(
+      trajectory.steps.map((step) => step.source),
+      ["user", "agent", "system"],
+    );
+    assert.equal(trajectory.steps[1]?.tool_calls?.[0]?.function_name, "Read");
+    assert.equal(trajectory.steps[1]?.reasoning_content, "considering");
+    assert.equal(trajectory.steps[2]?.observation?.results[0]?.source_call_id, "toolu_1");
+    assert.deepEqual(trajectory.final_metrics, {
+      prompt_tokens: 90,
+      completion_tokens: 12,
+      cached_tokens: 4,
+      cost_usd: 0,
+      total_steps: 3,
+    });
+  } finally {
+    if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = previous;
+  }
+});
+
+test("the Claude adapter answers nothing for a session it cannot find", () => {
+  assert.equal(claude.toTrajectory("no-such-session", "run:1:a", "0.0.0"), undefined);
 });

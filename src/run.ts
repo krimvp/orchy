@@ -15,7 +15,8 @@ import {
   order,
   validate,
 } from "./flow.ts";
-import { type Harness, pi } from "./pi.ts";
+import type { Harness } from "./harness.ts";
+import { pi } from "./pi.ts";
 import { toAtif } from "./atif.ts";
 import { changed, take } from "./workspace.ts";
 
@@ -47,6 +48,8 @@ export interface StepRecord {
   disagreement?: "accepted";
   /** Invariant 5: what the step changed in the workspace. */
   changed?: string[];
+  /** The cost of the step, when the trajectory of the harness does not hold it. */
+  cost?: number;
 }
 
 export interface RunState {
@@ -124,7 +127,7 @@ async function execute(state: RunState, cwd: string, options: RunOptions): Promi
   const save = () => writeFileSync(file, JSON.stringify(state, null, 2));
   const close = () => {
     save();
-    writeFileSync(join(directoryOf(cwd, state.runId), "trajectory.json"), JSON.stringify(toAtif(state, version), null, 2));
+    writeFileSync(join(directoryOf(cwd, state.runId), "trajectory.json"), JSON.stringify(toAtif(state, version, (h, i, v) => harness.toTrajectory(h, i, v)), null, 2));
   };
   save();
 
@@ -230,11 +233,12 @@ async function runStep(step: Step, state: RunState, cwd: string, harness: Harnes
 
   const before = take(state.flow.workspace, cwd);
 
-  let result: { value: unknown; trajectory?: string };
+  let result: { value: unknown; trajectory?: string; cost?: number };
   try {
     result =
       step.kind === "agent"
         ? await harness.run({
+            step: step.id,
             prompt: buildPrompt(step, inputs, cwd),
             tools: step.tools,
             returns: step.returns,
@@ -262,6 +266,7 @@ async function runStep(step: Step, state: RunState, cwd: string, harness: Harnes
   if (problem) return { ...at(), status: "failed", error: problem, value: result.value, changed: touched };
 
   const record: StepRecord = { ...at(), status: "done", value: result.value, trajectory: result.trajectory };
+  if (result.cost !== undefined) record.cost = result.cost;
   if (touched.length > 0) record.changed = touched;
   return record;
 }

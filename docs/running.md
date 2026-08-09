@@ -1,6 +1,25 @@
 # Run a flow
 
+## Choose a harness
+
+Orchy ships two adapters. Pi is the default.
+
+```bash
+orchy run flow.yaml --harness pi        # the default
+orchy run flow.yaml --harness claude    # Claude Code
+```
+
+The Claude Code adapter needs the `claude` command and a logged-in account. It
+takes no model setting from Orchy: Claude chooses its own.
+
+A tool name changes across the two harnesses, and Orchy maps it. `find` and `ls`
+both become `Glob`, because Claude has no separate list tool. So a step that
+declares `ls` gets `Glob`. The list still holds: a step reaches no tool that it
+did not declare.
+
 ## Choose a model
+
+This section is for Pi.
 
 Orchy does not choose a model. Pi does. Version 1 uses one model for the whole
 flow, so you set it once.
@@ -48,6 +67,9 @@ A model must call tools well. Orchy takes the value of a step from a
 
 The `cost` numbers come from you. A provider with a subscription price reports
 no cost for one call, so `cost_usd` in the trajectory stays at zero.
+
+Claude Code writes no cost into its transcript, so the adapter takes the cost
+from the result of the run and Orchy keeps it in the step record.
 
 ## Run
 

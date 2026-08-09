@@ -7,4 +7,6 @@ export { parseFlow } from "./yaml.ts";
 export { SCHEMA_VERSION, toAtif } from "./atif.ts";
 export type { Trajectory } from "./atif.ts";
 export type { RunEvent, RunOptions, RunState, StepRecord } from "./run.ts";
-export type { AgentRequest, AgentResult, Harness } from "./pi.ts";
+export type { AgentRequest, AgentResult, Harness } from "./harness.ts";
+export { pi } from "./pi.ts";
+export { claude } from "./claude.ts";

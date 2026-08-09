@@ -2,14 +2,19 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { claude } from "./claude.ts";
 import { type Flow, resolvePaths } from "./flow.ts";
+import type { Harness } from "./harness.ts";
+import { pi } from "./pi.ts";
 import { type RunEvent, type RunState, resume, run } from "./run.ts";
 import { parseFlow } from "./yaml.ts";
 
-const USAGE = `use: orchy run <flow file>
-     orchy resume <run id> <json value>
+const USAGE = `use: orchy run <flow file> [--harness pi|claude]
+     orchy resume <run id> <json value> [--harness pi|claude]
 
 A flow file is TypeScript or YAML.`;
+
+const HARNESSES: Record<string, Harness> = { pi, claude };
 
 async function load(file: string): Promise<Flow> {
   const path = resolve(file);
@@ -42,15 +47,26 @@ function finish(state: RunState): never {
   process.exit(state.status === "failed" ? 1 : 0);
 }
 
-const [command, first, second] = process.argv.slice(2);
+const argv = process.argv.slice(2);
+const at = argv.indexOf("--harness");
+const chosen = at === -1 ? "pi" : (argv[at + 1] ?? "");
+if (at !== -1) argv.splice(at, 2);
+
+const harness = HARNESSES[chosen];
+if (!harness) {
+  console.error(`unknown harness "${chosen}". Use one of: ${Object.keys(HARNESSES).join(", ")}`);
+  process.exit(2);
+}
+
+const [command, first, second] = argv;
 
 try {
   if (command === "run" && first) {
-    finish(await run(await load(first), { onEvent: report }));
+    finish(await run(await load(first), { onEvent: report, harness }));
   }
 
   if (command === "resume" && first && second) {
-    finish(await resume(first, JSON.parse(second), { onEvent: report }));
+    finish(await resume(first, JSON.parse(second), { onEvent: report, harness }));
   }
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));

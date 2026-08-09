@@ -11,7 +11,8 @@ conversation. Orchy does not replace a harness. Orchy drives one.
 _Avoid_: Agent framework, runtime, engine
 
 **Adapter**:
-The code that connects Orchy to one harness. Orchy has one adapter, for Pi.
+The code that connects Orchy to one harness. Orchy has two adapters, for Pi and
+for Claude Code.
 _Avoid_: Driver, backend, provider, integration
 
 **Flow**:
