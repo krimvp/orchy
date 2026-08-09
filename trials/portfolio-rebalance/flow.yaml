@@ -1,0 +1,91 @@
+# The trades are arithmetic and come first, from a file, with no model in the
+# loop. The model explains them and looks for what the arithmetic cannot see.
+# A person approves before anything is called a decision.
+name: portfolio-rebalance
+harness: pi
+model: ollama/glm-5.2
+
+takes:
+  type: object
+  required: [band_pct, new_cash_usd]
+  properties:
+    band_pct: { type: number }
+    new_cash_usd: { type: number }
+
+steps:
+  - id: drift
+    kind: call
+    module: drift.ts
+    takes:
+      type: object
+      required: [band_pct, new_cash_usd]
+      properties:
+        band_pct: { type: number }
+        new_cash_usd: { type: number }
+    returns:
+      type: object
+      required: [total_usd, needs_rebalance, trades, drifts]
+      properties:
+        total_usd: { type: number }
+        needs_rebalance: { type: boolean }
+        trades:
+          type: array
+          items:
+            type: object
+            required: [holding, action, amount_usd]
+            properties:
+              holding: { type: string }
+              action: { type: string }
+              amount_usd: { type: number }
+        drifts:
+          type: array
+          items:
+            type: object
+            required: [holding, target_pct, actual_pct, drift_pct]
+            properties:
+              holding: { type: string }
+              target_pct: { type: number }
+              actual_pct: { type: number }
+              drift_pct: { type: number }
+
+  - id: explain
+    kind: agent
+    needs: [drift]
+    model: ollama/kimi-k2.7-code
+    prompt: prompts/explain.md
+    tools: [read]
+    returns:
+      type: object
+      required: [summary, order_of_operations, watch_out]
+      properties:
+        summary: { type: string }
+        order_of_operations: { type: array, items: { type: string } }
+        watch_out: { type: array, items: { type: string } }
+
+  # Only worth a second opinion when there is something to do.
+  - id: tax
+    kind: agent
+    needs: [drift, explain]
+    when: { drift: { needs_rebalance: true } }
+    model: ollama/minimax-m2.7
+    prompt: prompts/tax.md
+    tools: [read]
+    returns:
+      type: object
+      required: [cheaper_route, cost_of_doing_nothing]
+      properties:
+        cheaper_route: { type: string }
+        cost_of_doing_nothing: { type: string }
+
+  - id: approve
+    kind: gate
+    needs: [drift, explain, tax]
+    question: >
+      Place these trades? Answer with {"placed":true} or
+      {"placed":false,"instead":"what you will do"}.
+    returns:
+      type: object
+      required: [placed]
+      properties:
+        placed: { type: boolean }
+        instead: { type: string }

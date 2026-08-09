@@ -1,0 +1,8 @@
+[
+  { "name": "global equity index", "target_pct": 50, "value_usd": 214800, "account": "taxable" },
+  { "name": "us total market index", "target_pct": 15, "value_usd": 41200, "account": "401k" },
+  { "name": "developed ex-us index", "target_pct": 10, "value_usd": 22600, "account": "401k" },
+  { "name": "reit index", "target_pct": 10, "value_usd": 18900, "account": "roth ira" },
+  { "name": "short-term treasuries", "target_pct": 12, "value_usd": 51300, "account": "taxable" },
+  { "name": "cash", "target_pct": 3, "value_usd": 9400, "account": "taxable" }
+]

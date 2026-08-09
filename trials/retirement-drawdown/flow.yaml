@@ -1,0 +1,99 @@
+# How long the money lasts, and what to do when it does not. The simulation is
+# a module, so the numbers are the same every time and no prompt can move them.
+# The writer promises not to touch the inputs, which is the third shape of a
+# promise: it may write anything except what it names.
+name: retirement-drawdown
+workspace: { kind: git, path: . }
+harness: pi
+model: ollama/glm-5.2
+
+takes:
+  type: object
+  required: [pot_usd, spend_year_one_usd, years, inflation_pct]
+  properties:
+    pot_usd: { type: number }
+    spend_year_one_usd: { type: number }
+    years: { type: integer }
+    inflation_pct: { type: number }
+
+steps:
+  - id: simulate
+    kind: call
+    module: simulate.ts
+    takes:
+      type: object
+      required: [pot_usd, spend_year_one_usd, years, inflation_pct]
+      properties:
+        pot_usd: { type: number }
+        spend_year_one_usd: { type: number }
+        years: { type: integer }
+        inflation_pct: { type: number }
+    returns:
+      type: object
+      required: [paths, survived_pct, worst_case_year, median_ending_usd]
+      properties:
+        survived_pct: { type: number }
+        worst_case_year: { type: integer }
+        median_ending_usd: { type: number }
+        paths:
+          type: array
+          items:
+            type: object
+            required: [name, ending_usd, ran_out_in_year]
+            properties:
+              name: { type: string }
+              ending_usd: { type: number }
+              ran_out_in_year: { type: integer }
+
+  - id: read
+    kind: agent
+    needs: [simulate]
+    model: ollama/kimi-k2.7-code
+    prompt: prompts/read.md
+    tools: [read]
+    changes: nothing
+    returns:
+      type: object
+      required: [plain_english, sequence_risk, guardrails]
+      properties:
+        plain_english: { type: string }
+        sequence_risk: { type: string }
+        guardrails: { type: array, items: { type: string }, minItems: 2 }
+
+  # Only when a path ran out. A plan that survived every path needs no rescue.
+  - id: rescue
+    kind: agent
+    needs: [simulate, read]
+    when: { simulate: { survived_pct: { lt: 100 } } }
+    model: ollama/minimax-m2.7
+    prompt: prompts/rescue.md
+    tools: [read]
+    changes: nothing
+    returns:
+      type: object
+      required: [moves, earliest_warning]
+      properties:
+        moves:
+          type: array
+          items:
+            type: object
+            required: [move, when_to_pull_it, costs]
+            properties:
+              move: { type: string }
+              when_to_pull_it: { type: string }
+              costs: { type: string }
+        earliest_warning: { type: string }
+
+  - id: report
+    kind: agent
+    needs: [simulate, read, rescue]
+    prompt: prompts/report.md
+    tools: [read, write, ls]
+    # It may write what it likes, except the two files it was given to read.
+    changes: { except: [SITUATION.md, ASSUMPTIONS.md] }
+    returns:
+      type: object
+      required: [file, sections]
+      properties:
+        file: { type: string }
+        sections: { type: integer }

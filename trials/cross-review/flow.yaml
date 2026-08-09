@@ -1,0 +1,38 @@
+# The flow from the front of the README, run for real: one model writes the
+# code on one harness, a different model on a different harness reviews it,
+# and the reviewer holds no tool that can change a file. The work goes back
+# until the reviewer approves or a person is asked.
+name: cross-review
+workspace: { kind: git, path: . }
+harness: claude
+model: claude-haiku-4-5-20251001
+
+steps:
+  - id: code
+    kind: agent
+    prompt: prompts/code.md
+    tools: [read, write, edit, grep, find, ls]
+    changes: { except: [TASK.md, test/expected.json] }
+    returns:
+      type: object
+      required: [summary, files]
+      properties:
+        summary: { type: string }
+        files: { type: array, items: { type: string } }
+
+  # A different harness and a different model, and no tool that writes.
+  - id: review
+    kind: agent
+    needs: [code]
+    harness: pi
+    model: ollama/glm-5.2
+    prompt: prompts/review.md
+    tools: [read, grep, find, ls]
+    changes: nothing
+    returns:
+      type: object
+      required: [approved, findings]
+      properties:
+        approved: { type: boolean }
+        findings: { type: array, items: { type: string } }
+    cycle: { to: code, when: { approved: false }, limit: 2, policy: accept }

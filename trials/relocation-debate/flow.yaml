@@ -1,0 +1,74 @@
+# Three fixed stances argue a life decision, each on a different model, and a
+# fourth model on a different harness weighs them. The stances are fixed in the
+# file, so no model gets to choose which side it is on.
+name: relocation-debate
+harness: pi
+model: ollama/glm-5.2
+parallel: 3
+
+steps:
+  - id: facts
+    kind: agent
+    prompt: prompts/facts.md
+    tools: [read]
+    returns:
+      type: object
+      required: [summary, unknowns]
+      properties:
+        summary: { type: string }
+        unknowns: { type: array, items: { type: string } }
+
+  - id: argue
+    kind: agent
+    needs: [facts]
+    prompt: prompts/argue.md
+    tools: [read]
+    returns:
+      type: object
+      required: [stance, case, cost, strongest_objection]
+      properties:
+        stance: { type: string }
+        case: { type: array, items: { type: string }, minItems: 3 }
+        cost: { type: array, items: { type: string } }
+        strongest_objection: { type: string }
+    fanout:
+      - { name: stay, model: ollama/glm-5.1, with: { stance: stay where you are } }
+      - { name: lisbon, model: ollama/minimax-m2.7, with: { stance: take the Lisbon offer } }
+      - { name: berlin, model: ollama/kimi-k2.7-code, with: { stance: take the Berlin offer } }
+
+  # A different harness, so the judge does not share a model with any advocate.
+  - id: judge
+    kind: agent
+    needs: [facts, argue]
+    harness: claude
+    model: claude-haiku-4-5-20251001
+    prompt: prompts/judge.md
+    tools: [read]
+    returns:
+      type: object
+      required: [ranking, decides_it, what_would_change_the_answer]
+      properties:
+        ranking:
+          type: array
+          items:
+            type: object
+            required: [stance, score, why]
+            properties:
+              stance: { type: string }
+              score: { type: number }
+              why: { type: string }
+        decides_it: { type: string }
+        what_would_change_the_answer: { type: array, items: { type: string } }
+
+  - id: choose
+    kind: gate
+    needs: [judge]
+    question: >
+      Which way? Answer with {"chosen":"stay"} or {"chosen":"lisbon"} or
+      {"chosen":"berlin"}, and add {"why":"..."} if the judge missed something.
+    returns:
+      type: object
+      required: [chosen]
+      properties:
+        chosen: { type: string, enum: [stay, lisbon, berlin] }
+        why: { type: string }

@@ -1,0 +1,78 @@
+# An outline goes to three critics at once, one reviewer gathers what they
+# said, and the outline is rewritten until the reviewer approves or the limit
+# stops it. The critics cannot approve anything, which is the point: the step
+# that can send work back is not the step that did the work.
+name: talk-prep
+harness: pi
+model: ollama/glm-5.2
+parallel: 3
+
+takes:
+  type: object
+  required: [title, minutes, audience]
+  properties:
+    title: { type: string }
+    minutes: { type: integer }
+    audience: { type: string }
+
+steps:
+  - id: outline
+    kind: agent
+    prompt: prompts/outline.md
+    tools: [read]
+    returns:
+      type: object
+      required: [thesis, sections, cut_first]
+      properties:
+        thesis: { type: string }
+        sections:
+          type: array
+          minItems: 4
+          items:
+            type: object
+            required: [title, minutes, point]
+            properties:
+              title: { type: string }
+              minutes: { type: number }
+              point: { type: string }
+        cut_first: { type: string }
+
+  - id: critic
+    kind: agent
+    needs: [outline]
+    prompt: prompts/critic.md
+    tools: [read]
+    returns:
+      type: object
+      required: [lens, problems]
+      properties:
+        lens: { type: string }
+        problems:
+          type: array
+          items:
+            type: object
+            required: [where, problem, fix]
+            properties:
+              where: { type: string }
+              problem: { type: string }
+              fix: { type: string }
+    fanout:
+      - { name: time, model: ollama/glm-5.1, with: { lens: whether it fits the minutes, and what will overrun } }
+      - { name: audience, model: ollama/minimax-m2.7, with: { lens: whether this audience already knows it, or cannot follow it } }
+      - { name: argument, model: ollama/kimi-k2.7-code, with: { lens: whether the thesis is actually argued, or only asserted } }
+
+  # The reviewer holds the cycle, so three critics cannot each send the work
+  # back on their own. One value decides.
+  - id: review
+    kind: agent
+    needs: [outline, critic]
+    model: ollama/glm-5.2
+    prompt: prompts/review.md
+    tools: [read]
+    returns:
+      type: object
+      required: [approved, must_fix]
+      properties:
+        approved: { type: boolean }
+        must_fix: { type: array, items: { type: string } }
+    cycle: { to: outline, when: { approved: false }, limit: 2, policy: accept }

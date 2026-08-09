@@ -1,0 +1,88 @@
+# Deep research on one question. Only Claude Code has a web tool, so the flow
+# names the harness once and `validate()` refuses to run it under pi. The
+# budget bounds the money, and the check reads the sources again before the
+# brief is allowed to stand.
+name: deep-research
+workspace: { kind: git, path: . }
+harness: claude
+model: claude-haiku-4-5-20251001
+budget: 6
+parallel: 4
+
+takes:
+  type: object
+  required: [question]
+  properties:
+    question: { type: string }
+
+steps:
+  - id: frame
+    kind: agent
+    prompt: prompts/frame.md
+    tools: [read]
+    returns:
+      type: object
+      required: [question, angles, out_of_scope]
+      properties:
+        question: { type: string }
+        angles: { type: array, items: { type: string }, minItems: 4, maxItems: 4 }
+        out_of_scope: { type: array, items: { type: string } }
+
+  - id: reader
+    kind: agent
+    needs: [frame]
+    # No promise here on purpose: a wave that holds one runs one step at a
+    # time, and these four readers are the reason the flow says parallel: 4.
+    prompt: prompts/read.md
+    tools: [web]
+    returns: &finding
+      type: object
+      required: [angle, claims, sources]
+      properties:
+        angle: { type: string }
+        claims:
+          type: array
+          items:
+            type: object
+            required: [claim, source]
+            properties:
+              claim: { type: string }
+              source: { type: string }
+              confidence: { type: string, enum: [high, medium, low] }
+        sources: { type: array, items: { type: string } }
+    fanout:
+      - { name: first, with: { angle: 1 } }
+      - { name: second, with: { angle: 2 } }
+      - { name: third, with: { angle: 3 } }
+      - { name: fourth, with: { angle: 4 } }
+
+  - id: brief
+    kind: agent
+    needs: [frame, reader]
+    model: claude-sonnet-5
+    prompt: prompts/brief.md
+    tools: [write]
+    changes: { paths: [BRIEF.md] }
+    returns:
+      type: object
+      required: [file, claims, disagreements]
+      properties:
+        file: { type: string }
+        claims: { type: number }
+        disagreements: { type: array, items: { type: string } }
+
+  # The check reads the sources itself. A brief that cites what it did not read
+  # goes back once, and then the run accepts what it has.
+  - id: check
+    kind: agent
+    needs: [brief]
+    prompt: prompts/check.md
+    tools: [read, web]
+    changes: nothing
+    returns:
+      type: object
+      required: [approved, unsupported]
+      properties:
+        approved: { type: boolean }
+        unsupported: { type: array, items: { type: string } }
+    cycle: { to: brief, when: { approved: false }, limit: 1, policy: accept }

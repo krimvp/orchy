@@ -1,0 +1,66 @@
+# A whole flow as one step. `market-scan` runs inside this one, its steps take
+# the ids `scan/segments`, `scan/incumbent`, `scan/read`, and the values this
+# step holds reach every step of it. The rest of the flow reads the value the
+# inner flow ends with.
+name: venture-check
+harness: pi
+model: ollama/glm-5.2
+
+steps:
+  - id: scan
+    kind: flow
+    flow: ../market-scan/flow.yaml
+    with:
+      market: the United Kingdom and Ireland
+      product: scheduling software for independent physiotherapy clinics
+
+  - id: money
+    kind: call
+    needs: [scan]
+    module: money.ts
+    takes:
+      type: object
+      required: [price_monthly_usd, clinics, win_rate_pct]
+      properties:
+        price_monthly_usd: { type: number }
+        clinics: { type: integer }
+        win_rate_pct: { type: number }
+    with:
+      price_monthly_usd: 89
+      clinics: 4100
+      win_rate_pct: 4
+    returns:
+      type: object
+      required: [reachable_clinics, arr_at_win_rate_usd, months_to_ramen, big_enough]
+      properties:
+        reachable_clinics: { type: integer }
+        arr_at_win_rate_usd: { type: number }
+        months_to_ramen: { type: number }
+        big_enough: { type: boolean }
+
+  - id: verdict
+    kind: agent
+    needs: [scan, money]
+    model: ollama/kimi-k2.7-code
+    prompt: prompts/verdict.md
+    tools: [read]
+    returns:
+      type: object
+      required: [call, first_test, kill_criterion]
+      properties:
+        call: { type: string, enum: [build it, test it first, drop it] }
+        first_test: { type: string }
+        kill_criterion: { type: string }
+
+  - id: decide
+    kind: gate
+    needs: [verdict]
+    question: >
+      Do you agree? Answer with {"agreed":true} or with
+      {"agreed":false,"instead":"build it|test it first|drop it"}.
+    returns:
+      type: object
+      required: [agreed]
+      properties:
+        agreed: { type: boolean }
+        instead: { type: string }

@@ -1,0 +1,71 @@
+# A scan of one market. This flow is used on its own and as one step inside
+# `venture-check`, which is why it declares what it takes and what it returns
+# and ends in exactly one step.
+name: market-scan
+harness: pi
+model: ollama/glm-5.2
+parallel: 3
+
+takes:
+  type: object
+  required: [market, product]
+  properties:
+    market: { type: string }
+    product: { type: string }
+
+returns:
+  type: object
+  required: [verdict, crowding, note]
+  properties:
+    verdict: { type: string }
+    crowding: { type: string }
+    note: { type: string }
+
+steps:
+  - id: segments
+    kind: agent
+    prompt: prompts/segments.md
+    tools: [read]
+    returns:
+      type: object
+      required: [segments, buyer]
+      properties:
+        buyer: { type: string }
+        segments:
+          type: array
+          minItems: 3
+          items:
+            type: object
+            required: [name, pain, pays]
+            properties:
+              name: { type: string }
+              pain: { type: string }
+              pays: { type: string }
+
+  - id: incumbent
+    kind: agent
+    needs: [segments]
+    model: ollama/kimi-k2.7-code
+    prompt: prompts/incumbent.md
+    tools: [read]
+    returns:
+      type: object
+      required: [held_by, why_they_win, where_they_are_weak]
+      properties:
+        held_by: { type: array, items: { type: string } }
+        why_they_win: { type: array, items: { type: string } }
+        where_they_are_weak: { type: array, items: { type: string } }
+
+  - id: read
+    kind: agent
+    needs: [segments, incumbent]
+    model: ollama/minimax-m2.7
+    prompt: prompts/read.md
+    tools: [read]
+    returns:
+      type: object
+      required: [verdict, crowding, note]
+      properties:
+        verdict: { type: string, enum: [wedge, crowded, no market, unclear] }
+        crowding: { type: string, enum: [empty, thin, busy, saturated] }
+        note: { type: string }

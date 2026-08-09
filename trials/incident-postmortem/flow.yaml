@@ -1,0 +1,68 @@
+# A postmortem that touches nothing. Every step promises `changes: nothing`
+# once, on the flow, and the workspace proves it. Three analysts read the same
+# incident through three lenses, on three models.
+name: incident-postmortem
+workspace: { kind: git, path: . }
+harness: pi
+model: ollama/glm-5.2
+changes: nothing
+parallel: 3
+
+steps:
+  - id: timeline
+    kind: agent
+    prompt: prompts/timeline.md
+    tools: [read, grep]
+    returns:
+      type: object
+      required: [events, detected_at, resolved_at, impact]
+      properties:
+        events:
+          type: array
+          items:
+            type: object
+            required: [at, what]
+            properties:
+              at: { type: string }
+              what: { type: string }
+        detected_at: { type: string }
+        resolved_at: { type: string }
+        impact: { type: string }
+
+  - id: lens
+    kind: agent
+    needs: [timeline]
+    prompt: prompts/lens.md
+    tools: [read]
+    returns:
+      type: object
+      required: [lens, findings, question_for_the_team]
+      properties:
+        lens: { type: string }
+        findings: { type: array, items: { type: string }, minItems: 2 }
+        question_for_the_team: { type: string }
+    fanout:
+      - { name: cause, model: ollama/kimi-k2.7-code, with: { lens: what made the failure possible, not who typed it } }
+      - { name: detection, model: ollama/minimax-m2.7, with: { lens: why it took as long as it did to notice } }
+      - { name: blast, model: ollama/minimax-m2.7, with: { lens: why the damage spread as far as it did } }
+
+  - id: actions
+    kind: agent
+    needs: [timeline, lens]
+    model: ollama/glm-5.1
+    prompt: prompts/actions.md
+    tools: [read]
+    returns:
+      type: object
+      required: [actions, not_doing]
+      properties:
+        actions:
+          type: array
+          items:
+            type: object
+            required: [action, kind, owner_role]
+            properties:
+              action: { type: string }
+              kind: { type: string, enum: [prevent, detect, limit, respond] }
+              owner_role: { type: string }
+        not_doing: { type: array, items: { type: string } }

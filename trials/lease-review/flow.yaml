@@ -1,0 +1,92 @@
+# Read a lease, pull out its clauses, judge each one on its own, score the
+# result with arithmetic, and only draft a counter when the score says so.
+name: lease-review
+harness: pi
+model: ollama/glm-5.2
+parallel: 4
+
+steps:
+  - id: clauses
+    kind: agent
+    prompt: prompts/clauses.md
+    tools: [read]
+    returns:
+      type: object
+      required: [clauses, term_months, rent_monthly]
+      properties:
+        term_months: { type: integer }
+        rent_monthly: { type: number }
+        clauses:
+          type: array
+          minItems: 4
+          items:
+            type: object
+            required: [name, text]
+            properties:
+              name: { type: string }
+              text: { type: string }
+
+  - id: judge
+    kind: agent
+    needs: [clauses]
+    model: ollama/kimi-k2.7-code
+    prompt: prompts/judge.md
+    tools: [read]
+    fanout: { step: clauses, key: clauses }
+    returns:
+      type: object
+      required: [clause, standing, risk, ask]
+      properties:
+        clause: { type: string }
+        standing: { type: string, enum: [normal, aggressive, unusual, likely unenforceable] }
+        risk: { type: integer, minimum: 0, maximum: 5 }
+        ask: { type: string }
+
+  - id: score
+    kind: call
+    needs: [judge]
+    module: score.ts
+    returns:
+      type: object
+      required: [total, worst, count_over_three, verdict]
+      properties:
+        total: { type: integer }
+        worst: { type: string }
+        count_over_three: { type: integer }
+        verdict: { type: string, enum: [sign, negotiate, walk] }
+
+  # Nobody drafts a counter for a lease that is already fine.
+  - id: counter
+    kind: agent
+    needs: [clauses, judge, score]
+    when: { score: { count_over_three: { gt: 0 } } }
+    model: ollama/minimax-m2.7
+    prompt: prompts/counter.md
+    tools: [read]
+    returns:
+      type: object
+      required: [asks, walk_away_line]
+      properties:
+        asks:
+          type: array
+          items:
+            type: object
+            required: [clause, ask, why]
+            properties:
+              clause: { type: string }
+              ask: { type: string }
+              why: { type: string }
+        walk_away_line: { type: string }
+
+  - id: decide
+    kind: gate
+    needs: [score, counter]
+    question: >
+      Sign, negotiate, or walk? Answer with {"action":"negotiate"} and add
+      {"note":"..."} if you want something else asked for.
+    returns:
+      type: object
+      required: [action]
+      properties:
+        action: { type: string, enum: [sign, negotiate, walk] }
+        note: { type: string }

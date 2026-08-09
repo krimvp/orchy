@@ -1,0 +1,100 @@
+# A study plan for one person. The outline decides the modules, so the fanout
+# runs once for each one without the file naming them. The last step retries
+# itself on a failure and then asks a person, which is what `escalate` means:
+# a model that cannot answer hands the question over instead of guessing.
+name: curriculum
+workspace: { kind: git, path: . }
+harness: pi
+model: ollama/glm-5.2
+parallel: 4
+
+takes:
+  type: object
+  required: [subject, weeks, hours_per_week]
+  properties:
+    subject: { type: string }
+    weeks: { type: integer }
+    hours_per_week: { type: number }
+
+steps:
+  - id: outline
+    kind: agent
+    prompt: prompts/outline.md
+    tools: [read]
+    returns:
+      type: object
+      required: [modules, prerequisites]
+      properties:
+        prerequisites: { type: array, items: { type: string } }
+        modules:
+          type: array
+          minItems: 4
+          maxItems: 6
+          items:
+            type: object
+            required: [name, weeks, outcome]
+            properties:
+              name: { type: string }
+              weeks: { type: integer }
+              outcome: { type: string }
+
+  - id: module
+    kind: agent
+    needs: [outline]
+    model: ollama/minimax-m2.7
+    prompt: prompts/module.md
+    tools: [read]
+    fanout: { step: outline, key: modules }
+    returns:
+      type: object
+      required: [module, sessions, project, checkpoint]
+      properties:
+        module: { type: string }
+        sessions:
+          type: array
+          minItems: 2
+          items:
+            type: object
+            required: [title, hours, doing]
+            properties:
+              title: { type: string }
+              hours: { type: number }
+              doing: { type: string }
+        project: { type: string }
+        checkpoint: { type: string }
+
+  - id: hours
+    kind: call
+    needs: [module]
+    module: hours.ts
+    takes:
+      type: object
+      required: [weeks, hours_per_week]
+      properties:
+        weeks: { type: integer }
+        hours_per_week: { type: number }
+    returns:
+      type: object
+      required: [planned_hours, available_hours, fits, over_by]
+      properties:
+        planned_hours: { type: number }
+        available_hours: { type: number }
+        fits: { type: boolean }
+        over_by: { type: number }
+
+  - id: schedule
+    kind: agent
+    needs: [outline, module, hours]
+    prompt: prompts/schedule.md
+    tools: [read, write, ls]
+    changes: { paths: [CURRICULUM.md] }
+    returns:
+      type: object
+      required: [file, weeks_written, cut]
+      properties:
+        file: { type: string }
+        weeks_written: { type: integer }
+        cut: { type: array, items: { type: string } }
+    # A retry, which is a cycle to the step itself. When the retry is spent the
+    # run stops and asks a person for the value rather than failing the flow.
+    cycle: { to: schedule, when: failed, limit: 1, policy: escalate }

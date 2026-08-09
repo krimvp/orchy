@@ -1,0 +1,108 @@
+# Plan a trip: three drafters argue for three angles, one writer merges them,
+# a deterministic step checks the money, and a person signs it off.
+# The cycle hangs on the call step, so no model decides whether it is over budget.
+name: travel-itinerary
+workspace: { kind: git, path: . }
+harness: pi
+model: ollama/glm-5.2
+parallel: 3
+
+takes:
+  type: object
+  required: [destination, days, budget_usd, travelers]
+  properties:
+    destination: { type: string }
+    days: { type: integer }
+    budget_usd: { type: number }
+    travelers: { type: string }
+
+steps:
+  - id: shape
+    kind: agent
+    prompt: prompts/shape.md
+    tools: [read]
+    changes: nothing
+    returns:
+      type: object
+      required: [themes, pace, must_do]
+      properties:
+        themes: { type: array, items: { type: string }, minItems: 3 }
+        pace: { type: string, enum: [slow, steady, packed] }
+        must_do: { type: array, items: { type: string } }
+
+  # One prompt, three angles, three models. Each member holds its own angle.
+  - id: draft
+    kind: agent
+    needs: [shape]
+    prompt: prompts/draft.md
+    tools: [read]
+    changes: nothing
+    returns:
+      type: object
+      required: [angle, plan, est_total_usd]
+      properties:
+        angle: { type: string }
+        plan:
+          type: array
+          items:
+            type: object
+            required: [day, morning, afternoon, evening]
+            properties:
+              day: { type: integer }
+              morning: { type: string }
+              afternoon: { type: string }
+              evening: { type: string }
+        est_total_usd: { type: number }
+    fanout:
+      - { name: culture, model: ollama/kimi-k2.7-code, with: { angle: culture, history, and museums } }
+      - { name: food, model: ollama/minimax-m2.7, with: { angle: food, markets, and neighbourhood eating } }
+      - { name: outdoors, model: ollama/glm-5.1, with: { angle: walking, parks, and day trips } }
+
+  - id: itinerary
+    kind: agent
+    needs: [shape, draft]
+    model: ollama/glm-5.2
+    prompt: prompts/itinerary.md
+    tools: [read, write, ls]
+    changes: { paths: [ITINERARY.md] }
+    returns:
+      type: object
+      required: [file, days, est_total_usd, highlights]
+      properties:
+        file: { type: string }
+        days: { type: integer }
+        est_total_usd: { type: number }
+        highlights: { type: array, items: { type: string } }
+
+  # Arithmetic is not a job for a model. The cycle reads this value, so the
+  # itinerary is rewritten until it fits or the limit stops it.
+  - id: budget
+    kind: call
+    needs: [itinerary]
+    module: budget.ts
+    takes:
+      type: object
+      required: [budget_usd]
+      properties:
+        budget_usd: { type: number }
+    returns:
+      type: object
+      required: [within, over_by_usd, note]
+      properties:
+        within: { type: boolean }
+        over_by_usd: { type: number }
+        note: { type: string }
+    cycle: { to: itinerary, when: { within: false }, limit: 2, policy: accept }
+
+  - id: approve
+    kind: gate
+    needs: [itinerary, budget]
+    question: >
+      Book it? Answer with {"approved":true} or with
+      {"approved":false,"note":"what to change"}.
+    returns:
+      type: object
+      required: [approved]
+      properties:
+        approved: { type: boolean }
+        note: { type: string }

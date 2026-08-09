@@ -1,0 +1,125 @@
+# A long-horizon savings plan. The first step decides the sleeves, and the
+# fanout runs once for each one, so the file never names them. The arithmetic
+# belongs to a module, and the stress test runs only when the projection falls
+# short of the goal.
+name: investment-plan
+workspace: { kind: git, path: . }
+harness: pi
+model: ollama/glm-5.2
+parallel: 4
+
+takes:
+  type: object
+  required: [horizon_years, monthly_savings_usd, starting_usd, goal_usd, risk]
+  properties:
+    horizon_years: { type: integer }
+    monthly_savings_usd: { type: number }
+    starting_usd: { type: number }
+    goal_usd: { type: number }
+    risk: { type: string }
+
+steps:
+  - id: profile
+    kind: agent
+    prompt: prompts/profile.md
+    tools: [read]
+    changes: nothing
+    returns:
+      type: object
+      required: [goals, constraints, sleeves]
+      properties:
+        goals: { type: array, items: { type: string } }
+        constraints: { type: array, items: { type: string } }
+        sleeves:
+          type: array
+          minItems: 3
+          items:
+            type: object
+            required: [name, target_pct, why]
+            properties:
+              name: { type: string }
+              target_pct: { type: number }
+              why: { type: string }
+
+  # The list arrives with the value of `profile`, so the run expands this one.
+  - id: sleeve
+    kind: agent
+    needs: [profile]
+    model: ollama/glm-5.2
+    prompt: prompts/sleeve.md
+    tools: [read]
+    changes: nothing
+    fanout: { step: profile, key: sleeves }
+    returns:
+      type: object
+      required: [sleeve, vehicles, review, risks]
+      properties:
+        sleeve: { type: string }
+        vehicles: { type: array, items: { type: string } }
+        review: { type: string }
+        risks: { type: array, items: { type: string } }
+
+  - id: projection
+    kind: call
+    needs: [profile]
+    module: project.ts
+    takes:
+      type: object
+      required: [horizon_years, monthly_savings_usd, starting_usd, goal_usd]
+      properties:
+        horizon_years: { type: integer }
+        monthly_savings_usd: { type: number }
+        starting_usd: { type: number }
+        goal_usd: { type: number }
+    returns:
+      type: object
+      required: [blended_return_pct, ending_usd, shortfall_usd, contributions_usd]
+      properties:
+        blended_return_pct: { type: number }
+        ending_usd: { type: number }
+        shortfall_usd: { type: number }
+        contributions_usd: { type: number }
+
+  # Runs only when the projection misses the goal. A plan that arrives is not
+  # stress tested, and no model decides that.
+  - id: shortfall
+    kind: agent
+    needs: [profile, projection]
+    when: { projection: { shortfall_usd: { gt: 0 } } }
+    model: ollama/minimax-m2.7
+    prompt: prompts/shortfall.md
+    tools: [read]
+    changes: nothing
+    returns:
+      type: object
+      required: [levers, recommended]
+      properties:
+        levers: { type: array, items: { type: string } }
+        recommended: { type: string }
+
+  - id: memo
+    kind: agent
+    needs: [profile, sleeve, projection]
+    model: ollama/kimi-k2.7-code
+    prompt: prompts/memo.md
+    tools: [read, write, ls]
+    changes: { paths: [PLAN.md] }
+    returns:
+      type: object
+      required: [file, sleeves_written]
+      properties:
+        file: { type: string }
+        sleeves_written: { type: integer }
+
+  - id: sign
+    kind: gate
+    needs: [memo, projection]
+    question: >
+      Do you accept the plan? Answer with {"accepted":true} or with
+      {"accepted":false,"change":"what to change"}.
+    returns:
+      type: object
+      required: [accepted]
+      properties:
+        accepted: { type: boolean }
+        change: { type: string }

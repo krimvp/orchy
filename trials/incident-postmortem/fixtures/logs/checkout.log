@@ -1,0 +1,14 @@
+14:02:11 deploy pricing-service v4.19.0 regions=eu,us,ap,sa strategy=all-at-once canary=skipped label=no-schema-change
+14:02:48 checkout ERROR order_id=8812 currency=JPY msg="Decimal.round: unsupported precision -1"
+14:03:02 checkout ERROR order_id=8817 currency=JPY msg="Decimal.round: unsupported precision -1"
+14:03:59 metrics error_rate=0.4% window=1m threshold=2.0% page=no
+14:09:24 support ticket=44821 text="cannot pay, error at last step" locale=ja-JP
+14:11:02 metrics error_rate=0.9% window=5m threshold=2.0% page=no
+14:19:40 checkout ERROR count=214 currency=JPY window=15m
+14:31:15 slack #checkout msg="anyone else seeing JPY checkout failures? 9 tickets in 20 min"
+14:38:07 slack #checkout msg="looking"
+14:40:33 page on-call=checkout severity=2 source=human
+14:41:50 slack #checkout msg="pricing v4.19.0 went out at 14:02, rolling back"
+14:43:12 deploy pricing-service v4.18.3 strategy=rollback
+14:47:29 deploy rollback complete regions=eu,us,ap,sa
+14:49:02 metrics error_rate=0.2% window=5m

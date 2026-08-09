@@ -1,0 +1,97 @@
+# A week of dinners. The first step decides which nights are being cooked for,
+# so the fanout runs once for each night without the file naming them. A module
+# builds the shopping list, because merging quantities is not a job for a model.
+name: meal-plan
+workspace: { kind: git, path: . }
+harness: pi
+model: ollama/glm-5.2
+parallel: 5
+
+takes:
+  type: object
+  required: [people, budget_usd]
+  properties:
+    people: { type: integer }
+    budget_usd: { type: number }
+
+steps:
+  - id: week
+    kind: agent
+    prompt: prompts/week.md
+    tools: [read]
+    returns:
+      type: object
+      required: [nights, avoid, staples_on_hand]
+      properties:
+        avoid: { type: array, items: { type: string } }
+        staples_on_hand: { type: array, items: { type: string } }
+        nights:
+          type: array
+          minItems: 4
+          maxItems: 7
+          items:
+            type: object
+            required: [name, minutes, note]
+            properties:
+              name: { type: string }
+              minutes: { type: integer }
+              note: { type: string }
+
+  - id: dinner
+    kind: agent
+    needs: [week]
+    model: ollama/minimax-m2.7
+    prompt: prompts/dinner.md
+    tools: [read]
+    fanout: { step: week, key: nights }
+    returns:
+      type: object
+      required: [night, dish, minutes, ingredients, leftovers]
+      properties:
+        night: { type: string }
+        dish: { type: string }
+        minutes: { type: integer }
+        leftovers: { type: string }
+        ingredients:
+          type: array
+          minItems: 3
+          items:
+            type: object
+            required: [item, quantity, aisle]
+            properties:
+              item: { type: string }
+              quantity: { type: string }
+              aisle: { type: string }
+
+  - id: list
+    kind: call
+    needs: [dinner]
+    module: list.ts
+    returns:
+      type: object
+      required: [aisles, items, repeated]
+      properties:
+        items: { type: integer }
+        repeated: { type: array, items: { type: string } }
+        aisles:
+          type: array
+          items:
+            type: object
+            required: [aisle, lines]
+            properties:
+              aisle: { type: string }
+              lines: { type: array, items: { type: string } }
+
+  - id: write
+    kind: agent
+    needs: [week, dinner, list]
+    model: ollama/kimi-k2.7-code
+    prompt: prompts/write.md
+    tools: [read, write, ls]
+    changes: { paths: [WEEK.md] }
+    returns:
+      type: object
+      required: [file, nights_written]
+      properties:
+        file: { type: string }
+        nights_written: { type: integer }

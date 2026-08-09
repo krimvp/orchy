@@ -1,0 +1,65 @@
+# The cheapest useful flow in this set: two steps and a person. It needs the
+# web, so it names Claude Code, and `validate()` refuses to run it under pi
+# before a token is spent.
+name: weekend-guide
+harness: claude
+model: claude-haiku-4-5-20251001
+budget: 2
+
+takes:
+  type: object
+  required: [city, month, with_whom]
+  properties:
+    city: { type: string }
+    month: { type: string }
+    with_whom: { type: string }
+
+steps:
+  - id: look
+    kind: agent
+    prompt: prompts/look.md
+    tools: [web]
+    returns:
+      type: object
+      required: [open_now, closed_or_changed, sources]
+      properties:
+        open_now:
+          type: array
+          minItems: 4
+          items:
+            type: object
+            required: [name, why, source]
+            properties:
+              name: { type: string }
+              why: { type: string }
+              source: { type: string }
+        closed_or_changed: { type: array, items: { type: string } }
+        sources: { type: array, items: { type: string } }
+
+  - id: plan
+    kind: agent
+    needs: [look]
+    model: claude-sonnet-5
+    prompt: prompts/plan.md
+    tools: [read]
+    returns:
+      type: object
+      required: [saturday, sunday, if_it_rains, book_ahead]
+      properties:
+        saturday: { type: array, items: { type: string } }
+        sunday: { type: array, items: { type: string } }
+        if_it_rains: { type: string }
+        book_ahead: { type: array, items: { type: string } }
+
+  - id: keep
+    kind: gate
+    needs: [plan]
+    question: >
+      Keep this weekend? Answer with {"kept":true} or with
+      {"kept":false,"swap":"what to change"}.
+    returns:
+      type: object
+      required: [kept]
+      properties:
+        kept: { type: boolean }
+        swap: { type: string }
