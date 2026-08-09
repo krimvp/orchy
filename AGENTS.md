@@ -1,37 +1,101 @@
 # AGENTS.md
 
-Orchy composes agent flows. A user wires steps together, and Orchy runs them and
-enforces the rules that the user declares.
+Orchy runs agent flows. A user declares the steps and the rules. Orchy runs the
+steps and enforces the rules.
 
-Read [CONTEXT.md](./CONTEXT.md) before you use a domain word.
+Read [CONTEXT.md](./CONTEXT.md) before you use a domain word. Read
+[docs/plan.md](./docs/plan.md) before you change the design. Read
+[docs/adr](./docs/adr) before you reverse a decision.
+
+## Look before you write
+
+Do this first, every time. Most of the work is already here.
+
+1. Search this repository for the thing you need. A helper, a type, or a
+   pattern that already exists is the answer.
+2. Look at the standard library of Node. It holds more than most people think.
+3. Look at a package that is already a dependency.
+4. Only then write new code.
+
+Read the code that your change touches, from end to end, before you change it.
+The smallest change in the wrong place is a second bug, not a small one.
 
 ## How to write code
 
 - Write the minimum code that makes the flow work.
 - Do not write code for a need that does not exist yet.
-- Do not add a configuration knob unless a real flow needs it. Start with an
-  assumption and record the assumption.
-- When you are in doubt about a knob, defer the knob or ask the user.
 - Delete code before you add code.
-- Do not add an interface that has one implementation.
-- Do not add a dependency for work that a few lines of code do.
-- Keep the number of files small.
+- Do not add an interface that has one implementation. [ADR
+  0002](./docs/adr/0002-keep-a-harness-adapter.md) is the one exception, and it
+  states the reason and the limit.
+- Do not add a dependency for work that a few lines of code do. Ajv, yaml, and
+  the Pi SDK are the only ones a run needs. Count the cost of a new one out
+  loud before you add it.
+- Keep the number of files small. One idea lives in one file.
+- Write in the style of the file you are in. Match its names, its shape, and
+  how much it says in a comment.
 
-Understand the problem fully before you make the code short. A small change in
-the wrong place is a second bug.
+## Do not add a knob
+
+A configuration knob is a question that every user must answer. Most questions
+have one good answer, so make that answer the only one.
+
+- Start with an assumption. Write the assumption down.
+- Add a knob only when a real flow fails without it.
+- When you are in doubt, leave the knob out and ask the user.
+- A knob that changes a result needs a stronger reason than a knob that only
+  paces the work.
+
+## Never hide a failure
+
+This is the rule that matters most in this project. Orchy sells a guarantee, so
+a rule that looks enforced and is not costs more than a missing rule.
+
+- A field that Orchy cannot act on must fail, and must say why. It must never
+  be quietly ignored. A `fanout` on the wrong kind of step did nothing at all
+  for a while, and nothing said so.
+- Do not promise what you do not check. `validate()` refuses `changes: false`
+  when no workspace can check it, for this reason.
+- State the limit of a rule in the words of the rule. Invariant 1 says that a
+  tool list is not a sandbox, because `bash` walks through it.
+- An error message names the step, what went wrong, and what to do.
+
+## Check against the real thing
+
+Reasoning about a dependency is not knowledge of it.
+
+- Read the types or the help output of a package before you call it. Its
+  documentation and its behaviour do not always agree.
+- Run the flow against a real model before you say that it works. Faults found
+  this way include a harness that chose the wrong provider in silence, a path
+  that lost its first letter, and a cycle that sent a step back with no reason
+  attached. No amount of reading found any of them.
+- When a test passes and the live run fails, the test was wrong. Fix the test
+  first, and prove it fails without the fix.
+- Report what you ran. Do not report what you expect.
+
+## Tests
+
+- `npm test` runs everything. `npm run check` runs the compiler.
+- One test states one behaviour. Its name says that behaviour in a sentence.
+- Test through the public surface: `run`, `validate`, `expandFanout`,
+  `expandFlows`. A fake harness stands in for a model.
+- A test for a fault must fail before the fix. Prove it.
+- Do not test a one-line pass-through.
 
 ## How to write comments
 
-- Write a comment only when the code is complex.
+- Write a comment only when the code is complex, or when the reason for it is
+  not in the code.
 - Do not write a comment that repeats the code.
-- Write a comment when the reason for the code is not visible in the code.
+- Name the invariant or the ADR that a piece of code serves.
 - Mark a deliberate shortcut with a `ponytail:` comment. Name the limit and the
   upgrade path.
 
 ## How to write English
 
-All documents, comments, and commit messages use ASD-STE100 Simplified Technical
-English.
+All documents, comments, and commit messages use ASD-STE100 Simplified
+Technical English.
 
 - Use short sentences. Keep an instruction to 20 words or less. Keep a
   description to 25 words or less.
@@ -44,20 +108,47 @@ English.
 - Do not put more than three nouns together.
 - Do not use jargon when a simple word is correct.
 
+## The shape of the project
+
+Know these before you change the runner.
+
+- **A flow is data.** See [ADR
+  0004](./docs/adr/0004-a-flow-is-data-not-code.md). The API, a YAML file, and
+  a graphical editor all produce the same data. So no field may hold code, and
+  a contract is JSON Schema.
+- **A fanout and a flow step are expansions.** They become plain steps before
+  the run. The runner knows neither. Put a new construct here first: an
+  expansion costs the runner nothing.
+- **A run is a state machine on disk.** See [ADR
+  0005](./docs/adr/0005-a-run-is-a-persisted-state-machine.md). A gate and a
+  crash recover the same way. Anything you add to the run state must be JSON.
+- **A harness sits behind an adapter** with two methods. Tool names, model
+  names, and session files stay behind it. Nothing outside an adapter may read
+  a trajectory.
+- **Five invariants** carry the value of the project. Read them in
+  [docs/plan.md](./docs/plan.md) before you touch the runner.
+
 ## Documents
 
-- `CONTEXT.md` is the glossary. It holds no implementation details.
-- `docs/adr/` holds the decisions. Write an ADR only when the decision is hard
-  to reverse, is surprising, and comes from a real trade-off.
-- `docs/plan.md` holds the current plan.
+- `CONTEXT.md` is the glossary. It holds no implementation detail. Add a word
+  when a word becomes load-bearing.
+- `docs/adr/` holds the decisions. Write an ADR only when a decision is hard to
+  reverse, is surprising, and comes from a real trade-off. Amend an ADR when
+  its reasoning proves wrong, and say what changed.
+- `docs/plan.md` holds the design and the milestones.
+- `docs/running.md` tells a user how to run a flow.
+
+Update the document in the same change as the code. A document that disagrees
+with the code is worse than no document.
 
 ## Skills
 
-This repository enables two plugins in `.claude/settings.json`:
+`.claude/settings.json` enables two plugins:
 
 - `ponytail` keeps the code minimal. It is active in every session.
 - `mattpocock-skills` supplies `grilling`, `domain-modeling`, `tdd`, and
   `code-review`.
 
-Use `/mattpocock-skills:grill-with-docs` to stress-test a plan. The session
-updates `CONTEXT.md` and `docs/adr/` as the decisions become clear.
+Use `/mattpocock-skills:grill-with-docs` to stress-test a design before you
+build it. The session writes the words into `CONTEXT.md` and the decisions into
+`docs/adr/`.
