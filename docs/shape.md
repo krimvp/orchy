@@ -1,14 +1,20 @@
 # The shape of a flow
 
-Status: built. This document reports the study that found six faults in the flow
-data, and it records what each one cost. Every change below has landed, under
-milestone M8 in [docs/plan.md](./plan.md). The decisions that are hard to
-reverse are in [ADR 0012](./adr/0012-a-flow-names-its-harness.md), [ADR
+Status: a record. This document reports the study that found six faults in the
+flow data, and it records what each one cost. Every change of the study landed,
+under milestone M8 in [docs/plan.md](./plan.md). Later work closed more, and
+each place below says which. The decisions that are hard to reverse are in [ADR
+0012](./adr/0012-a-flow-names-its-harness.md), [ADR
 0013](./adr/0013-a-promise-is-a-word-not-a-boolean.md), and [ADR
-0014](./adr/0014-a-step-that-a-condition-rules-out.md).
+0014](./adr/0014-a-step-that-a-condition-rules-out.md), and the later ones in
+[ADR 0015](./adr/0015-a-flow-takes-values-and-returns-one.md) to [ADR
+0019](./adr/0019-a-run-has-a-budget.md).
 
-Read this before you add a field, or change one. The study is the reason the
-fields have the shapes they have.
+The study is history, so it stays as a person wrote it. Read it before you add
+a field, or change one: it is the reason the fields have the shapes they have.
+Three parts hold what is true today: the table below, [what later work
+closed](#what-later-work-closed), and [what is still
+open](#what-is-still-open).
 
 [docs/plan.md](./plan.md) holds the design. This document holds the shape of the
 data that a user writes.
@@ -26,13 +32,18 @@ Two questions drove the probes:
 
 ## What a flow holds
 
-The right column is what the study changed.
+This table holds every field that runs today. **new** and **changed** name what
+the study did. **later** names what the work after it added.
 
 | Where | Field | Value |
 | --- | --- | --- |
 | flow | `name` | a string |
 | flow | `workspace` | `{ kind: none }` or `{ kind: git, path }` |
 | flow | `harness`, `model` | **new.** The default for every step |
+| flow | `changes` | **later.** The promise of every step that declares none |
+| flow | `takes` | **later.** JSON Schema. The values a run supplies |
+| flow | `returns` | **later.** JSON Schema. The value of the step the flow ends with |
+| flow | `budget` | **later.** A number of dollars. The run stops when it reaches it |
 | flow | `parallel` | a number, 8 when absent |
 | step | `id`, `needs` | a name, and the names it waits for |
 | step | `kind` | `agent`, `call`, `gate`, `flow` |
@@ -41,14 +52,24 @@ The right column is what the study changed.
 | call | `module` | a path |
 | gate | `question` | a string |
 | flow step | `flow` | a path |
-| agent, call | `changes` | **changed.** `nothing`, or `{ paths }` |
+| flow step | `with` | **later.** The values the flow it names takes |
+| agent, call | `changes` | **changed.** `nothing`, `{ paths }`, or **later** `{ except }` |
 | agent, call | `with` | **new.** A value the step holds |
-| agent, call | `fanout` | a list of members |
-| agent, call, flow step | `cycle` | `{ to, when, limit, policy }`, and `when` takes `failed` |
+| agent, call | `takes` | **later.** JSON Schema. The values that must reach the step |
+| agent, call | `fanout` | a list of members, or **later** `{ step, key }` |
+| agent, call, gate, flow step | `cycle` | `{ to, when, limit, policy }`, and `when` takes `failed`. **later,** a gate holds one |
 | agent, call, gate | `returns` | JSON Schema |
 | member | `name`, `with`, and what its kind holds | overrides |
 
 `validate()` refuses every field that this table does not name.
+
+A match against one value is the value itself, or one operator: `is`, `not`,
+`empty`, `lt`, or `gt`. The set is closed. See [ADR
+0016](./adr/0016-a-match-holds-one-operator.md).
+
+A prompt holds `{{ name }}`, and the name takes its value from what the run
+takes and what the step holds. See [ADR
+0015](./adr/0015-a-flow-takes-values-and-returns-one.md).
 
 ## Finding 1 — a file states a field, and nothing checks it
 
@@ -294,9 +315,15 @@ the steps ran in this order: code, far, review, code, far, review
 `far` paid for its tokens twice. The code marks this a `ponytail`, and `needs`
 already holds what the runner needs to fix it.
 
+**What landed later.** A cycle now clears the target and the steps that need
+it, and it keeps the rest. So `far` runs once, and it keeps its value.
+
 **A flow is a kind, and a fanout is a field.** Both are expansions. A flow step
 replaces one step, and a fanout multiplies one step, so the two shapes are
 right. The documents never say this, and a reader asks.
+
+**What landed.** [AGENTS.md](../AGENTS.md) says it, under "The shape of the
+project".
 
 **`limit` and `policy` are one idea.** `policy` only acts at the limit. Nesting
 them would say so:
@@ -325,16 +352,49 @@ named no step. Finding 1 covers it, and the message now names the step.
 Rows 1 to 3 and 6 add no question that a user must answer. Row 4 replaces one.
 Row 5 adds one, and only for a flow that wants it.
 
+## What later work closed
+
+The study left five things open. Two of them landed after it, and the other
+three are in the next section.
+
+- **A cycle throws away a branch it does not touch.** Closed in the runner. A
+  cycle clears the target and the steps that need it, and it keeps the rest.
+- **A fanout whose members a step decides at run time.** Closed. A fanout holds
+  a list of members, or `{ step, key }`, and the run expands that one when the
+  step it reads holds a value. It is the one expansion the runner performs. See
+  [ADR 0017](./adr/0017-a-fanout-over-a-value-the-run-computes.md).
+
+Four more shapes landed that the study did not ask for. Each one is a workflow
+that had no shape:
+
+- **A flow takes values and returns one.** `orchy run --with` supplies them, a
+  prompt reads `{{ name }}`, and a step declares what must reach it. See [ADR
+  0015](./adr/0015-a-flow-takes-values-and-returns-one.md).
+- **A person sends the run back.** A gate holds a cycle, so a rejection is
+  control flow and not a value that a later step reads. A match holds one of
+  five operators, so a flow says "go back while there are findings". See [ADR
+  0016](./adr/0016-a-match-holds-one-operator.md).
+- **A run has a budget.** Invariant 4 in dollars. See [ADR
+  0019](./adr/0019-a-run-has-a-budget.md).
+- **A promise on the flow, and a promise with an exception.** A flow of
+  read-only steps says it once. The record names what each change did to a
+  path, and not only the path.
+
+One shape is refused, and not open: **a bounded tool**, such as a `bash` that
+names the commands it may run. Orchy does not intercept a tool call, so only a
+harness can hold a bound, and no harness that Orchy drives holds one. See [ADR
+0018](./adr/0018-a-tool-list-is-not-a-sandbox.md).
+
 ## What is still open
 
-- **A cycle throws away a branch it does not touch.** The smaller note above
-  still holds. `needs` carries what the runner needs to fix it.
-- **A join over a skipped branch.** A step that needs two branches is skipped
-  when either one is. An optional need would lift it.
-- **A fanout whose members a step decides at run time.** Expansion happens
-  before the run, so the list is what the file says. This is what makes a fanout
-  cost the runner nothing, and what a graphical editor draws.
 - **A workspace for one step.** The flow holds one. A flow that reads one
   repository and patches another has no shape.
+- **A workspace for each run.** Invariant 5 reads a snapshot of the whole
+  workspace, so two runs in one working directory disturb each other. A wave
+  that holds a promise runs one step at a time, which closes this inside one
+  run and not between two. `src/run.ts` names the limit in a `ponytail`.
+- **A join over a skipped branch.** A step that needs two branches is skipped
+  when either one is. An optional need would lift it, and it is a second
+  concept with a second question for every user.
 - **A prompt that lives in the file.** A prompt is a path, so the editor draws a
   flow whose words it cannot write.

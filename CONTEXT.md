@@ -20,6 +20,11 @@ The program that keeps runs on the way. It holds a queue, starts each run as a
 child process, serves the API, and serves the UI.
 _Avoid_: Server, service, worker, scheduler
 
+**Root**:
+The directory where the daemon starts. Every step of every run acts there, and
+the daemon refuses a flow file outside it.
+_Avoid_: Base, project directory, home
+
 **Flow**:
 An ordered set of steps that produces a result, such as a merge request. A flow
 is data, not code. Orchy, a file, or a graphical editor can all produce the same
@@ -35,6 +40,12 @@ _Avoid_: Task, node, stage, job
 A named unit of work that a step calls. A component holds code. Orchy supplies
 some components. A user writes the others.
 _Avoid_: Plugin, module, block, primitive
+
+**Prompt**:
+What an agent step tells the model. It lives in a file beside the flow. A name
+in braces, such as `{{ issue }}`, takes a value, and a name that nothing
+supplies fails the step.
+_Avoid_: Instruction, template, system message
 
 **Gate**:
 A step that takes its value from a person, not from code. The run stops and
@@ -52,6 +63,11 @@ One pass through a group of steps that repeat, such as code and then review. A
 flow sets a limit on the number of cycles. A cycle to the step itself repeats
 one step, which is how a flow retries.
 _Avoid_: Iteration, loop, round, retry
+
+**Attempt**:
+One run of one step. A cycle drops an attempt and runs the step again. A dropped
+attempt keeps its record, because it is still a cost.
+_Avoid_: Try, pass, execution
 
 **Condition**:
 A partial match against a value. A condition on a step decides whether the step
@@ -83,9 +99,16 @@ overrides only what differs from the step. One item of a computed list is one
 member: the item is the value, and the `name` field of the item names it.
 _Avoid_: Variant, instance, replica
 
+**Expansion**:
+The work that turns one step into the plain steps that the runner reads. A
+fanout and a flow step are expansions, and they happen before the run. A fanout
+over a list that a step computes is the one expansion the runner performs.
+_Avoid_: Unrolling, compilation, flattening
+
 **Wave**:
 The set of steps that run at the same time, because every step they need has
-passed.
+passed. A wave that holds a promise runs one step at a time, because a snapshot
+reads the whole workspace.
 _Avoid_: Batch, round, tier, level
 
 **Invariant**:
@@ -131,7 +154,8 @@ _Avoid_: Job, request, handle
 
 **Index**:
 The database that the daemon builds from the runs on disk. It answers a list and
-a search. The state on disk stays the run.
+a search. It holds the newest runs, and the events of a run that falls behind
+that list go. The state on disk stays the run.
 _Avoid_: Database, store, cache, registry
 
 **Note**:

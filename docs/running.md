@@ -21,6 +21,63 @@ npm i orchy @sinclair/typebox   # to write a flow in TypeScript
 npm i orchy                     # to run a flow from YAML
 ```
 
+## The values a run takes
+
+A flow declares `takes`, the schema of the values that a run supplies. So one
+flow serves every issue, and you edit no file for a run.
+
+```yaml
+name: fix-the-issue
+takes:
+  type: object
+  required: [issue]
+  properties: { issue: { type: number } }
+```
+
+```bash
+orchy run flow.yaml --with '{"issue":412}'
+```
+
+`--with` takes one JSON object. Orchy checks it against `takes` before the first
+step spends a token. A run that supplies a value the flow does not take is
+refused, and so is a flow that takes values and gets none.
+
+Every step of the run reads the values. A prompt holds the name in braces:
+
+```
+Read issue {{ issue }} and write the patch it asks for.
+```
+
+A name that nothing supplies fails the step, and the message names the step and
+the name. A prompt that keeps the braces sends a model to do the wrong work, and
+says nothing about it.
+
+A component reads the same values as its third argument:
+
+```ts
+export default (inputs, say, values) => ({ url: open(values.issue) });
+```
+
+A name that the run and the step both supply takes the value of the step,
+because the step is the narrower of the two.
+
+A step declares `takes` as well, for the values that must reach it. Orchy checks
+them before it loads the module and before it builds the prompt.
+
+```yaml
+  - id: audit
+    kind: agent
+    takes: { type: object, required: [package], properties: { package: { type: string } } }
+```
+
+A flow declares `returns`, the value it produces, which is the value of the step
+it ends with. Orchy checks that value at the end of the run. A flow that returns
+a value ends in one step, and `validate()` refuses one that ends in more.
+
+The daemon takes the same values in `POST /api/flows/:id/runs`, and a `kind:
+flow` step supplies them with `with`. See [ADR
+0015](./adr/0015-a-flow-takes-values-and-returns-one.md).
+
 ## Choose a harness
 
 Orchy ships two adapters. A flow names the one it needs. `--harness` sets the
@@ -130,6 +187,30 @@ A component takes it as a third argument:
 export default (inputs, say, held) => ({ package: held.package });
 ```
 
+### A fanout over a list that a step computes
+
+A fanout also names where the list comes from: the step that holds it, and the
+key in the value of that step. So "audit every package that this step found" is
+one step, and a list that changes needs no edit.
+
+```yaml
+  - id: audit
+    kind: call
+    needs: [find]
+    module: audit.ts
+    fanout: { step: find, key: packages }
+```
+
+`find` returns `{ packages: [{ name: core }, { name: cli }] }`, so the run holds
+`audit/core` and `audit/cli`. Each item is one member: the item is the value of
+the member, and the `name` field of the item names it. An item with no name, and
+two items with one name, fail the run and name the step.
+
+The run expands this one, at the moment the step it reads holds a value. Every
+other expansion happens before the run. A list that comes back empty skips the
+step, and says so. See [ADR
+0017](./adr/0017-a-fanout-over-a-value-the-run-computes.md).
+
 ### A step that runs only sometimes
 
 A step holds `when`, a match against the value of each step that it needs.
@@ -144,6 +225,27 @@ A step holds `when`, a match against the value of each step that it needs.
 A step that the condition rules out is skipped, and so is every step that needs
 it. So a step that must run whatever happens needs only the steps it reads. See
 [ADR 0014](./adr/0014-a-step-that-a-condition-rules-out.md).
+
+The match against one value is the value itself, which tests that the two are
+equal, or one operator.
+
+| Operator | What it tests | Reads |
+| --- | --- | --- |
+| `is` | the value is equal to this | any value |
+| `not` | the value is not equal to this | any value |
+| `empty` | a list, a string, or an object holds nothing | a boolean |
+| `lt` | the value is below this | a number |
+| `gt` | the value is above this | a number |
+
+```yaml
+    when: { review: { findings: { empty: false } } }
+    cycle: { to: code, when: { approved: { not: true } }, limit: 3, policy: accept }
+```
+
+An object is always an operator, so write `{ is: { ok: true } }` to test a value
+that is an object. The set is closed, and `validate()` names every operator in
+its message. A step answers the question that no operator asks. See [ADR
+0016](./adr/0016-a-match-holds-one-operator.md).
 
 ### A step that retries itself
 
@@ -227,8 +329,23 @@ name: panel-review
 parallel: 3
 ```
 
-The number only paces the work. It changes no result, so raise it when the
+The number paces the work of a wave that promises nothing. Raise it when the
 harness and the provider allow more.
+
+A wave that holds a promise ignores the number and runs one step at a time.
+Invariant 5 reads a snapshot of the whole workspace, so a step that runs beside
+another one sees what that one wrote, and the promise of the first step fails
+for a file that the second step made. A rule that reports what it did not
+observe is worse than no rule, so the promise wins and the wave gets slower.
+
+The promise of the flow counts as well, because every step that declares none
+takes it. So a flow with `changes: nothing` on the flow runs one step at a time
+from end to end. Put the promise on the steps that act, and not on the flow,
+when a wave must run wide.
+
+Two runs in one working directory still disturb each other, whatever this number
+says. A promise holds inside one run. Give each run a working directory of its
+own.
 
 ## Choose a model
 
@@ -284,10 +401,47 @@ no cost for one call, so `cost_usd` in the trajectory stays at zero.
 Claude Code writes no cost into its transcript, so the adapter takes the cost
 from the answer of the command and Orchy keeps it in the step record.
 
+A model must also carry a name that the harness reads. Pi reads
+`provider/model`, and the `claude` command reads a plain name. `validate()`
+refuses the wrong grammar before the run, and says what to write.
+
+## What a run may spend
+
+A flow declares a budget, in dollars.
+
+```yaml
+name: research
+budget: 10
+```
+
+The run counts what every step spent, between waves. A run that reaches the
+budget stops before the next step and fails:
+
+```
+the run reached the budget of the flow "research": it spent $10.02 of $10. It
+stops before the next step.
+```
+
+Every attempt counts, including the ones a cycle threw away, because a dropped
+attempt is still a cost. The check runs between waves, so a wave that starts
+inside the budget runs to its end. A run that reaches the budget in its last
+wave still ends `done`.
+
+A budget does not wait for a person. No value of any step answers "the money ran
+out", and a resumed run meets the same spend again.
+
+Orchy enforces no budget that it cannot measure. A run with a budget stops when
+an agent step reports no cost, and says so. A provider whose prices are all zero
+reports a cost of zero, which is a measurement, so a budget over it never stops
+the run. Only the flow that the run starts holds a budget: a sub-flow with one
+is refused when the file loads. See [ADR
+0019](./adr/0019-a-run-has-a-budget.md).
+
 ## Run
 
 ```bash
-orchy run flow.yaml        # or flow.ts
+orchy run flow.yaml                          # or flow.ts
+orchy run flow.yaml --with '{"issue":412}'   # the values the flow takes
 ```
 
 A `prompt` path and a `module` path are relative to the flow file, so a flow in
@@ -311,10 +465,30 @@ orchy resume <run id> '{"approved":true}'
 Orchy checks the value against the contract of the gate, so a wrong value is
 refused before the run continues.
 
+A gate holds a cycle, so the answer of the person sends the run back.
+
+```yaml
+  - id: confirm
+    kind: gate
+    needs: [code]
+    question: Do you accept this work?
+    returns:
+      type: object
+      required: [approved]
+      properties: { approved: { type: boolean } }
+    cycle: { to: code, when: { approved: false }, limit: 3, policy: accept }
+```
+
+The value of the person takes its own turn before the steps after the gate run.
+A gate refuses the policy `escalate`, because an escalation asks a person for a
+value that a person just gave. A gate cannot fail, so it cannot cycle on the
+word `failed`.
+
 ## Say what a step does
 
-A component takes the values of the steps before it, and a way to say what it
-does. A component that says nothing ignores the second argument.
+A component takes three arguments: the values of the steps before it, a way to
+say what it does, and the values it works on. A component that says nothing
+ignores the second argument, and one that needs no value ignores the third.
 
 ```ts
 export default (inputs, say) => {
@@ -370,9 +544,21 @@ On the page:
    It refuses to write a flow that `validate()` rejects, and it will not write a
    flow in TypeScript.
 
-The daemon listens on `127.0.0.1` only. A step can hold `bash`, so anyone who
-reaches the port runs code on the machine. The daemon has no user and no
-password. Do not put it on a shared host.
+The daemon listens on `127.0.0.1` only, and it refuses a page that is not its
+own. A request with a foreign `Origin` reaches nothing, and so does a request
+with a `Host` that the daemon does not answer to. So open the page at
+`http://127.0.0.1:4000`, at `http://localhost:4000`, or at `http://[::1]:4000`,
+and the answer names the address when you use another one.
+
+This is not a user and a password. The daemon has neither. A step can hold
+`bash`, so anyone who reaches the port from a program runs code on the machine.
+Do not put the daemon on a shared host. See [ADR
+0020](./adr/0020-the-daemon-refuses-a-foreign-page.md).
+
+A flow file outside the directory of the daemon is refused, because every step
+acts in that directory. The index holds the newest 200 runs. The events of a run
+that falls behind that list go when a run ends, and the run itself stays on
+disk.
 
 The command line and the daemon run a flow the same way. The daemon starts
 `orchy run <flow file> --events` as a child process, which writes one JSON event

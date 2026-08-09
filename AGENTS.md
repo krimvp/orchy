@@ -104,8 +104,14 @@ the daemon serves that directory.
 ## Tests
 
 - `npm test` runs everything. `npm run check` runs the compiler.
+- CI runs the tests, the compiler, and the page build on every push to main and
+  on every merge request. See `.github/workflows/ci.yml`. A change that breaks
+  an example breaks the build.
 - A test for the daemon uses a flow of `call` steps and a gate, so it needs no
   model. It drives the real API over HTTP.
+- A test of the door of the daemon writes its own headers, because `fetch`
+  holds `Host` and `Origin` back. See [ADR
+  0020](./docs/adr/0020-the-daemon-refuses-a-foreign-page.md).
 - A field that a step cannot act on needs a test that proves it fails. Ten of
   them passed in silence once.
 - `npm --prefix ui run build` runs the compiler over the page.
@@ -158,6 +164,13 @@ Know these before you change the runner.
   the run. The runner knows neither. Put a new construct here first: an
   expansion costs the runner nothing. A flow step is a `kind` because it
   replaces one step. A fanout is a field because it multiplies one.
+- **The runner performs one expansion, and only one.** A fanout over a list that
+  a step computes has no list until that step gives one, so the run expands it
+  when the step is ready. It calls `expandFanout`, the same function a file
+  uses, because two expansions drift apart, and it writes the steps it made to
+  the state on disk. See [ADR
+  0017](./docs/adr/0017-a-fanout-over-a-value-the-run-computes.md). Add no
+  second one.
 - **The shape comes before the meaning.** `validate()` refuses a field that the
   kind of a step cannot act on, before it reads any field. A table in `flow.ts`
   names what each kind holds. Add a field to that table in the same change, or
@@ -169,9 +182,12 @@ Know these before you change the runner.
   names, and session files stay behind it. Nothing outside an adapter may read
   a trajectory.
 - **The daemon sits above the runner.** It starts `orchy run --events` as a
-  child process for each run, and it adds no rule. See [ADR
+  child process for each run, and it adds no rule about a flow. See [ADR
   0008](./docs/adr/0008-the-daemon-runs-each-run-in-a-child-process.md). Put a
-  rule in `validate()` or in the runner, never in the daemon or in the UI.
+  rule in `validate()` or in the runner, never in the daemon or in the UI. The
+  daemon holds one rule of its own, and it is its door: it refuses a foreign
+  `Origin`, a `Host` it does not answer to, and a flow file outside the root.
+  See [ADR 0020](./docs/adr/0020-the-daemon-refuses-a-foreign-page.md).
 - **The index is not the run.** The state on disk is. See [ADR
   0009](./docs/adr/0009-the-database-indexes-the-runs-on-disk.md).
 - **A note is not the record.** The trajectory is. An adapter reports by reading
@@ -191,7 +207,9 @@ Know these before you change the runner.
 - `docs/plan.md` holds the design and the milestones.
 - `docs/running.md` tells a user how to run a flow.
 - `docs/shape.md` studies the flow data, and names where it is weak. Read it
-  before you add a field or change one.
+  before you add a field or change one. It is the record of one study, so keep
+  the study as it was written, hold its table of fields to the code, and say
+  what later work closed.
 
 Update the document in the same change as the code. A document that disagrees
 with the code is worse than no document.
