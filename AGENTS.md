@@ -177,6 +177,8 @@ Know these before you change the runner.
   its reasoning proves wrong, and say what changed.
 - `docs/plan.md` holds the design and the milestones.
 - `docs/running.md` tells a user how to run a flow.
+- `docs/shape.md` studies the flow data, and names where it is weak. Read it
+  before you add a field or change one.
 
 Update the document in the same change as the code. A document that disagrees
 with the code is worse than no document.

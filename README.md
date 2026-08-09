@@ -286,6 +286,8 @@ The API can still change, and the name on npm belongs to another package.
 - [docs/running.md](./docs/running.md) — choose a harness and a model, answer a
   gate, pace the work.
 - [docs/plan.md](./docs/plan.md) — the design and the milestones.
+- [docs/shape.md](./docs/shape.md) — what the flow data holds, and where it is
+  weak.
 - [docs/adr](./docs/adr) — every decision that is hard to reverse, and why.
 - [CONTEXT.md](./CONTEXT.md) — the words this project uses.
 - [AGENTS.md](./AGENTS.md) — how to work in this repository.
