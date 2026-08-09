@@ -1,7 +1,8 @@
 # Plan
 
-Status: draft. Round 1 of the grilling is settled. Round 2 is open. The
-mechanisms in "Open questions" are not decided.
+Status: settled. The grilling closed every open decision. The decisions that are
+hard to reverse are in [docs/adr](./adr). The words are in
+[CONTEXT.md](../CONTEXT.md).
 
 ## Goal
 
@@ -18,6 +19,8 @@ Three properties make Orchy different from a shell script:
 3. **Observable** — every run produces a measurable record and a trajectory for
    each step, in a standard format.
 
+Orchy is not only for code. A flow that touches no files is a first-class case.
+
 ## Shape
 
 The programmatic API is the product. A file format and, later, a graphical
@@ -25,35 +28,62 @@ editor are layers above it. All three produce the same data.
 
 ```
 TypeScript API ─┐
-YAML file ──────┼──▶  Flow (data)  ──▶  Runner  ──▶  Run record + trajectories
-Graphical editor┘
+YAML file ──────┼──▶  Flow (data)  ──▶  validate()  ──▶  Runner
+Graphical editor┘                                          │
+                                                           ▼
+                                             Run state + ATIF trajectory
 ```
 
-This makes one rule: **a flow is data, not code.** The wiring of the steps is
-serializable. Code lives inside a component, never in the wiring. A graphical
-editor cannot draw arbitrary TypeScript, so the API must not permit it.
+A flow is data, not code. See [ADR
+0004](./adr/0004-a-flow-is-data-not-code.md). A file and an editor produce
+flows that carry no types, so `validate(flow)` is not optional. It checks that
+every step reference resolves, and that every `when` key exists in the schema of
+the step that it reads.
 
-The runner talks to a harness through an adapter with one method:
-`run(request)` returns a stream of events and a result. Orchy ships one adapter,
-for Pi. See [ADR 0001](./adr/0001-embed-pi-through-the-sdk.md) and [ADR
+The runner talks to a harness through an adapter with one method: `run(request)`
+returns a stream of events and a result. Orchy ships one adapter, for Pi. See
+[ADR 0001](./adr/0001-embed-pi-through-the-sdk.md) and [ADR
 0002](./adr/0002-keep-a-harness-adapter.md).
 
-A run is local-first, but it must also run on a server and in CI. So no part of
-a run needs a terminal.
+A run is local-first, and it also runs on a server and in CI. No part of a run
+needs a terminal.
 
-## What Pi supplies
+## The API
 
-These facts come from the Pi documentation. They set the limits of the design.
+```ts
+import { flow, agent } from "orchy";
+import { Type } from "@sinclair/typebox";
 
-| Need | Pi feature | Source |
-| --- | --- | --- |
-| Run one agent step | `createAgentSession({ model, tools, sessionManager })` | [SDK](https://pi.dev/docs/latest/sdk) |
-| Limit the tools of a step | `tools`, `noTools`, `excludeTools`. Built-in tools are `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls` | [SDK](https://pi.dev/docs/latest/sdk) |
-| Watch a step | `session.subscribe()` gives `tool_execution_start`, `turn_end`, `agent_end` | [SDK](https://pi.dev/docs/latest/sdk) |
-| Record a trajectory | Sessions are JSONL files. Entries form a tree through `id` and `parentId` | [Session format](https://pi.dev/docs/latest/session-format) |
-| Block a tool call | The `tool_call` event can block execution and can change the arguments | [Extensions](https://pi.dev/docs/latest/extensions) |
-| Reuse prompts | Skills are `SKILL.md` files under `.pi/skills/` or `.agents/skills/` | [Skills](https://pi.dev/docs/latest/skills) |
-| Choose a model | `getModel(provider, modelId)` from `@earendil-works/pi-ai` | [SDK](https://pi.dev/docs/latest/sdk) |
+export default flow("code-and-review", {
+  workspace: { kind: "git", path: "." },
+  steps: [
+    agent({
+      id: "code",
+      prompt: "prompts/code.md",
+      tools: ["read", "write", "edit", "bash", "grep", "find", "ls"],
+      returns: Type.Object({ summary: Type.String() }),
+    }),
+    agent({
+      id: "review",
+      needs: ["code"],
+      prompt: "prompts/review.md",
+      tools: ["read", "grep", "find", "ls"],
+      changes: false,
+      returns: Type.Object({
+        approved: Type.Boolean(),
+        findings: Type.Array(Type.String()),
+      }),
+      cycle: { to: "code", when: { approved: false }, limit: 3, policy: "escalate" },
+    }),
+  ],
+});
+```
+
+`agent()` is generic over the schema in `returns`, so TypeScript checks that the
+keys in `when` exist in the value that the step returns. Step names in `needs`
+and `cycle.to` are plain strings, and `validate()` checks them. A chained
+builder would type those names, but it would cost the array, and it would help
+only the users who write TypeScript.
 
 ## The model
 
@@ -61,48 +91,51 @@ These facts come from the Pi documentation. They set the limits of the design.
 step that reads a ticket is an API call and spends no tokens. A step that writes
 code is an agent session.
 
-**Component** — the code that a step calls. Orchy supplies `agent` and `gate`. A
-user adds a component as a TypeScript file that exports one function. Orchy
-loads it with the same loader that Pi uses, so a user writes TypeScript and does
-not compile it.
+**Component** — the code that a step calls. Orchy supplies `agent`. A user adds
+a component as a TypeScript file that exports one function. Orchy loads it with
+the same loader that Pi uses, so a user writes TypeScript and does not compile
+it.
 
-**Gate** — a step that takes its value from a person. A gate is not a component.
-It is a field on a step. The run writes its state to disk and ends. A person
-runs `orchy resume <run-id> --value '{"approved":true}'`, and Orchy checks that
-value against the same contract as any other step. See [ADR
-0005](./adr/0005-a-run-is-a-persisted-state-machine.md).
+**Gate** — a step that takes its value from a person. A gate is a field on a
+step, not a component. The run writes its state to disk and ends. A person runs
+`orchy resume <run-id> --value '{"approved":true}'`, and Orchy checks that value
+against the same contract as any other step.
 
-**Cycle** — a group of steps that repeat, such as code and then review. A step
-result can name an earlier step to return to. Orchy counts the returns on that
-edge and stops at the declared limit. There is no loop construct in the flow
-data.
+**Cycle** — a step result can name an earlier step to return to. Orchy counts
+the returns on that edge and stops at the limit. There is no loop construct in
+the flow data.
 
 **Value** — what a step returns. A step returns a JSON value, and Orchy puts it
-into the run state. A later step reads it. Orchy passes no other state, and
-Orchy does not track files.
+into the run state. A later step reads it. Orchy passes no other state.
 
 **Policy** — what Orchy does when a cycle reaches its limit and the steps still
-disagree. A policy has two values. `escalate` opens a gate. `accept` continues
-and records the disagreement.
+disagree. `escalate` opens a gate. `accept` continues and records the
+disagreement.
+
+**Workspace** — where a step acts, and the source of the record of what changed
+there. One field, no default. See [ADR
+0006](./adr/0006-one-workspace-field-with-no-default.md).
 
 ## The invariants
 
-Orchy guarantees these rules. Orchy enforces each one, not a prompt.
+Orchy enforces these rules. A prompt does not.
 
 1. **Tools** — an agent step calls only the tools that it declares. This is not
    a sandbox. A step that declares `bash` can change any file and can call the
    network. Orchy makes no claim about what a tool does after Orchy permits it.
-2. **Contract** — the value of a step must match the schema that the step
-   declares. Orchy checks the value after the step ends. A contract is a
-   TypeBox schema, which is also JSON Schema, so it stays inside the flow data.
+2. **Contract** — the value of a step must match its TypeBox schema. Orchy
+   checks the value after the step ends.
 3. **Order** — a step starts only after every step that it needs passes.
 4. **Limit** — a cycle stops at its declared limit. A flow cannot run without
    end.
+5. **Provenance** — Orchy takes a workspace snapshot before and after each step,
+   and records the difference. A step that declares `changes: false` fails when
+   the snapshot moves. This is the rule that catches what `bash` does behind
+   rule 1.
 
-A fifth invariant, **provenance**, is open. It records what a step changed
-outside its returned value, and it is the check that catches what rule 1 cannot.
-It must not assume a code repository, because Orchy must also run a task that
-touches no files.
+Rule 5 needs a workspace. A step with `bash` and no workspace has no record
+beyond the text of the command. Only a sandbox closes that gap, and Orchy does
+not ship one.
 
 ## Measurement
 
@@ -115,19 +148,40 @@ spans with a tool that already does it.
 
 ## Milestones
 
-**M1 — a flow runs.** The TypeScript API builds a flow as data. The runner runs
-each step, through the Pi adapter for an agent step and directly for a
-deterministic step. It enforces the tool, contract, and order invariants, and
-writes the run state to disk after each step.
+**M1 — a flow runs.** The API builds a flow as data. `validate()` checks it. The
+runner runs each step, through the Pi adapter for an agent step and directly for
+a deterministic step. It enforces rules 1 to 3, and writes the run state to disk
+after each step.
 
-**M2 — the cycle and the gate.** Code and review repeat to a limit. A gate stops
-the run and `orchy resume` continues it. Both features use the run state from
-M1.
+**M2 — the cycle and the gate.** Rule 4. A step returns to an earlier step to a
+limit, and a policy decides what happens at the limit. A gate stops the run, and
+`orchy resume` continues it. This milestone lands the first proof flow: code and
+review.
 
-**M3 — ATIF.** Convert the Pi session file into an ATIF trajectory.
+**M3 — the workspace.** Rule 5, with the `git` and `none` kinds. This milestone
+lands the second proof flow: a grilling session that asks a person questions in
+rounds, and reviews its own decisions.
 
-**M4 — the file format.** A YAML loader that produces the same flow data as the
+**M4 — ATIF.** Convert the Pi session file into an ATIF trajectory.
+
+**M5 — the file format.** A YAML loader that produces the same flow data as the
 API.
+
+## The proof flows
+
+Two flows prove the design, and they stress different parts.
+
+**Code and review** proves the cycle. Code writes, review reads, and review
+returns to code until it approves or reaches the limit.
+
+**A grilling session** proves the gate. The agent asks a person a round of
+questions, a gate takes the answers, and the flow returns to the agent for the
+next round. It ends when the agent has no more questions. It also reviews its
+own decisions, so it exercises the cycle a second way.
+
+Both flows use a code repository. So the `none` workspace ships with test cover
+only, which [ADR 0006](./adr/0006-one-workspace-field-with-no-default.md)
+records as a known risk.
 
 ## Deferred
 
@@ -135,14 +189,11 @@ Orchy does not ship these until a real flow needs them.
 
 - Retries and timeouts for a step.
 - A model choice for each step. Version 1 uses one model for the whole flow.
-- Parallel steps.
+- Parallel steps, and the step isolation that they need.
+- A remote sandbox workspace.
 - A second adapter, a server, a scheduler, and a graphical editor.
 
-## Open questions
+## Defaults
 
-Round 4 of the grilling covers the workspace: what a workspace is, what it
-records, whether a flow has one by default, and whether Orchy proves the
-abstraction with a second flow that touches no code.
-
-It also covers how far the types go. A flow from a file or a graphical editor
-carries no types, so Orchy needs a validator whatever the API does.
+These need no decision. Node 22, TypeScript, `node --test`, and components
+shipped as ordinary npm packages.
