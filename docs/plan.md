@@ -33,8 +33,9 @@ This makes one rule: **a flow is data, not code.** The wiring of the steps is
 serializable. Code lives inside a component, never in the wiring. A graphical
 editor cannot draw arbitrary TypeScript, so the API must not permit it.
 
-The runner talks to a harness through an adapter. Orchy ships one adapter, for
-Pi. See [ADR 0001](./adr/0001-embed-pi-through-the-sdk.md) and [ADR
+The runner talks to a harness through an adapter with one method:
+`run(request)` returns a stream of events and a result. Orchy ships one adapter,
+for Pi. See [ADR 0001](./adr/0001-embed-pi-through-the-sdk.md) and [ADR
 0002](./adr/0002-keep-a-harness-adapter.md).
 
 A run is local-first, but it must also run on a server and in CI. So no part of
@@ -65,31 +66,40 @@ user adds a component as a TypeScript file that exports one function. Orchy
 loads it with the same loader that Pi uses, so a user writes TypeScript and does
 not compile it.
 
-**Gate** — a step that stops the run and waits for a person. Because a run must
-work on a server, a gate does not block a process. The run writes its state to
-disk and ends. A person answers, and the run continues.
+**Gate** — a step that stops the run and waits for a person. A gate does not
+block a process. The run writes its state to disk and ends. A person answers,
+and `orchy resume` continues the run. See [ADR
+0005](./adr/0005-a-run-is-a-persisted-state-machine.md).
 
-**Cycle** — a group of steps that repeat, such as code and then review. A flow
-sets a limit on the number of cycles, and a policy for the case where the limit
-is reached and the steps still disagree.
+**Cycle** — a group of steps that repeat, such as code and then review. A step
+result can name an earlier step to return to. Orchy counts the returns on that
+edge and stops at the declared limit. There is no loop construct in the flow
+data.
+
+**Value** — what a step returns. A step returns a JSON value, and Orchy puts it
+into the run state. A later step reads it. Orchy passes no other state, and
+Orchy does not track files.
+
+**Policy** — what Orchy does when a cycle reaches its limit and the steps still
+disagree. A policy has two values. `escalate` opens a gate. `accept` continues
+and records the disagreement.
 
 ## The invariants
 
 Orchy guarantees these rules. Orchy enforces each one, not a prompt.
 
-1. **Tools** — an agent step receives only the tools that it declares. A step
-   that declares read-only tools cannot write a file.
-2. **Contract** — a step must produce the result that it declares. Orchy checks
-   the result after the step ends.
+1. **Tools** — an agent step receives only the tools that it declares.
+2. **Contract** — the value of a step must match the schema that the step
+   declares. Orchy checks the value after the step ends.
 3. **Order** — a step starts only after every step that it needs passes.
 4. **Limit** — a cycle stops at its declared limit. A flow cannot run without
    end.
 
 ## Measurement
 
-Orchy writes one ATIF trajectory for each run. Each step becomes a child
-trajectory. `final_metrics` holds the token counts and the cost. See [ADR
-0003](./adr/0003-write-trajectories-as-atif.md).
+Orchy writes one ATIF trajectory for each run, at schema version 1.7. Each step
+becomes a child trajectory. `final_metrics` holds the token counts and the cost.
+See [ADR 0003](./adr/0003-write-trajectories-as-atif.md).
 
 Orchy ships no exporter and no dashboard. A user converts ATIF to OpenTelemetry
 spans with a tool that already does it.
@@ -121,7 +131,7 @@ Orchy does not ship these until a real flow needs them.
 
 ## Open questions
 
-Round 2 of the grilling covers the mechanisms: how a run suspends and resumes,
-how the API stays serializable, how a step passes a value to the next step, the
-shape of the cycle, the disagreement policy, the members of the adapter, and the
-version of ATIF to pin.
+Round 3 of the grilling covers: the TypeScript signatures, the schema library
+for a contract, whether Orchy records the file changes of a step, whether a step
+runs in an isolated copy of the repository, and the hole in invariant 1 that the
+`bash` tool opens.

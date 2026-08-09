@@ -45,8 +45,14 @@ A rule that Orchy enforces while a step runs. A broken invariant fails the step.
 _Avoid_: Constraint, guard, policy
 
 **Contract**:
-The result that a step must produce. The contract is one kind of invariant.
+The schema that the value of a step must match. The contract is one kind of
+invariant.
 _Avoid_: Output schema, signature, interface
+
+**Policy**:
+The choice that Orchy makes when a cycle reaches its limit and the steps still
+disagree. A policy sends the run to a gate, or accepts the disagreement.
+_Avoid_: Strategy, resolution, tie-break
 
 **Run**:
 One execution of one flow. A run survives a stop. Orchy writes the state of a
