@@ -1,0 +1,432 @@
+:root {
+  --back: #0f1115;
+  --panel: #171a21;
+  --line: #262b36;
+  --text: #e6e8ee;
+  --soft: #9aa3b2;
+  --done: #3fb950;
+  --failed: #f85149;
+  --running: #d29922;
+  --waiting: #58a6ff;
+  --idle: #545b68;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--back);
+  color: var(--text);
+  font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+nav {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  background: var(--back);
+  z-index: 2;
+}
+
+nav strong {
+  letter-spacing: 0.04em;
+}
+
+nav a {
+  color: var(--soft);
+  text-decoration: none;
+}
+
+nav a.here,
+nav a:hover {
+  color: var(--text);
+}
+
+main {
+  padding: 24px;
+  max-width: 1280px;
+  margin: 0 auto;
+}
+
+h1 {
+  font-size: 22px;
+  margin: 0 0 4px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+h2 {
+  font-size: 15px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--soft);
+  margin: 24px 0 8px;
+}
+
+h3 {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+
+a {
+  color: var(--waiting);
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.small {
+  font-size: 12px;
+}
+
+.note,
+.empty {
+  color: var(--soft);
+  margin: 4px 0;
+}
+
+.good {
+  color: var(--done);
+}
+
+.bad {
+  color: var(--failed);
+  white-space: pre-wrap;
+}
+
+ul.list {
+  padding-left: 20px;
+}
+
+/* the table of runs and flows */
+table.rows {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 12px;
+}
+
+table.rows th {
+  text-align: left;
+  font-weight: 500;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--soft);
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+table.rows td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+
+table.rows tbody tr:hover {
+  background: var(--panel);
+  cursor: pointer;
+}
+
+.pill {
+  display: inline-block;
+  padding: 1px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  border: 1px solid;
+  text-transform: lowercase;
+}
+
+.pill.done {
+  color: var(--done);
+  border-color: var(--done);
+}
+.pill.failed {
+  color: var(--failed);
+  border-color: var(--failed);
+}
+.pill.running {
+  color: var(--running);
+  border-color: var(--running);
+}
+.pill.waiting {
+  color: var(--waiting);
+  border-color: var(--waiting);
+}
+.pill.stopped {
+  color: var(--soft);
+  border-color: var(--idle);
+}
+
+/* the drawing of a flow */
+.graph {
+  width: 100%;
+  height: auto;
+  margin: 16px 0;
+  display: block;
+}
+
+.graph .box {
+  fill: var(--panel);
+  stroke: var(--idle);
+  stroke-width: 1.5;
+}
+
+.graph .box.behind {
+  fill: var(--back);
+}
+
+.graph .node {
+  cursor: pointer;
+}
+
+.graph .name {
+  fill: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.graph .kind {
+  fill: var(--soft);
+  font-size: 11px;
+}
+
+.graph .node.done .box {
+  stroke: var(--done);
+}
+.graph .node.failed .box {
+  stroke: var(--failed);
+}
+.graph .node.waiting .box {
+  stroke: var(--waiting);
+}
+.graph .node.running .box {
+  stroke: var(--running);
+  animation: beat 1.4s ease-in-out infinite;
+}
+.graph .node.chosen .box {
+  stroke-width: 3;
+}
+
+@keyframes beat {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.graph .edge {
+  fill: none;
+  stroke: var(--idle);
+  stroke-width: 1.5;
+}
+
+.graph .edge.cycle {
+  stroke: var(--running);
+  stroke-dasharray: 5 4;
+}
+
+.graph .tip {
+  fill: var(--idle);
+}
+
+.graph .limit {
+  fill: var(--running);
+  font-size: 11px;
+  text-anchor: middle;
+}
+
+/* panels and forms */
+.split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .split {
+    grid-template-columns: 1fr;
+  }
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.panel.gate {
+  border-color: var(--waiting);
+  margin: 16px 0;
+}
+
+dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 16px;
+  margin: 0 0 12px;
+}
+
+dt {
+  color: var(--soft);
+  font-size: 13px;
+}
+
+dd {
+  margin: 0;
+  font-size: 13px;
+}
+
+pre {
+  background: var(--back);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px;
+  overflow: auto;
+  max-height: 340px;
+  font-size: 12px;
+  margin: 8px 0;
+}
+
+.field {
+  display: block;
+  margin-bottom: 12px;
+}
+
+.field > span {
+  display: block;
+  color: var(--soft);
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.field.tick,
+label.tick {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.field.tick > span,
+label.tick > span {
+  margin: 0;
+}
+
+.field.group {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.ticks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+
+.ticks label {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  font-size: 13px;
+}
+
+.member {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+input,
+select,
+textarea {
+  background: var(--back);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 9px;
+  font: inherit;
+  width: 100%;
+}
+
+textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  resize: vertical;
+}
+
+input[type="checkbox"] {
+  width: auto;
+  accent-color: var(--waiting);
+}
+
+button,
+a.button {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+button:hover,
+a.button:hover {
+  border-color: var(--soft);
+}
+
+button.go {
+  border-color: var(--done);
+  color: var(--done);
+}
+
+button.danger {
+  border-color: var(--failed);
+  color: var(--failed);
+}
+
+button.link {
+  border: 0;
+  padding: 0;
+  color: var(--waiting);
+  background: none;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 12px 0;
+}
+
+.log {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 420px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.log li {
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}

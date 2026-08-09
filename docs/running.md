@@ -249,3 +249,43 @@ Each run writes two files to `.orchy/runs/<run id>/`:
 
 - `state.json` — the flow, the value of every step, and the cycle counts.
 - `trajectory.json` — one ATIF trajectory, with a child for each agent step.
+
+## Run from a page
+
+The daemon does the same work from a browser. Build the page once, then start
+the daemon in the directory where you want the steps to act.
+
+```bash
+npm run ui:build
+orchy daemon                  # http://127.0.0.1:4000
+orchy daemon --port 8080
+```
+
+On the page:
+
+1. Open **Flows** and give the path of a flow file. The path is relative to the
+   directory of the daemon.
+2. Press **Run**. The run goes in the queue, and it starts when a slot is free.
+   Four runs run at the same time.
+3. Open the run. Each step turns green when it passes and red when it fails, and
+   the events arrive while the run is on the way.
+4. A run that reaches a gate shows a form built from the contract of that gate.
+   Answer it, and the run continues. This is `orchy resume` under a form.
+5. Choose a step to read its value, its error, its length, and the files it
+   changed.
+6. Press **Edit** on a flow to draw it. The editor writes the same YAML file.
+   It refuses to write a flow that `validate()` rejects, and it will not write a
+   flow in TypeScript.
+
+The daemon listens on `127.0.0.1` only. A step can hold `bash`, so anyone who
+reaches the port runs code on the machine. The daemon has no user and no
+password. Do not put it on a shared host.
+
+The command line and the daemon run a flow the same way. The daemon starts
+`orchy run <flow file> --events` as a child process, which writes one JSON event
+for each line, and reads the state that the child writes to disk. So a run needs
+no daemon, and `orchy run` on its own stays the same command.
+
+The daemon indexes every run it finds under `.orchy/runs` when it starts, so a
+run from the command line shows up on the page. It keeps that index in
+`.orchy/index.db`. Deleting the index costs the events of past runs, and no run.

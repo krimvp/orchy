@@ -14,11 +14,15 @@
     "orchy": "./src/cli.ts"
   },
   "files": [
-    "src"
+    "src",
+    "ui/dist"
   ],
   "scripts": {
     "test": "node --test \"test/*.test.ts\"",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "daemon": "node src/cli.ts daemon",
+    "ui:build": "npm --prefix ui install && npm --prefix ui run build",
+    "ui:dev": "npm --prefix ui run dev"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^0.84.1",

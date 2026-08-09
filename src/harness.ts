@@ -1,6 +1,14 @@
 import type { TSchema } from "@sinclair/typebox";
 import type { Trajectory } from "./atif.ts";
 
+/**
+ * The name of every adapter. The names live apart from the adapters, so the
+ * server checks a name without loading the SDK of a harness.
+ */
+export const ADAPTERS = ["pi", "claude"] as const;
+
+export type AdapterName = (typeof ADAPTERS)[number];
+
 export interface AgentRequest {
   step: string;
   prompt: string;

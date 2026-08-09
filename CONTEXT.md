@@ -15,6 +15,11 @@ The code that connects Orchy to one harness. Orchy has two adapters, for Pi and
 for Claude Code.
 _Avoid_: Driver, backend, provider, integration
 
+**Daemon**:
+The program that keeps runs on the way. It holds a queue, starts each run as a
+child process, serves the API, and serves the UI.
+_Avoid_: Server, service, worker, scheduler
+
 **Flow**:
 An ordered set of steps that produces a result, such as a merge request. A flow
 is data, not code. Orchy, a file, or a graphical editor can all produce the same
@@ -80,6 +85,16 @@ _Avoid_: Strategy, resolution, tie-break
 One execution of one flow. A run survives a stop. Orchy writes the state of a
 run to disk after each step.
 _Avoid_: Instance, job, execution, invocation
+
+**Ticket**:
+What the daemon gives back when it accepts a run. A ticket becomes a run when
+the child process reports its run id.
+_Avoid_: Job, request, handle
+
+**Index**:
+The database that the daemon builds from the runs on disk. It answers a list and
+a search. The state on disk stays the run.
+_Avoid_: Database, store, cache, registry
 
 **Trajectory**:
 The full record of what a step did, from the first prompt to the last tool call.

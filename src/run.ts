@@ -72,6 +72,8 @@ export interface RunState {
 }
 
 export type RunEvent =
+  /** A resume emits this as well, so a parent process learns the run it drives. */
+  | { type: "run_start"; runId: string }
   | { type: "step_start"; step: string }
   | { type: "step_end"; step: string; status: "done" | "failed" }
   | { type: "cycle"; step: string; to: string; count: number }
@@ -151,6 +153,7 @@ async function execute(state: RunState, cwd: string, options: RunOptions): Promi
     writeFileSync(file, JSON.stringify(toAtif(state, version, convert), null, 2));
   };
   save();
+  emit({ type: "run_start", runId: state.runId });
 
   const sorted = order(state.flow.steps);
   const done = (id: string) => state.steps[id]?.status === "done";

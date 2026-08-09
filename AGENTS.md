@@ -74,9 +74,23 @@ Reasoning about a dependency is not knowledge of it.
   first, and prove it fails without the fix.
 - Report what you ran. Do not report what you expect.
 
+## The UI
+
+The page lives in `ui/`, and it holds its own `package.json`. React and Vite
+stay there, and no run reaches them. `npm run ui:build` writes `ui/dist`, and
+the daemon serves that directory.
+
+- The UI states no rule of its own. It asks the daemon, and the daemon asks
+  `validate()`. A copy of a rule falls behind.
+- The tool list and the harness list come from `GET /api/health`, for the same
+  reason.
+
 ## Tests
 
 - `npm test` runs everything. `npm run check` runs the compiler.
+- A test for the daemon uses a flow of `call` steps and a gate, so it needs no
+  model. It drives the real API over HTTP.
+- `npm --prefix ui run build` runs the compiler over the page.
 - One test states one behaviour. Its name says that behaviour in a sentence.
 - Test through the public surface: `run`, `validate`, `expandFanout`,
   `expandFlows`. A fake harness stands in for a model.
@@ -125,6 +139,12 @@ Know these before you change the runner.
 - **A harness sits behind an adapter** with two methods. Tool names, model
   names, and session files stay behind it. Nothing outside an adapter may read
   a trajectory.
+- **The daemon sits above the runner.** It starts `orchy run --events` as a
+  child process for each run, and it adds no rule. See [ADR
+  0008](./docs/adr/0008-the-daemon-runs-each-run-in-a-child-process.md). Put a
+  rule in `validate()` or in the runner, never in the daemon or in the UI.
+- **The index is not the run.** The state on disk is. See [ADR
+  0009](./docs/adr/0009-the-database-indexes-the-runs-on-disk.md).
 - **Five invariants** carry the value of the project. Read them in
   [docs/plan.md](./docs/plan.md) before you touch the runner.
 

@@ -32,7 +32,16 @@ YAML file ──────┼──▶  Flow (data)  ──▶  validate()  �
 Graphical editor┘                                          │
                                                            ▼
                                              Run state + ATIF trajectory
+                                                           │
+                                     orchy daemon ──────────┤
+                                       queue, API, UI       ▼
+                                                     index.db (a list)
 ```
+
+The daemon is a layer above the runner, not a part of it. It starts
+`orchy run --events` as a child process for each run, reads the events of that
+child, and indexes the run state that the child writes. So a run needs no
+daemon, and the daemon adds no rule of its own.
 
 A flow is data, not code. See [ADR
 0004](./adr/0004-a-flow-is-data-not-code.md). A file and an editor produce
@@ -141,8 +150,12 @@ disagreement.
 
 **Fanout** — a step that runs once for each member of a list. **A flow step** —
 a whole flow used as one step. Orchy turns both into plain steps before the run,
-so the runner knows neither, and a graphical editor draws the expanded graph.
-This is why they cost the runner nothing.
+so the runner knows neither. This is why they cost the runner nothing.
+
+A run holds the expanded flow, so the UI draws one step for each member of a
+fanout. The editor draws the flow that the file holds, because that is what it
+writes back, and it marks a fanout step as a stack with the number of members.
+See [ADR 0010](./adr/0010-the-editor-writes-the-same-yaml-file.md).
 
 **Workspace** — where a step acts, and the source of the record of what changed
 there. One field, no default. See [ADR
@@ -179,9 +192,14 @@ A run calls `onEvent` when a step starts, when a step ends, when a step goes
 back, when the run waits for a person, and when the run ends. The command line
 prints these, so a long flow is not silent.
 
-A graphical editor needs the same events, and it needs the live output of an
-agent as well. Orchy does not carry that output today, because nothing reads it.
-The adapter grows a second argument when something does, which breaks nothing.
+The daemon reads the same events. `orchy run --events` writes one JSON event for
+each line, a child process of the daemon writes to that stream, and the daemon
+keeps every event and sends it to the UI. A run names itself with `run_start`
+first, so the daemon knows the run that a child drives.
+
+The UI does not show the output of an agent while a step runs. Orchy does not
+carry that output today, because nothing reads it. The adapter grows a second
+argument when something does, which breaks nothing.
 
 ## Measurement
 
@@ -198,8 +216,9 @@ they happened.
 Each step record holds `startedAt` and `endedAt`, so a reader gets the duration
 as well as the tokens.
 
-Orchy ships no exporter and no dashboard. A user converts ATIF to OpenTelemetry
-spans with a tool that already does it.
+The UI of the daemon reads the trajectory, and shows the cost and the tokens of
+a run beside its status. Orchy ships no exporter. A user converts ATIF to
+OpenTelemetry spans with a tool that already does it.
 
 ## Milestones
 
@@ -230,6 +249,19 @@ A file names the `kind` of each step, exactly as the data does. The file format
 is a serialization, not a friendlier language, so a graphical editor writes the
 same file with no translation.
 
+**M6 — the daemon, the backend, and the UI. Done.** `orchy daemon` holds a
+queue, starts each run as a child process, and serves an API and a page. A
+person registers a flow, starts a run, watches the steps as they run, answers a
+gate, reads the value and the cost of each step, and edits a flow as a drawing.
+
+Three decisions carry this milestone. The daemon runs each run in a child
+process, so a run that dies takes nothing with it. See [ADR
+0008](./adr/0008-the-daemon-runs-each-run-in-a-child-process.md). A SQLite
+database indexes the runs on disk, and the state on disk stays the run. See [ADR
+0009](./adr/0009-the-database-indexes-the-runs-on-disk.md). The editor writes
+the same YAML file that a person reads, so a flow lives in one place. See [ADR
+0010](./adr/0010-the-editor-writes-the-same-yaml-file.md).
+
 ## The proof flows
 
 Two flows prove the design, and they stress different parts.
@@ -251,9 +283,11 @@ records as a known risk.
 Orchy does not ship these until a real flow needs them.
 
 - Retries and timeouts for a step.
-- A model choice for each step. Version 1 uses one model for the whole flow.
 - A remote sandbox workspace.
-- A second adapter, a server, a scheduler, and a graphical editor.
+- A scheduler. Nothing starts a run except a person and the command line.
+- The live output of an agent while a step runs. The UI shows the events of a
+  run, and the value of a step when the step ends.
+- A user, a password, and a daemon that listens beyond this machine.
 
 ## Defaults
 

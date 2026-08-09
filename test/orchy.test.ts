@@ -342,10 +342,35 @@ test("a run reports what it does through events", async () => {
     onEvent: (event) => events.push(event.type),
   });
 
+  // A run names itself first, so a parent process knows the run it drives.
   assert.deepEqual(events, [
+    "run_start",
     "step_start", "step_end", "step_start", "step_end", "cycle",
     "step_start", "step_end", "step_start", "step_end", "run_end",
   ]);
+});
+
+test("a resume names the run again, so a parent process follows it", async () => {
+  const cwd = workspace();
+  const events: string[] = [];
+  const harness = fakeHarness({ summary: "v" });
+
+  const gated = flow("gated", {
+    steps: [
+      gate({ id: "confirm", question: "Ship it?", returns: Verdict }),
+      agent({ id: "after", needs: ["confirm"], prompt: "step.md", tools: ["read"], returns: Summary }),
+    ],
+  });
+
+  const waiting = await run(gated, { cwd, harness });
+  const finished = await resume(waiting.runId, { approved: true }, {
+    cwd,
+    harness,
+    onEvent: (event) => events.push(event.type),
+  });
+
+  assert.equal(finished.status, "done");
+  assert.equal(events[0], "run_start");
 });
 
 // -- The workspace and invariant 5 --
