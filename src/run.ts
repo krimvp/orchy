@@ -19,6 +19,7 @@ import {
   expandFanout,
   harnessOf,
   modelOf,
+  operatorOf,
   order,
   schemaProblem,
   takesProblem,
@@ -162,7 +163,8 @@ export async function resume(runId: string, value: unknown, options: RunOptions 
   state.waitingFor = undefined;
   state.question = undefined;
   state.status = "running";
-  return execute(state, cwd, options);
+  // A gate settles outside a wave, so its own cycle takes its turn in `execute`.
+  return execute(state, cwd, options, step);
 }
 
 function refuse(problems: string[]): void {
@@ -177,7 +179,7 @@ function directoryOf(cwd: string, runId: string): string {
   return join(cwd, ".orchy", "runs", runId);
 }
 
-async function execute(state: RunState, cwd: string, options: RunOptions): Promise<RunState> {
+async function execute(state: RunState, cwd: string, options: RunOptions, answered?: Step): Promise<RunState> {
   const harness = options.harness ?? pi;
   const emit = options.onEvent ?? (() => {});
   // ADR 0005: the state on disk is the run. A gate and a crash recover the same way.
@@ -201,6 +203,15 @@ async function execute(state: RunState, cwd: string, options: RunOptions): Promi
   const done = (id: string) => state.steps[id]?.status === "done";
   // A skipped step never passes, so a step that needs it never starts either.
   const settled = (id: string) => done(id) || state.steps[id]?.status === "skipped";
+
+  // The wave loop settles a cycle over the steps it ran, and a gate is in no
+  // wave. So the value of the person takes its turn here, before the steps that
+  // follow the gate run. `validate()` refuses "escalate" on a gate, so this
+  // cycle asks no person for a value that a person just gave.
+  if (answered && personCycles(answered, state)) {
+    goBack(answered, state, sorted, emit);
+    save();
+  }
 
   for (;;) {
     // Every step whose needs have settled runs together. Invariant 3 still holds,
@@ -312,23 +323,8 @@ async function execute(state: RunState, cwd: string, options: RunOptions): Promi
       }
       const cycle = cycleOf(turning) as Cycle;
       const record = state.steps[turning.id] as StepRecord;
-      const key = `${turning.id}->${cycle.to}`;
-      const count = (state.cycles[key] ?? 0) + 1;
-
-      if (count > cycle.limit) {
-        // Invariant 4: the cycle stops here whatever the steps still think.
-        if (cycle.policy === "escalate") {
-          state.history = [...(state.history ?? []), { step: turning.id, record }];
-          delete state.steps[turning.id];
-          return stop(state, turning.id, questionFor(turning, cycle, record), close, emit);
-        }
-        record.disagreement = "accepted";
-      } else {
-        state.cycles[key] = count;
-        // A cycle that drops the reason for it sends the step back blind.
-        state.feedback = [{ step: turning.id, to: cycle.to, value: record.value }];
-        goBackTo(cycle.to, state, sorted);
-        emit({ type: "cycle", step: turning.id, to: cycle.to, count });
+      if (goBack(turning, state, sorted, emit)) {
+        return stop(state, turning.id, questionFor(turning, cycle, record), close, emit);
       }
     }
 
@@ -398,6 +394,46 @@ function skipOf(step: Step, state: RunState): string | undefined {
   return undefined;
 }
 
+/**
+ * Whether the value of a person sends the run back. `answeredByPerson` keeps an
+ * escalation from firing the cycle of the step it stands in for. A gate that
+ * declares its own cycle is a different case, and that cycle fires.
+ */
+function personCycles(step: Step, state: RunState): boolean {
+  const cycle = cycleOf(step);
+  if (step.kind !== "gate" || !cycle || cycle.when === "failed") return false;
+  return matches(cycle.when as Match, state.steps[step.id]?.value);
+}
+
+/**
+ * The step votes to cycle, so the run goes back to the target it names. Answers
+ * whether the cycle reached its limit and the policy asks a person for the value.
+ */
+function goBack(step: Step, state: RunState, sorted: Step[], emit: (event: RunEvent) => void): boolean {
+  const cycle = cycleOf(step) as Cycle;
+  const record = state.steps[step.id] as StepRecord;
+  const key = `${step.id}->${cycle.to}`;
+  const count = (state.cycles[key] ?? 0) + 1;
+
+  if (count > cycle.limit) {
+    // Invariant 4: the cycle stops here whatever the steps still think.
+    if (cycle.policy === "escalate") {
+      state.history = [...(state.history ?? []), { step: step.id, record }];
+      delete state.steps[step.id];
+      return true;
+    }
+    record.disagreement = "accepted";
+    return false;
+  }
+
+  state.cycles[key] = count;
+  // A cycle that drops the reason for it sends the step back blind.
+  state.feedback = [{ step: step.id, to: cycle.to, value: record.value }];
+  goBackTo(cycle.to, state, sorted);
+  emit({ type: "cycle", step: step.id, to: cycle.to, count });
+  return false;
+}
+
 /** The cycle that sends a failed step back, and the count of this attempt. */
 function retryOf(step: Step, state: RunState): { cycle: Cycle; key: string; count: number } | undefined {
   const cycle = cycleOf(step);
@@ -436,7 +472,34 @@ function goBackTo(target: string, state: RunState, sorted: Step[]): void {
 function matches(when: Match, value: unknown): boolean {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;
-  return Object.entries(when).every(([key, wanted]) => isDeepStrictEqual(record[key], wanted));
+  return Object.entries(when).every(([key, wanted]) => holds(record[key], wanted));
+}
+
+/**
+ * A match against one value: the value itself, or one operator. `validate()`
+ * refuses every other shape, so an object that names no operator never reaches
+ * here. See ADR 0016.
+ */
+function holds(value: unknown, wanted: unknown): boolean {
+  const operator = operatorOf(wanted);
+  if (!operator) return isDeepStrictEqual(value, wanted);
+
+  const [name, argument] = operator;
+  if (name === "is") return isDeepStrictEqual(value, argument);
+  if (name === "not") return !isDeepStrictEqual(value, argument);
+  if (name === "empty") return empty(value) === argument;
+  if (name === "lt") return typeof value === "number" && value < (argument as number);
+  return typeof value === "number" && value > (argument as number);
+}
+
+/**
+ * A list, a string, or an object that holds nothing. A value that is not there
+ * is empty as well, so a cycle on `empty: false` never fires on a missing key.
+ */
+function empty(value: unknown): boolean {
+  if (value === undefined || value === null) return true;
+  if (typeof value === "string" || Array.isArray(value)) return value.length === 0;
+  return typeof value === "object" && Object.keys(value).length === 0;
 }
 
 async function runStep(

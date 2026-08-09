@@ -5,14 +5,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { Type } from "@sinclair/typebox";
-import { type AgentStep, type CallStep, type Flow, agent, call, expandFanout, expandFlows, flow, gate, resolvePaths, validate } from "../src/flow.ts";
+import { type AgentStep, type CallStep, type Flow, type GateStep, agent, call, expandFanout, expandFlows, flow, gate, resolvePaths, validate } from "../src/flow.ts";
 import type { AgentRequest, AgentResult, Harness } from "../src/harness.ts";
 import { notesOf } from "../src/harness.ts";
 import { type RunEvent, resume, run } from "../src/run.ts";
 import { tail } from "../src/tail.ts";
 import { claude } from "../src/claude.ts";
 import { pi } from "../src/pi.ts";
-import { parseFlow } from "../src/yaml.ts";
+import { formatFlow, parseFlow } from "../src/yaml.ts";
 
 const Summary = Type.Object({ summary: Type.String() });
 
@@ -1322,30 +1322,6 @@ test("validate refuses a field that the kind of a step cannot hold", () => {
   assert.ok(problems.some((p) => p.includes("Only an agent step holds it")));
 });
 
-test("validate refuses a cycle on a gate step, which never sent the run back", () => {
-  const problems = validate(
-    parseFlow(
-      [
-        "name: gated",
-        "steps:",
-        "  - id: one",
-        "    kind: agent",
-        "    prompt: p.md",
-        "    tools: [read]",
-        "    returns: { type: object, properties: { ok: { type: boolean } } }",
-        "  - id: ask",
-        "    kind: gate",
-        "    needs: [one]",
-        "    question: is it right?",
-        "    returns: { type: object }",
-        "    cycle: { to: one, when: { ok: false }, limit: 2, policy: escalate }",
-      ].join("\n"),
-    ),
-  );
-
-  assert.ok(problems.some((p) => p.includes('step "ask" holds "cycle", which a gate step cannot act on')));
-});
-
 test("validate refuses a member override that the kind of the step cannot hold", () => {
   const problems = validate(
     flow("panel", {
@@ -2364,4 +2340,305 @@ test("a component in a sub-flow reads the values of that flow, as it does in a r
 
   const state = await run(outer, { cwd });
   assert.deepEqual(state.steps["sub/open"]?.value, { summary: "123" });
+});
+
+// ── The cycle of a gate ──────────────────────────────────────────────────────
+
+function humanReviewFlow(limit: number, policy: "escalate" | "accept"): Flow {
+  return flow("human-review", {
+    steps: [
+      agent({ id: "code", prompt: "step.md", tools: ["write"], returns: Summary }),
+      gate({
+        id: "review",
+        needs: ["code"],
+        question: "Is the code right?",
+        returns: Verdict,
+        cycle: { to: "code", when: { approved: false }, limit, policy },
+      }),
+    ],
+  });
+}
+
+test("a gate sends the run back when a person rejects the work", async () => {
+  const cwd = workspace();
+  const harness = fakeHarness({ summary: "v1" }, { summary: "v2" });
+
+  const stopped = await run(humanReviewFlow(2, "accept"), { cwd, harness });
+  assert.equal(stopped.waitingFor, "review");
+
+  const again = await resume(stopped.runId, { approved: false }, { cwd, harness });
+  assert.equal(again.status, "waiting");
+  assert.equal(again.waitingFor, "review");
+  assert.equal(again.cycles["review->code"], 1);
+  assert.equal(harness.seen.length, 2);
+
+  const finished = await resume(again.runId, { approved: true }, { cwd, harness });
+  assert.equal(finished.status, "done");
+  assert.deepEqual(finished.steps.code?.value, { summary: "v2" });
+});
+
+test("a gate carries the answer of the person back to the step it goes back to", async () => {
+  const cwd = workspace();
+  const harness = fakeHarness({ summary: "v1" }, { summary: "v2" });
+
+  const stopped = await run(humanReviewFlow(2, "accept"), { cwd, harness });
+  await resume(stopped.runId, { approved: false, note: "name the file" }, { cwd, harness });
+
+  assert.match(harness.seen[1]?.prompt ?? "", /name the file/);
+});
+
+test("a gate stops at its limit, and the accept policy records the disagreement", async () => {
+  const cwd = workspace();
+  const harness = fakeHarness({ summary: "v" });
+
+  const stopped = await run(humanReviewFlow(1, "accept"), { cwd, harness });
+  const again = await resume(stopped.runId, { approved: false }, { cwd, harness });
+  assert.equal(again.status, "waiting");
+
+  const finished = await resume(again.runId, { approved: false }, { cwd, harness });
+  assert.equal(finished.status, "done");
+  assert.equal(finished.cycles["review->code"], 1);
+  assert.equal(finished.steps.review?.disagreement, "accepted");
+});
+
+test("a person who answers for a step that escalated fires no cycle of that step", async () => {
+  const cwd = workspace();
+  const harness = fakeHarness({ summary: "v" }, { approved: false });
+
+  const stopped = await run(reviewFlow(1, "escalate"), { cwd, harness });
+  assert.equal(stopped.waitingFor, "review");
+  const spent = harness.seen.length;
+
+  // The person agrees with the review that reached its limit. The cycle of the
+  // step it stands in for must not send the run back on that value.
+  const finished = await resume(stopped.runId, { approved: false }, { cwd, harness });
+  assert.equal(finished.status, "done");
+  assert.equal(harness.seen.length, spent);
+});
+
+test("validate holds a gate to every rule that a cycle already has", () => {
+  const gated = (cycle: string) =>
+    parseFlow(
+      [
+        "name: gated",
+        "steps:",
+        "  - id: one",
+        "    kind: agent",
+        "    prompt: p.md",
+        "    tools: [read]",
+        "    returns: { type: object, properties: { ok: { type: boolean } } }",
+        "  - id: ask",
+        "    kind: gate",
+        "    needs: [one]",
+        "    question: is it right?",
+        "    returns: { type: object, properties: { approved: { type: boolean } } }",
+        `    cycle: ${cycle}`,
+        "  - id: later",
+        "    kind: agent",
+        "    needs: [ask]",
+        "    prompt: p.md",
+        "    tools: [read]",
+        "    returns: { type: object }",
+      ].join("\n"),
+    );
+
+  const forward = validate(gated("{ to: later, when: { approved: false }, limit: 2, policy: accept }"));
+  assert.ok(forward.some((p) => p.includes('step "ask" cycles to "later", which does not run before it')));
+
+  const failed = validate(gated("{ to: one, when: failed, limit: 2, policy: accept }"));
+  assert.ok(failed.some((p) => p.includes('step "ask" cannot fail, so it cannot cycle on a failure')));
+
+  const asking = validate(gated("{ to: one, when: { approved: false }, limit: 2, policy: escalate }"));
+  assert.ok(
+    asking.some((p) => p.includes('step "ask" cycles with the policy "escalate", and a person already answers it')),
+  );
+
+  assert.deepEqual(validate(gated("{ to: one, when: { approved: false }, limit: 2, policy: accept }")), []);
+});
+
+test("a flow step cycles onto the gate that the flow it names ends with", async () => {
+  const inner = flow("panel", {
+    steps: [
+      agent({ id: "look", prompt: "look.md", tools: ["read"], returns: Summary }),
+      gate({ id: "judge", needs: ["look"], question: "Is it right?", returns: Verdict }),
+    ],
+  });
+
+  const expanded = await expandFlows(
+    flow("outer", {
+      steps: [
+        agent({ id: "code", prompt: "code.md", tools: ["write"], returns: Summary }),
+        {
+          kind: "flow",
+          id: "review",
+          needs: ["code"],
+          flow: "./panel.yaml",
+          cycle: { to: "code", when: { approved: false }, limit: 2, policy: "accept" },
+        },
+      ],
+    }),
+    async () => inner,
+  );
+
+  const last = expanded.steps.find((step) => step.id === "review/judge") as GateStep;
+  assert.equal(last.cycle?.to, "code");
+  assert.deepEqual(validate(expanded), []);
+});
+
+// ── A match holds one operator ───────────────────────────────────────────────
+
+const Sorted = Type.Object({
+  severity: Type.String(),
+  score: Type.Number(),
+  findings: Type.Array(Type.String()),
+  result: Type.Object({ ok: Type.Boolean() }),
+});
+
+test("each operator of a match decides whether a step runs", async () => {
+  const cwd = workspace();
+  const done = { summary: "ran" };
+  const harness = fakeHarness({ severity: "low", score: 3, findings: [], result: { ok: true } }, done, done, done, done);
+  const one = (id: string, when: Record<string, unknown>) =>
+    agent({ id, needs: ["sort"], when: { sort: when }, prompt: "step.md", tools: ["read"], returns: Summary });
+
+  const state = await run(
+    flow("operators", {
+      steps: [
+        agent({ id: "sort", prompt: "step.md", tools: ["read"], returns: Sorted }),
+        one("other", { severity: { not: "high" } }),
+        one("same", { result: { is: { ok: true } } }),
+        one("none", { findings: { empty: true } }),
+        one("under", { score: { lt: 7 } }),
+        one("over", { score: { gt: 7 } }),
+      ],
+    }),
+    { cwd, harness },
+  );
+
+  assert.equal(state.status, "done");
+  assert.deepEqual(
+    Object.fromEntries(["other", "same", "none", "under", "over"].map((id) => [id, state.steps[id]?.status])),
+    { other: "done", same: "done", none: "done", under: "done", over: "skipped" },
+  );
+});
+
+test("a cycle goes back while a list holds something, and stops when it is empty", async () => {
+  const cwd = workspace();
+  const Review = Type.Object({ findings: Type.Array(Type.String()) });
+  const harness = fakeHarness({ summary: "v1" }, { findings: ["a"] }, { summary: "v2" }, { findings: [] });
+
+  const state = await run(
+    flow("findings", {
+      steps: [
+        agent({ id: "code", prompt: "step.md", tools: ["write"], returns: Summary }),
+        agent({
+          id: "review",
+          needs: ["code"],
+          prompt: "step.md",
+          tools: ["read"],
+          returns: Review,
+          cycle: { to: "code", when: { findings: { empty: false } }, limit: 3, policy: "accept" },
+        }),
+      ],
+    }),
+    { cwd, harness },
+  );
+
+  assert.equal(state.status, "done");
+  assert.equal(state.cycles["review->code"], 1);
+  assert.equal(harness.seen.length, 4);
+});
+
+test("a step and a cycle refuse the same match, because both hold one idea", () => {
+  const onStep = validate(
+    flow("step", {
+      steps: [
+        agent({ id: "sort", prompt: "p.md", tools: ["read"], returns: Sorted }),
+        agent({
+          id: "page",
+          needs: ["sort"],
+          when: { sort: { severity: { equals: "high" } } },
+          prompt: "p.md",
+          tools: ["read"],
+          returns: Summary,
+        }),
+      ],
+    }),
+  );
+
+  assert.ok(
+    onStep.some((p) =>
+      p.includes('step "page" runs when "sort" says "severity" with {"equals":"high"}, which is not one operator'),
+    ),
+  );
+  assert.ok(onStep.some((p) => p.includes("Use one of: is, not, empty, lt, gt")));
+
+  const onCycle = validate(
+    flow("cycle", {
+      steps: [
+        agent({ id: "sort", prompt: "p.md", tools: ["read"], returns: Sorted }),
+        agent({
+          id: "page",
+          needs: ["sort"],
+          prompt: "p.md",
+          tools: ["read"],
+          returns: Sorted,
+          cycle: { to: "sort", when: { result: { ok: true } }, limit: 2, policy: "accept" },
+        }),
+      ],
+    }),
+  );
+
+  assert.ok(onCycle.some((p) => p.includes('step "page" cycles on "result" with {"ok":true}, which is not one operator')));
+  assert.ok(onCycle.some((p) => p.includes("Write { is: ... } to test the value itself")));
+});
+
+test("validate refuses an operator that nests, that reads the wrong value, or that tests one", () => {
+  const sorted = (when: Record<string, unknown>) =>
+    validate(
+      flow("wrong", {
+        steps: [
+          agent({ id: "sort", prompt: "p.md", tools: ["read"], returns: Sorted }),
+          agent({ id: "page", needs: ["sort"], when: { sort: when }, prompt: "p.md", tools: ["read"], returns: Summary }),
+        ],
+      }),
+    );
+
+  assert.ok(
+    sorted({ findings: { not: { empty: true } } }).some((p) =>
+      p.includes('step "page" runs when "sort" says "findings" with "not" over the operator "empty"'),
+    ),
+  );
+  assert.ok(
+    sorted({ score: { lt: "seven" } }).some((p) =>
+      p.includes('step "page" runs when "sort" says "score" with "lt": "seven". The operator "lt" reads a number.'),
+    ),
+  );
+  assert.ok(
+    sorted({ severity: { lt: 7 } }).some((p) =>
+      p.includes('step "page" runs when "sort" says "severity" with "lt", and "severity" holds a string'),
+    ),
+  );
+});
+
+test("a file keeps a gate that cycles, and a match that holds an operator", () => {
+  const text = [
+    "name: kept",
+    "steps:",
+    "  - id: code",
+    "    kind: agent",
+    "    prompt: p.md",
+    "    tools: [write]",
+    "    returns: { type: object, properties: { findings: { type: array } } }",
+    "  - id: ask",
+    "    kind: gate",
+    "    needs: [code]",
+    "    question: is it right?",
+    "    returns: { type: object, properties: { approved: { type: boolean } } }",
+    "    cycle: { to: code, when: { approved: { not: true } }, limit: 2, policy: accept }",
+  ].join("\n");
+
+  const parsed = parseFlow(text);
+  assert.deepEqual(validate(parsed), []);
+  assert.deepEqual(parseFlow(formatFlow(parsed)), parsed);
 });

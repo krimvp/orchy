@@ -38,7 +38,7 @@ _Avoid_: Plugin, module, block, primitive
 
 **Gate**:
 A step that takes its value from a person, not from code. The run stops and
-waits.
+waits. A gate holds a cycle, so a person sends the run back.
 _Avoid_: Approval, checkpoint, pause, breakpoint
 
 **Workspace**:
@@ -55,8 +55,14 @@ _Avoid_: Iteration, loop, round, retry
 
 **Condition**:
 A partial match against a value. A condition on a step decides whether the step
-runs. A condition on a cycle decides whether the run goes back.
+runs. A condition on a cycle decides whether the run goes back. The match
+against one value is the value itself, or one operator.
 _Avoid_: Predicate, expression, filter, guard
+
+**Operator**:
+What a match says about one value, beside the value itself. Orchy holds five,
+and the set is closed, so a graphical editor draws the list.
+_Avoid_: Comparison, test, expression, function
 
 **Promise**:
 What a step says it changes in the workspace. Orchy checks the promise against

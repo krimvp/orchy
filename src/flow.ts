@@ -24,8 +24,36 @@ export function schemaProblem(schema: TSchema, value: unknown): string | undefin
 /**
  * A partial match against a value, not an expression. A small expression
  * language grows, and a graphical editor cannot draw one.
+ *
+ * A match against one key is a plain value, which tests that the two are equal,
+ * or one operator from the closed set below. See ADR 0016.
  */
 export type Match = Record<string, unknown>;
+
+/** A match against one value: the value itself, or one operator. See ADR 0016. */
+export type Matched<T> = T | { is: T } | { not: T } | { empty: boolean } | { lt: number } | { gt: number };
+
+/**
+ * What a match says about one value, beside the value itself. The set is
+ * closed, so a dropdown draws it whole. `reads` names what the operator holds,
+ * and `over` names what the value it tests holds.
+ */
+const OPERATORS: Record<string, { reads?: "boolean" | "number"; over?: { types: string[]; words: string } }> = {
+  is: {},
+  not: {},
+  empty: { reads: "boolean", over: { types: ["array", "string", "object"], words: "a list, a string, or an object" } },
+  lt: { reads: "number", over: { types: ["number", "integer"], words: "a number" } },
+  gt: { reads: "number", over: { types: ["number", "integer"], words: "a number" } },
+};
+
+/** The one operator that a match names, or nothing when the match is a plain value. */
+export function operatorOf(wanted: unknown): [string, unknown] | undefined {
+  if (!isSchema(wanted)) return undefined;
+  const entries = Object.entries(wanted as Record<string, unknown>);
+  const [first] = entries;
+  if (entries.length !== 1 || !first || !(first[0] in OPERATORS)) return undefined;
+  return first;
+}
 
 /**
  * The condition that decides whether a step runs. It names a step that this
@@ -36,7 +64,7 @@ export type When = Record<string, Match>;
 export interface Cycle<S extends TSchema = TSchema> {
   to: string;
   /** A match against the value of the step, or the word `failed`. */
-  when: Partial<Static<S>> | "failed";
+  when: { [K in keyof Static<S>]?: Matched<Static<S>[K]> } | "failed";
   limit: number;
   policy: "escalate" | "accept";
 }
@@ -104,6 +132,8 @@ export interface GateStep<S extends TSchema = TSchema> extends Common {
   kind: "gate";
   question: string;
   returns: S;
+  /** Sends the run back on the value of the person. A person rejects the work. */
+  cycle?: Cycle<S>;
 }
 
 /** A whole flow as one step. Orchy expands it when it loads the file. */
@@ -216,8 +246,9 @@ export function resolvePaths(flow: Flow, directory: string): Flow {
   };
 }
 
+/** A flow step holds one as well, and only expansion reads that one. */
 export function cycleOf(step: Step): Cycle | undefined {
-  return step.kind === "agent" || step.kind === "call" ? step.cycle : undefined;
+  return step.kind === "flow" ? undefined : step.cycle;
 }
 
 /** Rewrites every reference to a step that expansion replaced with several. */
@@ -330,9 +361,6 @@ export async function expandFlows(flow: Flow, load: (path: string) => Promise<Fl
       if (cycleOf(last)) {
         throw new Error(`step "${step.id}" cycles, and so does the step "${last.id}" it ends with`);
       }
-      if (last.kind === "gate") {
-        throw new Error(`step "${step.id}" cycles, but the step it ends with takes its value from a person`);
-      }
       (last as AgentStep).cycle = step.cycle;
     }
 
@@ -355,7 +383,7 @@ const HOLDS: Record<Step["kind"], { must: string[]; may: string[] }> = {
     may: ["needs", "when", "harness", "model", "with", "changes", "cycle", "fanout"],
   },
   call: { must: ["module", "returns"], may: ["needs", "when", "with", "changes", "cycle", "fanout"] },
-  gate: { must: ["question", "returns"], may: ["needs", "when"] },
+  gate: { must: ["question", "returns"], may: ["needs", "when", "cycle"] },
   flow: { must: ["flow"], may: ["needs", "with", "cycle"] },
 };
 
@@ -577,6 +605,13 @@ export function validate(flow: Flow): string[] {
       problems.push(`step "${step.id}" cycles to "${cycle.to}", which does not run before it`);
     }
     if (cycle.limit < 1) problems.push(`step "${step.id}" sets a cycle limit below one`);
+    // An escalation asks a person for the value of the step. A gate has one
+    // already, so the same person would answer the same question without end.
+    if (step.kind === "gate" && cycle.policy === "escalate") {
+      problems.push(
+        `step "${step.id}" cycles with the policy "escalate", and a person already answers it. Write "accept".`,
+      );
+    }
     problems.push(...checkWhen(step, cycle));
   }
 
@@ -625,14 +660,48 @@ function conditionProblems(flow: Flow, step: Step): string[] {
     }
     const other = flow.steps.find((one) => one.id === id) as GateStep | undefined;
     const properties = other?.returns?.properties as Record<string, unknown> | undefined;
-    if (!properties) continue;
-    for (const key of Object.keys(wanted)) {
-      if (!(key in properties)) {
-        problems.push(`step "${step.id}" runs when "${id}" says "${key}", which "${id}" does not return`);
+    for (const [key, value] of Object.entries(wanted)) {
+      const at = `step "${step.id}" runs when "${id}" says "${key}"`;
+      if (properties && !(key in properties)) {
+        problems.push(`${at}, which "${id}" does not return`);
+        continue;
       }
+      problems.push(...operatorProblems(key, value, at, properties?.[key]));
     }
   }
   return problems;
+}
+
+/**
+ * A match against one value is a plain value, which tests that the two are
+ * equal, or one operator. An object that names no operator reads exactly as an
+ * operator does, so it is refused and never guessed. `at` names the step and
+ * the key it reads. See ADR 0016.
+ */
+function operatorProblems(key: string, wanted: unknown, at: string, declared: unknown): string[] {
+  if (!isSchema(wanted)) return [];
+  const operator = operatorOf(wanted);
+  if (!operator) {
+    const names = Object.keys(OPERATORS).join(", ");
+    return [
+      `${at} with ${JSON.stringify(wanted)}, which is not one operator. Use one of: ${names}. Write { is: ... } to test the value itself.`,
+    ];
+  }
+
+  const [name, argument] = operator;
+  const { reads, over } = OPERATORS[name] as { reads?: "boolean" | "number"; over?: { types: string[]; words: string } };
+  const nested = operatorOf(argument);
+  if (!reads && nested) {
+    return [`${at} with "${name}" over the operator "${nested[0]}". An operator reads a plain value, and none nests.`];
+  }
+  if (reads && typeof argument !== reads) {
+    return [`${at} with "${name}": ${JSON.stringify(argument)}. The operator "${name}" reads ${a(reads)}.`];
+  }
+  const type = (declared as { type?: string } | undefined)?.type;
+  if (over && type && !over.types.includes(type)) {
+    return [`${at} with "${name}", and "${key}" holds ${a(type)}. The operator "${name}" tests ${over.words}.`];
+  }
+  return [];
 }
 
 function checkWhen(step: Step, cycle: Cycle): string[] {
@@ -644,14 +713,16 @@ function checkWhen(step: Step, cycle: Cycle): string[] {
     return [`step "${step.id}" cycles when "${JSON.stringify(cycle.when)}". Write a match, or the word "failed".`];
   }
 
-  const keys = Object.keys(cycle.when as Record<string, unknown>);
+  const when = cycle.when as Match;
+  const keys = Object.keys(when);
   if (keys.length === 0) return [`step "${step.id}" cycles on an empty condition, so it always cycles`];
 
   const properties = (step as { returns?: { properties?: Record<string, unknown> } }).returns?.properties;
-  if (!properties) return [];
-  return keys
-    .filter((key) => !(key in properties))
-    .map((key) => `step "${step.id}" cycles on "${key}", which it does not return`);
+  return keys.flatMap((key) => {
+    const at = `step "${step.id}" cycles on "${key}"`;
+    if (properties && !(key in properties)) return [`${at}, which it does not return`];
+    return operatorProblems(key, when[key], at, properties?.[key]);
+  });
 }
 
 /** Invariant 3: a step starts only after every step that it needs passes. */
