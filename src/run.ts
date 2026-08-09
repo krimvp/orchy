@@ -261,6 +261,9 @@ async function execute(state: RunState, cwd: string, options: RunOptions): Promi
       for (const { step, retry } of retries) {
         state.cycles[retry.key] = retry.count;
         goBackTo(retry.cycle.to, state, sorted);
+        // A step that goes back to a step it does not need keeps its own record.
+        // Every attempt is a cost, so this one goes to history as well.
+        goBackTo(step.id, state, sorted);
         emit({ type: "cycle", step: step.id, to: retry.cycle.to, count: retry.count });
       }
       save();

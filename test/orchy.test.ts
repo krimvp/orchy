@@ -1994,6 +1994,34 @@ test("two failures that reach the limit of their cycle run no step past that lim
   assert.equal(harness.seen.filter((request) => request.step === "two").length, 2);
 });
 
+test("a failed attempt keeps its record when the step goes back to a step it does not need", async () => {
+  const cwd = workspace();
+  const harness = byStep({
+    start: [{ summary: "s1" }, { summary: "s2" }],
+    flaky: [new Error("the API answered 503"), { summary: "at last" }],
+  });
+
+  const state = await run(
+    flow("aside", {
+      steps: [
+        agent({ id: "start", prompt: "step.md", tools: ["read"], returns: Summary }),
+        agent({
+          id: "flaky",
+          prompt: "step.md",
+          tools: ["read"],
+          returns: Summary,
+          cycle: { to: "start", when: "failed", limit: 2, policy: "accept" },
+        }),
+      ],
+    }),
+    { cwd, harness },
+  );
+
+  assert.equal(state.status, "done");
+  // Every attempt is a cost, so the record of the one that failed stays.
+  assert.deepEqual(state.history?.map((one) => one.step).sort(), ["flaky", "start"]);
+});
+
 test("a wave with two votes to cycle goes back to the earliest target and keeps the other vote", async () => {
   const cwd = workspace();
   const harness = byStep({
