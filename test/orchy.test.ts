@@ -8,6 +8,7 @@ import { Type } from "@sinclair/typebox";
 import { agent, call, flow, gate, validate } from "../src/flow.ts";
 import type { AgentRequest, AgentResult, Harness } from "../src/pi.ts";
 import { resume, run } from "../src/run.ts";
+import { parseFlow } from "../src/yaml.ts";
 
 const Summary = Type.Object({ summary: Type.String() });
 
@@ -454,4 +455,107 @@ test("the example flows are valid", async () => {
     const module = await import(`../examples/${name}/flow.ts`);
     assert.deepEqual(validate(module.default), [], `examples/${name} is not valid`);
   }
+});
+
+// -- The file format and ATIF --
+
+test("the YAML file and the TypeScript file produce the same flow", async () => {
+  const fromCode = (await import("../examples/code-review/flow.ts")).default;
+  const fromFile = parseFlow(readFileSync("examples/code-review/flow.yaml", "utf8"));
+
+  // JSON strips the symbols that TypeBox adds, which is the form that both
+  // a file and a graphical editor produce.
+  assert.deepEqual(fromFile, JSON.parse(JSON.stringify(fromCode)));
+});
+
+test("the YAML loader refuses a flow that is not valid", () => {
+  assert.throws(
+    () => parseFlow("name: broken\nsteps:\n  - id: a\n    kind: agent\n    needs: [ghost]\n"),
+    /is not valid/,
+  );
+});
+
+test("a run writes an ATIF trajectory that holds one child for each agent step", async () => {
+  const cwd = workspace();
+
+  const state = await run(reviewFlow(3, "accept"), {
+    cwd,
+    harness: fakeHarness({ summary: "v1" }, { approved: false }, { summary: "v2" }, { approved: true }),
+  });
+
+  const atif = JSON.parse(readFileSync(join(cwd, ".orchy", "runs", state.runId, "trajectory.json"), "utf8"));
+
+  assert.equal(atif.schema_version, "ATIF-v1.7");
+  assert.equal(atif.trajectory_id, state.runId);
+  // Two attempts of code plus two of review, and the cycle dropped none of them.
+  assert.equal(atif.final_metrics.total_steps, 4);
+  assert.deepEqual(
+    atif.steps.map((step: { step_id: number }) => step.step_id),
+    [1, 2, 3, 4],
+  );
+  assert.ok(atif.steps.every((step: { extra: { orchy: { step: string } } }) => step.extra.orchy.step));
+
+  // The timestamps must be real, and they must not go backwards.
+  const times = atif.steps.map((step: { timestamp: string }) => step.timestamp);
+  assert.ok(times.every((time: string) => time > "2020-01-01"), `epoch timestamps: ${times[0]}`);
+  assert.deepEqual(times, [...times].sort());
+});
+
+test("ATIF reads a pi session file into steps, tool calls, and metrics", async () => {
+  const cwd = workspace();
+  const session = join(cwd, "session.jsonl");
+  writeFileSync(
+    session,
+    [
+      JSON.stringify({ type: "session", id: "s1", timestamp: "2026-01-01T00:00:00Z", cwd }),
+      JSON.stringify({ type: "message", timestamp: "2026-01-01T00:00:01Z", message: { role: "user", content: "do it" } }),
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-01-01T00:00:02Z",
+        message: {
+          role: "assistant",
+          model: "claude-opus-5",
+          content: [
+            { type: "thinking", thinking: "considering" },
+            { type: "text", text: "reading a file" },
+            { type: "toolCall", id: "t1", name: "read", arguments: { path: "a.ts" } },
+          ],
+          usage: { input: 100, output: 20, cacheRead: 5, cost: { total: 0.5 } },
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-01-01T00:00:03Z",
+        message: { role: "toolResult", toolCallId: "t1", content: [{ type: "text", text: "file body" }] },
+      }),
+    ].join("\n"),
+  );
+
+  const state = await run(
+    flow("traced", { steps: [agent({ id: "a", prompt: "step.md", tools: ["read"], returns: Summary })] }),
+    {
+      cwd,
+      harness: { async run() { return { value: { summary: "done" }, trajectory: session }; } },
+    },
+  );
+
+  const atif = JSON.parse(readFileSync(join(cwd, ".orchy", "runs", state.runId, "trajectory.json"), "utf8"));
+  const [child] = atif.subagent_trajectories;
+
+  assert.equal(child.agent.model_name, "claude-opus-5");
+  assert.deepEqual(
+    child.steps.map((step: { source: string }) => step.source),
+    ["user", "agent", "system"],
+  );
+  assert.equal(child.steps[1].tool_calls[0].function_name, "read");
+  assert.equal(child.steps[1].reasoning_content, "considering");
+  assert.equal(child.steps[2].observation.results[0].source_call_id, "t1");
+  assert.deepEqual(child.final_metrics, {
+    prompt_tokens: 100,
+    completion_tokens: 20,
+    cached_tokens: 5,
+    cost_usd: 0.5,
+    total_steps: 3,
+  });
+  assert.equal(atif.steps[0].subagent_trajectory_ref.trajectory_id, child.trajectory_id);
 });

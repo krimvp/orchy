@@ -1,0 +1,36 @@
+# The same flow as flow.ts. A test keeps the two the same, because the API, a
+# file, and a graphical editor must all produce one flow.
+name: code-and-review
+
+steps:
+  - id: code
+    kind: agent
+    prompt: prompts/code.md
+    tools: [read, write, edit, grep, find, ls]
+    returns:
+      type: object
+      required: [summary, files]
+      properties:
+        summary: { type: string }
+        files:
+          type: array
+          items: { type: string }
+
+  - id: review
+    kind: agent
+    needs: [code]
+    prompt: prompts/review.md
+    tools: [read, grep, find, ls]
+    returns:
+      type: object
+      required: [approved, findings]
+      properties:
+        approved: { type: boolean }
+        findings:
+          type: array
+          items: { type: string }
+    cycle:
+      to: code
+      when: { approved: false }
+      limit: 3
+      policy: escalate

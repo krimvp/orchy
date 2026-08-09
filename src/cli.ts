@@ -1,10 +1,21 @@
 #!/usr/bin/env node
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import type { Flow } from "./flow.ts";
 import { type RunEvent, type RunState, resume, run } from "./run.ts";
+import { parseFlow } from "./yaml.ts";
 
 const USAGE = `use: orchy run <flow file>
-     orchy resume <run id> <json value>`;
+     orchy resume <run id> <json value>
+
+A flow file is TypeScript or YAML.`;
+
+async function load(file: string): Promise<Flow> {
+  const path = resolve(file);
+  if (/\.ya?ml$/.test(path)) return parseFlow(readFileSync(path, "utf8"));
+  return (await import(pathToFileURL(path).href)).default as Flow;
+}
 
 function report(event: RunEvent): void {
   switch (event.type) {
@@ -33,8 +44,7 @@ const [command, first, second] = process.argv.slice(2);
 
 try {
   if (command === "run" && first) {
-    const module = await import(pathToFileURL(resolve(first)).href);
-    finish(await run(module.default, { onEvent: report }));
+    finish(await run(await load(first), { onEvent: report }));
   }
 
   if (command === "resume" && first && second) {

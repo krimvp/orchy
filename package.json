@@ -23,7 +23,8 @@
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^0.84.1",
     "@sinclair/typebox": "^0.34.41",
-    "ajv": "^8.20.0"
+    "ajv": "^8.20.0",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -15,7 +16,10 @@ import {
   validate,
 } from "./flow.ts";
 import { type Harness, pi } from "./pi.ts";
+import { toAtif } from "./atif.ts";
 import { changed, take } from "./workspace.ts";
+
+const version = String(createRequire(import.meta.url)("../package.json").version);
 
 /**
  * A contract is checked as plain JSON Schema, not as a TypeBox object. A schema
@@ -32,6 +36,8 @@ function contractProblem(step: Step, value: unknown): string | undefined {
 
 export interface StepRecord {
   status: "done" | "failed";
+  startedAt: string;
+  endedAt: string;
   value?: unknown;
   error?: string;
   trajectory?: string;
@@ -54,6 +60,8 @@ export interface RunState {
   cycles: Record<string, number>;
   /** The value that sent the run back, carried to the step it went back to. */
   feedback?: { step: string; value: unknown };
+  /** Every step that a cycle dropped. A dropped attempt is still a cost. */
+  history?: Array<{ step: string; record: StepRecord }>;
 }
 
 export type RunEvent =
@@ -92,7 +100,8 @@ export async function resume(runId: string, value: unknown, options: RunOptions 
   const problem = contractProblem(step, value);
   if (problem) throw new Error(problem);
 
-  state.steps[step.id] = { status: "done", value, answeredByPerson: true };
+  const now = new Date().toISOString();
+  state.steps[step.id] = { status: "done", startedAt: now, endedAt: now, value, answeredByPerson: true };
   state.waitingFor = undefined;
   state.question = undefined;
   state.status = "running";
@@ -113,6 +122,10 @@ async function execute(state: RunState, cwd: string, options: RunOptions): Promi
   // ADR 0005: the state on disk is the run. A gate and a crash recover the same way.
   const file = join(directoryOf(cwd, state.runId), "state.json");
   const save = () => writeFileSync(file, JSON.stringify(state, null, 2));
+  const close = () => {
+    save();
+    writeFileSync(join(directoryOf(cwd, state.runId), "trajectory.json"), JSON.stringify(toAtif(state, version), null, 2));
+  };
   save();
 
   const sorted = order(state.flow.steps);
@@ -122,7 +135,7 @@ async function execute(state: RunState, cwd: string, options: RunOptions): Promi
     if (!next) break;
 
     if (next.kind === "gate") {
-      return stop(state, next.id, next.question, save, emit);
+      return stop(state, next.id, next.question, close, emit);
     }
 
     emit({ type: "step_start", step: next.id });
@@ -132,7 +145,7 @@ async function execute(state: RunState, cwd: string, options: RunOptions): Promi
 
     if (record.status === "failed") {
       state.status = "failed";
-      save();
+      close();
       emit({ type: "run_end", status: state.status });
       return state;
     }
@@ -145,8 +158,9 @@ async function execute(state: RunState, cwd: string, options: RunOptions): Promi
       if (count > cycle.limit) {
         // Invariant 4: the cycle stops here whatever the steps still think.
         if (cycle.policy === "escalate") {
+          state.history = [...(state.history ?? []), { step: next.id, record }];
           delete state.steps[next.id];
-          return stop(state, next.id, questionFor(next, cycle), save, emit);
+          return stop(state, next.id, questionFor(next, cycle), close, emit);
         }
         record.disagreement = "accepted";
       } else {
@@ -162,7 +176,7 @@ async function execute(state: RunState, cwd: string, options: RunOptions): Promi
   }
 
   state.status = "done";
-  save();
+  close();
   emit({ type: "run_end", status: state.status });
   return state;
 }
@@ -171,13 +185,13 @@ function stop(
   state: RunState,
   step: string,
   question: string,
-  save: () => void,
+  close: () => void,
   emit: (event: RunEvent) => void,
 ): RunState {
   state.status = "waiting";
   state.waitingFor = step;
   state.question = question;
-  save();
+  close();
   emit({ type: "waiting", step, question });
   return state;
 }
@@ -192,7 +206,13 @@ function questionFor(step: Step, cycle: Cycle): string {
  */
 function goBackTo(target: string, state: RunState, sorted: Step[]): void {
   const from = sorted.findIndex((step) => step.id === target);
-  for (const later of sorted.slice(from)) delete state.steps[later.id];
+  const dropped = state.history ?? [];
+  for (const later of sorted.slice(from)) {
+    const record = state.steps[later.id];
+    if (record) dropped.push({ step: later.id, record });
+    delete state.steps[later.id];
+  }
+  state.history = dropped;
 }
 
 function matches(when: Record<string, unknown>, value: unknown): boolean {
@@ -202,6 +222,8 @@ function matches(when: Record<string, unknown>, value: unknown): boolean {
 }
 
 async function runStep(step: Step, state: RunState, cwd: string, harness: Harness): Promise<StepRecord> {
+  const startedAt = new Date().toISOString();
+  const at = () => ({ startedAt, endedAt: new Date().toISOString() });
   const inputs = Object.fromEntries(step.needs.map((need) => [need, state.steps[need]?.value]));
   if (state.feedback) inputs[state.feedback.step] = state.feedback.value;
   state.feedback = undefined;
@@ -220,13 +242,14 @@ async function runStep(step: Step, state: RunState, cwd: string, harness: Harnes
           })
         : { value: await callModule(step as CallStep, inputs, cwd) };
   } catch (error) {
-    return { status: "failed", error: String(error) };
+    return { ...at(), status: "failed", error: String(error) };
   }
 
   // Invariant 5: what the step really did, not what it says it did.
   const touched = changed(before, take(state.flow.workspace, cwd));
   if (step.kind !== "gate" && step.changes === false && touched.length > 0) {
     return {
+      ...at(),
       status: "failed",
       error: `step "${step.id}" promises to change nothing, but it changed ${touched.join(", ")}`,
       value: result.value,
@@ -236,9 +259,9 @@ async function runStep(step: Step, state: RunState, cwd: string, harness: Harnes
 
   // Invariant 2: the value must match the contract of the step.
   const problem = contractProblem(step, result.value);
-  if (problem) return { status: "failed", error: problem, value: result.value, changed: touched };
+  if (problem) return { ...at(), status: "failed", error: problem, value: result.value, changed: touched };
 
-  const record: StepRecord = { status: "done", value: result.value, trajectory: result.trajectory };
+  const record: StepRecord = { ...at(), status: "done", value: result.value, trajectory: result.trajectory };
   if (touched.length > 0) record.changed = touched;
   return record;
 }

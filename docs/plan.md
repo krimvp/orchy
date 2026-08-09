@@ -170,9 +170,18 @@ The adapter grows a second argument when something does, which breaks nothing.
 
 ## Measurement
 
-Orchy writes one ATIF trajectory for each run, at schema version 1.7. Each step
-becomes a child trajectory. `final_metrics` holds the token counts and the cost.
-See [ADR 0003](./adr/0003-write-trajectories-as-atif.md).
+Orchy writes `trajectory.json` beside the run state, at every point where the
+run stops. The file is one ATIF trajectory at `schema_version: "ATIF-v1.7"`. Each
+run of each step is one root step, and each agent step carries a child
+trajectory read from the Pi session file. `final_metrics` holds the token counts
+and the cost. See [ADR 0003](./adr/0003-write-trajectories-as-atif.md).
+
+A cycle runs a step more than once. A dropped run is still a cost, so the run
+state keeps every dropped record and the trajectory holds them all, in the order
+they happened.
+
+Each step record holds `startedAt` and `endedAt`, so a reader gets the duration
+as well as the tokens.
 
 Orchy ships no exporter and no dashboard. A user converts ATIF to OpenTelemetry
 spans with a tool that already does it.
@@ -195,10 +204,16 @@ milestone lands the second proof flow, in [examples/grilling](../examples/grilli
 a grilling session that asks a person questions in rounds, and reviews its own
 decisions.
 
-**M4 — ATIF.** Convert the Pi session file into an ATIF trajectory.
+**M4 — ATIF. Done.** Convert the Pi session file into an ATIF trajectory, and
+write one for every run.
 
-**M5 — the file format.** A YAML loader that produces the same flow data as the
-API.
+**M5 — the file format. Done.** A YAML loader that produces the same flow data
+as the API. [examples/code-review](../examples/code-review) holds the same flow
+twice, as `flow.ts` and as `flow.yaml`, and a test keeps the two equal.
+
+A file names the `kind` of each step, exactly as the data does. The file format
+is a serialization, not a friendlier language, so a graphical editor writes the
+same file with no translation.
 
 ## The proof flows
 

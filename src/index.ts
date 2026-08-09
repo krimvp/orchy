@@ -3,5 +3,8 @@ export { changed, take } from "./workspace.ts";
 export type { Snapshot, Workspace } from "./workspace.ts";
 export type { AgentStep, CallStep, Cycle, Flow, GateStep, Step, ToolName } from "./flow.ts";
 export { read, resume, run } from "./run.ts";
+export { parseFlow } from "./yaml.ts";
+export { SCHEMA_VERSION, toAtif } from "./atif.ts";
+export type { Trajectory } from "./atif.ts";
 export type { RunEvent, RunOptions, RunState, StepRecord } from "./run.ts";
 export type { AgentRequest, AgentResult, Harness } from "./pi.ts";
