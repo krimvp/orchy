@@ -3,7 +3,7 @@ import { type IncomingMessage, type Server, type ServerResponse, createServer } 
 import type { AddressInfo } from "node:net";
 import { extname, isAbsolute, join, relative, resolve } from "node:path";
 import type { Daemon } from "./daemon.ts";
-import { type Flow, validate } from "./flow.ts";
+import { type Flow, OPERATORS, validate } from "./flow.ts";
 import { ADAPTERS, TOOLS } from "./harness.ts";
 import { loadFlow, readFlow } from "./load.ts";
 import { formatFlow } from "./yaml.ts";
@@ -32,9 +32,20 @@ const HELD = Symbol("held");
 
 export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise<Server> {
   const routes: Array<[string, string, Handler]> = [
-    // The editor draws the tool list and the harness list from here, so it never
-    // holds a copy that falls behind the runner.
-    ["GET", "/api/health", () => ({ root: daemon.root, adapters: ADAPTERS, tools: TOOLS })],
+    // The editor draws the tool list, the harness list, and the operators from
+    // here, so it never holds a copy that falls behind the runner. An operator
+    // gives its name and what it reads, which is what a control needs. What it
+    // refuses stays in `validate()`, which is the one gate.
+    [
+      "GET",
+      "/api/health",
+      () => ({
+        root: daemon.root,
+        adapters: ADAPTERS,
+        tools: TOOLS,
+        operators: OPERATORS.map(({ name, reads }) => ({ name, reads })),
+      }),
+    ],
 
     ["GET", "/api/flows", () => daemon.store.flows()],
 

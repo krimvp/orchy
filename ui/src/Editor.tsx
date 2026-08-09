@@ -5,11 +5,13 @@ import {
   type Cycle,
   type Flow,
   type Member,
+  type Operator,
   type Schema,
   type Step,
   api,
   computedOf,
   membersOf,
+  operatorOf,
   useLoad,
 } from "./api";
 import { Graph } from "./Graph";
@@ -18,8 +20,11 @@ import { Loading } from "./Runs";
 
 const KINDS: Array<Step["kind"]> = ["agent", "call", "gate", "flow"];
 
-/** The set of operators lives in the runner, so the page points at it and holds no copy. */
-const MATCH = "A match holds the value itself, or one operator. The daemon names the operators when a match breaks.";
+/** The set of operators lives in the runner, so the daemon sends it and the page draws it. */
+const MATCH = "Each row reads one key of the value. The daemon names the operators.";
+
+/** A match that no row draws stays as it is, and the daemon still checks it. */
+const KEPT = "This condition holds something that no row draws, so the editor keeps it as JSON.";
 
 /** A choice of a few, shown at once. A person sees every option and the one that holds. */
 function Segmented<T extends string>({
@@ -300,6 +305,7 @@ export function Editor({ id }: { id: number }) {
               step={step}
               tools={health.value?.tools ?? []}
               adapters={health.value?.adapters ?? []}
+              operators={health.value?.operators ?? []}
               onChange={(patch) => change(step.id, patch)}
               onRename={(to) => rename(step.id, to)}
               onRemove={() => remove(step.id)}
@@ -316,6 +322,7 @@ function StepFields({
   step,
   tools,
   adapters,
+  operators,
   onChange,
   onRename,
   onRemove,
@@ -324,6 +331,7 @@ function StepFields({
   step: Step;
   tools: string[];
   adapters: string[];
+  operators: Operator[];
   onChange: (patch: Partial<Step>) => void;
   onRename: (to: string) => void;
   onRemove: () => void;
@@ -468,17 +476,12 @@ function StepFields({
             />
             <span>Runs only when a step it needs says so</span>
           </label>
-          {step.when && (
-            <div style={{ marginTop: 14 }}>
-              <Json value={step.when} onChange={(value) => onChange({ when: value as Step["when"] })} rows={4} />
-              <span className="note small">{MATCH}</span>
-            </div>
-          )}
+          {step.when && <WhenFields flow={flow} step={step} operators={operators} onChange={onChange} />}
         </div>
       )}
 
       {/* A gate cycles as well, because a person sends the run back. */}
-      {step.kind !== "flow" && <CycleFields step={step} flow={flow} onChange={onChange} />}
+      {step.kind !== "flow" && <CycleFields step={step} flow={flow} operators={operators} onChange={onChange} />}
 
       {(step.kind === "agent" || step.kind === "call") && <FanoutFields step={step} onChange={onChange} />}
 
@@ -572,10 +575,12 @@ function SchemaFields({
 function CycleFields({
   step,
   flow,
+  operators,
   onChange,
 }: {
   step: Step;
   flow: Flow;
+  operators: Operator[];
   onChange: (patch: Partial<Step>) => void;
 }) {
   const others = flow.steps.filter((one) => one.id !== step.id);
@@ -646,19 +651,265 @@ function CycleFields({
           </div>
           {cycle.when !== "failed" && (
             <div className="field" style={{ marginBottom: 0 }}>
-              <span>When the value holds</span>
-              <Json
-                value={cycle.when}
-                onChange={(value) => onChange({ cycle: { ...cycle, when: value as Record<string, unknown> } })}
-                rows={3}
+              <span>When the value of this step holds</span>
+              {/* A cycle reads the value of the step it sits on. See ADR 0016. */}
+              <MatchFields
+                match={cycle.when}
+                keys={keysOf(step)}
+                operators={operators}
+                onChange={(when) => onChange({ cycle: { ...cycle, when } })}
               />
-              <span className="note small">{MATCH}</span>
             </div>
           )}
         </div>
       )}
     </div>
   );
+}
+
+/**
+ * The condition of a step. It names a step that this step needs, and the match
+ * against the value of that step. `validate()` refuses a step that this one
+ * does not need, so the control offers only the steps it needs.
+ */
+function WhenFields({
+  flow,
+  step,
+  operators,
+  onChange,
+}: {
+  flow: Flow;
+  step: Step;
+  operators: Operator[];
+  onChange: (patch: Partial<Step>) => void;
+}) {
+  const when = record(step.when);
+  // A condition that reads no step is a field that does nothing, so it goes.
+  const write = (entries: Array<[string, unknown]>) =>
+    onChange({ when: entries.length > 0 ? (Object.fromEntries(entries) as Step["when"]) : undefined });
+
+  if (!when) {
+    return (
+      <div style={{ marginTop: 14 }}>
+        <Json value={step.when} onChange={(value) => onChange({ when: value as Step["when"] })} rows={4} />
+        <span className="note small">{KEPT}</span>
+      </div>
+    );
+  }
+
+  const entries = Object.entries(when);
+  const named = entries.map(([id]) => id);
+  const free = step.needs.filter((need) => !named.includes(need));
+
+  return (
+    <div style={{ marginTop: 14 }}>
+      {entries.map(([id, match], index) => (
+        <div key={id} className="field">
+          <span>When the value of</span>
+          {/* The step it reads now, and every step it needs and does not read yet. */}
+          <select
+            value={id}
+            onChange={(e) => write(entries.map((one, at) => (at === index ? [e.target.value, match] : one)))}
+          >
+            {[...(step.needs.includes(id) ? [] : [id]), ...step.needs.filter((need) => free.includes(need) || need === id)].map(
+              (need) => (
+                <option key={need}>{need}</option>
+              ),
+            )}
+          </select>
+          <div style={{ marginTop: 10 }}>
+            <MatchFields
+              match={match}
+              keys={keysOf(flow.steps.find((one) => one.id === id))}
+              operators={operators}
+              onChange={(next) => write(entries.map((one, at) => (at === index ? [id, next] : one)))}
+            />
+            <button className="quiet" onClick={() => write(entries.filter((_one, at) => at !== index))}>
+              Read no value of {id}
+            </button>
+          </div>
+        </div>
+      ))}
+      {free.length > 0 && (
+        <button className="quiet" onClick={() => write([...entries, [free[0] as string, {}]])}>
+          Read another step
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A match against one value: one row for each key it reads, the operator, and
+ * what it compares against. The daemon names the operators, so the page draws
+ * the list and holds no copy of it.
+ *
+ * A match that no row draws stays as JSON, in the way a contract does, so a
+ * person keeps what they wrote.
+ */
+function MatchFields({
+  match,
+  keys,
+  operators,
+  onChange,
+}: {
+  match: unknown;
+  keys?: string[];
+  operators: Operator[];
+  onChange: (match: Record<string, unknown>) => void;
+}) {
+  const [asJson, setAsJson] = useState(false);
+  const held = record(match);
+  const rows = held && Object.entries(held).map(([key, value]) => ({ key, held: operatorOf(value, operators) }));
+  const drawn = Boolean(rows?.every((row) => row.held && fits(row.held[0], row.held[1])));
+
+  // The daemon names the operators, so a page that waits for it draws no row.
+  const waiting = operators.length === 0;
+
+  if (!rows || !drawn || asJson) {
+    return (
+      <>
+        <Json value={match} onChange={(value) => onChange(value as Record<string, unknown>)} rows={3} />
+        <span className="note small">{drawn || waiting ? MATCH : KEPT}</span>
+        {drawn && !waiting && (
+          <button className="quiet" onClick={() => setAsJson(false)}>
+            Draw the rows
+          </button>
+        )}
+      </>
+    );
+  }
+
+  const entries = Object.entries(held);
+  const write = (next: Array<[string, unknown]>) => onChange(Object.fromEntries(next));
+  const free = (keys ?? []).filter((key) => !entries.some(([one]) => one === key));
+  const first = operators[0];
+
+  return (
+    <>
+      {rows.map((row, index) => {
+        const [operator, argument] = row.held as [Operator, unknown];
+        const at = (key: string, value: unknown) =>
+          write(entries.map((one, place) => (place === index ? [key, value] : one)));
+        return (
+          <div key={row.key} className="member">
+            {keys ? (
+              <select value={row.key} onChange={(e) => at(e.target.value, { [operator.name]: argument })}>
+                {[row.key, ...free].map((key) => (
+                  <option key={key}>{key}</option>
+                ))}
+              </select>
+            ) : (
+              <input value={row.key} onChange={(e) => at(e.target.value, { [operator.name]: argument })} />
+            )}
+            <select
+              value={operator.name}
+              onChange={(e) => {
+                const next = operators.find((one) => one.name === e.target.value) as Operator;
+                at(row.key, { [next.name]: takes(next, argument) });
+              }}
+            >
+              {operators.map((one) => (
+                <option key={one.name}>{one.name}</option>
+              ))}
+            </select>
+            <Argument
+              operator={operator}
+              argument={argument}
+              onChange={(value) => at(row.key, { [operator.name]: value })}
+            />
+            <button className="quiet" onClick={() => write(entries.filter((_one, place) => place !== index))}>
+              Remove
+            </button>
+          </div>
+        );
+      })}
+      {keys?.length === 0 && <em className="empty">the step it reads declares no key</em>}
+      {first && (keys === undefined || free.length > 0) && (
+        <button
+          className="quiet"
+          onClick={() => write([...entries, [free[0] ?? "", { [first.name]: takes(first, undefined) }]])}
+        >
+          Add a key
+        </button>
+      )}
+      <button className="quiet" onClick={() => setAsJson(true)}>
+        Write it as JSON
+      </button>
+      <span className="note small">{MATCH}</span>
+    </>
+  );
+}
+
+/** What the operator compares against: a boolean, a number, or the value itself. */
+function Argument({
+  operator,
+  argument,
+  onChange,
+}: {
+  operator: Operator;
+  argument: unknown;
+  onChange: (value: unknown) => void;
+}) {
+  if (operator.reads === "boolean") {
+    return (
+      <select value={String(argument)} onChange={(e) => onChange(e.target.value === "true")}>
+        <option value="true">true</option>
+        <option value="false">false</option>
+      </select>
+    );
+  }
+  if (operator.reads === "number") {
+    return <input type="number" value={String(argument)} onChange={(e) => onChange(Number(e.target.value))} />;
+  }
+  return <JsonLine value={argument} onChange={onChange} />;
+}
+
+/**
+ * One line of JSON, which keeps the text while a person types. A text that is
+ * not JSON is the word itself, because a person who types `high` means "high".
+ */
+function JsonLine({ value, onChange }: { value: unknown; onChange: (value: unknown) => void }) {
+  const [text, setText] = useState(() => JSON.stringify(value) ?? "");
+
+  return (
+    <input
+      value={text}
+      placeholder={`"high"`}
+      onChange={(e) => {
+        setText(e.target.value);
+        try {
+          onChange(JSON.parse(e.target.value));
+        } catch {
+          onChange(e.target.value);
+        }
+      }}
+    />
+  );
+}
+
+/** The keys a step declares, or nothing when it declares none and any key holds. */
+function keysOf(step?: Step): string[] | undefined {
+  const properties = step?.returns?.properties as Record<string, unknown> | undefined;
+  return properties && Object.keys(properties);
+}
+
+/** The value as a plain object, or nothing when it is not one. */
+function record(value: unknown): Record<string, unknown> | undefined {
+  const held = typeof value === "object" && value !== null && !Array.isArray(value);
+  return held ? (value as Record<string, unknown>) : undefined;
+}
+
+/** A row draws an operator whose value is what the operator reads. */
+function fits(operator: Operator, argument: unknown): boolean {
+  return operator.reads === "value" || typeof argument === operator.reads;
+}
+
+/** What a row holds when it changes operator, so the new one reads its value. */
+function takes(operator: Operator, argument: unknown): unknown {
+  if (operator.reads === "boolean") return typeof argument === "boolean" ? argument : true;
+  if (operator.reads === "number") return typeof argument === "number" ? argument : 0;
+  return argument ?? "";
 }
 
 function FanoutFields({ step, onChange }: { step: Step; onChange: (patch: Partial<Step>) => void }) {

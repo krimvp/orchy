@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { daemon } from "../src/daemon.ts";
+import { OPERATORS } from "../src/flow.ts";
 import { serve } from "../src/server.ts";
 import { KEPT, open, rowOf } from "../src/store.ts";
 import { formatFlow, parseFlow } from "../src/yaml.ts";
@@ -288,6 +289,28 @@ test("the editor writes a flow that the loader reads back the same", async () =>
 
     const again = (await site.call("/api/flows/1")).body as { flow: unknown };
     assert.deepEqual(again.flow, read.flow);
+  } finally {
+    await site.close();
+  }
+});
+
+test("the health answer names every operator that a match holds, and what each one reads", async () => {
+  const site = await running(project());
+  try {
+    const health = (await site.call("/api/health")).body as {
+      operators: Array<{ name: string; reads: string }>;
+    };
+
+    // The editor draws the list from here, so a copy in the page cannot fall behind.
+    assert.deepEqual(
+      health.operators.map((one) => one.name),
+      OPERATORS.map((one) => one.name),
+    );
+    // The page draws a control from `reads`, so every operator names one.
+    assert.deepEqual(
+      health.operators.map((one) => one.reads),
+      OPERATORS.map((one) => one.reads),
+    );
   } finally {
     await site.close();
   }

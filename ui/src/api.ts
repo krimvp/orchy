@@ -206,10 +206,33 @@ export interface Atif {
   final_metrics: Metrics & { total_steps: number };
 }
 
+/** One operator of a match, as the daemon names it. */
+export interface Operator {
+  name: string;
+  /** What the operator holds: the value itself, a boolean, or a number. */
+  reads: "value" | "boolean" | "number";
+}
+
 export interface Health {
   root: string;
   adapters: string[];
   tools: string[];
+  /** The operators a match holds. The page draws them, and holds no copy. */
+  operators: Operator[];
+}
+
+/**
+ * The one operator that a match names, or nothing when the match is a plain
+ * value or a shape that no operator holds. The daemon supplies the set, so the
+ * page states no rule about it.
+ */
+export function operatorOf(wanted: unknown, operators: Operator[]): [Operator, unknown] | undefined {
+  if (typeof wanted !== "object" || wanted === null || Array.isArray(wanted)) return undefined;
+  const entries = Object.entries(wanted as Record<string, unknown>);
+  const [first] = entries;
+  if (entries.length !== 1 || !first) return undefined;
+  const operator = operators.find((one) => one.name === first[0]);
+  return operator && [operator, first[1]];
 }
 
 export type RunEvent = { type: string; at: string } & Record<string, unknown>;

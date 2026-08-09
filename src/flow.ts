@@ -33,25 +33,38 @@ export type Match = Record<string, unknown>;
 /** A match against one value: the value itself, or one operator. See ADR 0016. */
 export type Matched<T> = T | { is: T } | { not: T } | { empty: boolean } | { lt: number } | { gt: number };
 
+/** One operator, and what it reads. `GET /api/health` gives this to the page. */
+export interface Operator {
+  name: string;
+  /** What the operator holds: the value itself, a boolean, or a number. */
+  reads: "value" | "boolean" | "number";
+  /** What the value it tests holds, when the operator tests only some values. */
+  over?: { types: string[]; words: string };
+}
+
 /**
  * What a match says about one value, beside the value itself. The set is
- * closed, so a dropdown draws it whole. `reads` names what the operator holds,
- * and `over` names what the value it tests holds.
+ * closed, so a dropdown draws it whole. The set belongs to the flow data, so it
+ * lives here, and the daemon serves it. A copy in the page falls behind.
  */
-const OPERATORS: Record<string, { reads?: "boolean" | "number"; over?: { types: string[]; words: string } }> = {
-  is: {},
-  not: {},
-  empty: { reads: "boolean", over: { types: ["array", "string", "object"], words: "a list, a string, or an object" } },
-  lt: { reads: "number", over: { types: ["number", "integer"], words: "a number" } },
-  gt: { reads: "number", over: { types: ["number", "integer"], words: "a number" } },
-};
+export const OPERATORS: Operator[] = [
+  { name: "is", reads: "value" },
+  { name: "not", reads: "value" },
+  {
+    name: "empty",
+    reads: "boolean",
+    over: { types: ["array", "string", "object"], words: "a list, a string, or an object" },
+  },
+  { name: "lt", reads: "number", over: { types: ["number", "integer"], words: "a number" } },
+  { name: "gt", reads: "number", over: { types: ["number", "integer"], words: "a number" } },
+];
 
 /** The one operator that a match names, or nothing when the match is a plain value. */
 export function operatorOf(wanted: unknown): [string, unknown] | undefined {
   if (!isSchema(wanted)) return undefined;
   const entries = Object.entries(wanted as Record<string, unknown>);
   const [first] = entries;
-  if (entries.length !== 1 || !first || !(first[0] in OPERATORS)) return undefined;
+  if (entries.length !== 1 || !first || !OPERATORS.some((one) => one.name === first[0])) return undefined;
   return first;
 }
 
@@ -921,19 +934,19 @@ function operatorProblems(key: string, wanted: unknown, at: string, declared: un
   if (!isSchema(wanted)) return [];
   const operator = operatorOf(wanted);
   if (!operator) {
-    const names = Object.keys(OPERATORS).join(", ");
+    const names = OPERATORS.map((one) => one.name).join(", ");
     return [
       `${at} with ${JSON.stringify(wanted)}, which is not one operator. Use one of: ${names}. Write { is: ... } to test the value itself.`,
     ];
   }
 
   const [name, argument] = operator;
-  const { reads, over } = OPERATORS[name] as { reads?: "boolean" | "number"; over?: { types: string[]; words: string } };
+  const { reads, over } = OPERATORS.find((one) => one.name === name) as Operator;
   const nested = operatorOf(argument);
-  if (!reads && nested) {
+  if (reads === "value" && nested) {
     return [`${at} with "${name}" over the operator "${nested[0]}". An operator reads a plain value, and none nests.`];
   }
-  if (reads && typeof argument !== reads) {
+  if (reads !== "value" && typeof argument !== reads) {
     return [`${at} with "${name}": ${JSON.stringify(argument)}. The operator "${name}" reads ${a(reads)}.`];
   }
   const type = (declared as { type?: string } | undefined)?.type;
