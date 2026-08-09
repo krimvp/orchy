@@ -756,3 +756,67 @@ test("a run refuses an unknown harness before it runs anything", async () => {
   );
   assert.equal(only.seen.length, 0);
 });
+
+// -- Steps that can run together do --
+
+test("steps whose needs are met run at the same time", async () => {
+  const cwd = workspace();
+  let started = 0;
+  let release = () => {};
+  const both = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  // Each call waits for the other. A runner that goes one at a time never frees it.
+  const paired: Harness = {
+    toTrajectory: () => undefined,
+    async run() {
+      started += 1;
+      if (started === 2) release();
+      await Promise.race([
+        both,
+        new Promise((_, reject) => setTimeout(() => reject(new Error("the steps did not run together")), 3000)),
+      ]);
+      return { value: { summary: "together" } };
+    },
+  };
+
+  const state = await run(
+    flow("wave", {
+      steps: [
+        agent({ id: "first", prompt: "step.md", tools: ["read"], returns: Summary }),
+        agent({ id: "second", prompt: "step.md", tools: ["read"], returns: Summary }),
+      ],
+    }),
+    { cwd, harness: paired },
+  );
+
+  assert.equal(state.status, "done");
+  assert.equal(started, 2);
+});
+
+test("a step still waits for the steps it needs", async () => {
+  const cwd = workspace();
+  const order: string[] = [];
+  const recording: Harness = {
+    toTrajectory: () => undefined,
+    async run(request) {
+      order.push(`start:${request.step}`);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      order.push(`end:${request.step}`);
+      return { value: { summary: request.step } };
+    },
+  };
+
+  await run(
+    flow("chain", {
+      steps: [
+        agent({ id: "a", prompt: "step.md", tools: ["read"], returns: Summary }),
+        agent({ id: "b", needs: ["a"], prompt: "step.md", tools: ["read"], returns: Summary }),
+      ],
+    }),
+    { cwd, harness: recording },
+  );
+
+  assert.deepEqual(order, ["start:a", "end:a", "start:b", "end:b"]);
+});

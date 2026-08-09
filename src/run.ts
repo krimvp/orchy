@@ -10,6 +10,7 @@ import {
   type CallStep,
   type Cycle,
   type Flow,
+  type GateStep,
   type Step,
   cycleOf,
   order,
@@ -61,8 +62,8 @@ export interface RunState {
   question?: string;
   steps: Record<string, StepRecord>;
   cycles: Record<string, number>;
-  /** The value that sent the run back, carried to the step it went back to. */
-  feedback?: { step: string; value: unknown };
+  /** The value that sent the run back, and the step it goes back to. */
+  feedback?: { step: string; to: string; value: unknown };
   /** Every step that a cycle dropped. A dropped attempt is still a cost. */
   history?: Array<{ step: string; record: StepRecord }>;
 }
@@ -144,46 +145,71 @@ async function execute(state: RunState, cwd: string, options: RunOptions): Promi
   save();
 
   const sorted = order(state.flow.steps);
+  const done = (id: string) => state.steps[id]?.status === "done";
 
   for (;;) {
-    const next = sorted.find((step) => state.steps[step.id]?.status !== "done");
-    if (!next) break;
+    // Every step whose needs have passed runs together. Invariant 3 still holds,
+    // because a step with an unfinished need is not in the wave.
+    const ready = sorted.filter((step) => !done(step.id) && step.needs.every(done));
+    if (ready.length === 0) break;
 
-    if (next.kind === "gate") {
-      return stop(state, next.id, next.question, close, emit);
+    const work = ready.filter((step) => step.kind !== "gate");
+    if (work.length === 0) {
+      const waiting = ready[0] as GateStep;
+      return stop(state, waiting.id, waiting.question, close, emit);
     }
 
-    emit({ type: "step_start", step: next.id });
-    const record = await runStep(next, state, cwd, harnessFor(next, harness, options.harnesses));
-    state.steps[next.id] = record;
-    emit({ type: "step_end", step: next.id, status: record.status });
+    const feedback = state.feedback;
+    state.feedback = undefined;
 
-    if (record.status === "failed") {
+    for (const step of work) emit({ type: "step_start", step: step.id });
+    const records = await Promise.all(
+      work.map(async (step) => {
+        const record = await runStep(step, state, cwd, harnessFor(step, harness, options.harnesses), feedback);
+        emit({ type: "step_end", step: step.id, status: record.status });
+        return record;
+      }),
+    );
+
+    work.forEach((step, index) => {
+      state.steps[step.id] = records[index] as StepRecord;
+    });
+
+    const broken = work.find((step) => state.steps[step.id]?.status === "failed");
+    if (broken) {
       state.status = "failed";
       close();
       emit({ type: "run_end", status: state.status });
       return state;
     }
 
-    const cycle = cycleOf(next);
-    if (cycle && !record.answeredByPerson && matches(cycle.when as Record<string, unknown>, record.value)) {
-      const key = `${next.id}->${cycle.to}`;
+    // One wave settles one cycle. A second would fight the first for the same steps.
+    const turning = work.find((step) => {
+      const cycle = cycleOf(step);
+      const record = state.steps[step.id] as StepRecord;
+      return cycle && !record.answeredByPerson && matches(cycle.when as Record<string, unknown>, record.value);
+    });
+
+    if (turning) {
+      const cycle = cycleOf(turning) as Cycle;
+      const record = state.steps[turning.id] as StepRecord;
+      const key = `${turning.id}->${cycle.to}`;
       const count = (state.cycles[key] ?? 0) + 1;
 
       if (count > cycle.limit) {
         // Invariant 4: the cycle stops here whatever the steps still think.
         if (cycle.policy === "escalate") {
-          state.history = [...(state.history ?? []), { step: next.id, record }];
-          delete state.steps[next.id];
-          return stop(state, next.id, questionFor(next, cycle), close, emit);
+          state.history = [...(state.history ?? []), { step: turning.id, record }];
+          delete state.steps[turning.id];
+          return stop(state, turning.id, questionFor(turning, cycle), close, emit);
         }
         record.disagreement = "accepted";
       } else {
         state.cycles[key] = count;
         // A cycle that drops the reason for it sends the step back blind.
-        state.feedback = { step: next.id, value: record.value };
+        state.feedback = { step: turning.id, to: cycle.to, value: record.value };
         goBackTo(cycle.to, state, sorted);
-        emit({ type: "cycle", step: next.id, to: cycle.to, count });
+        emit({ type: "cycle", step: turning.id, to: cycle.to, count });
       }
     }
 
@@ -243,12 +269,18 @@ function matches(when: Record<string, unknown>, value: unknown): boolean {
   return Object.entries(when).every(([key, wanted]) => isDeepStrictEqual(record[key], wanted));
 }
 
-async function runStep(step: Step, state: RunState, cwd: string, harness: Harness): Promise<StepRecord> {
+async function runStep(
+  step: Step,
+  state: RunState,
+  cwd: string,
+  harness: Harness,
+  feedback?: RunState["feedback"],
+): Promise<StepRecord> {
   const startedAt = new Date().toISOString();
   const at = () => ({ startedAt, endedAt: new Date().toISOString() });
   const inputs = Object.fromEntries(step.needs.map((need) => [need, state.steps[need]?.value]));
-  if (state.feedback) inputs[state.feedback.step] = state.feedback.value;
-  state.feedback = undefined;
+  // Only the step the cycle went back to hears why it went back.
+  if (feedback && feedback.to === step.id) inputs[feedback.step] = feedback.value;
 
   const before = take(state.flow.workspace, cwd);
 

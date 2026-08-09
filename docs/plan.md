@@ -117,6 +117,11 @@ The same stop serves the `escalate` policy. When a cycle reaches its limit,
 Orchy clears the value of the step and waits for a person to supply it. So one
 mechanism covers a declared gate and an escalation.
 
+**Wave** — every step whose needs have passed runs at the same time. Orchy runs
+a wave, settles it, and then works out the next one. So a panel of reviewers
+runs together, and invariant 3 still holds because a step with an unfinished
+need is not in the wave.
+
 **Cycle** — a step result can name an earlier step to return to. Orchy counts
 the returns on that edge and stops at the limit. There is no loop construct in
 the flow data.
@@ -241,7 +246,6 @@ Orchy does not ship these until a real flow needs them.
 
 - Retries and timeouts for a step.
 - A model choice for each step. Version 1 uses one model for the whole flow.
-- Parallel steps, and the step isolation that they need.
 - A remote sandbox workspace.
 - A second adapter, a server, a scheduler, and a graphical editor.
 
