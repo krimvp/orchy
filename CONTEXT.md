@@ -31,9 +31,15 @@ some components. A user writes the others.
 _Avoid_: Plugin, module, block, primitive
 
 **Gate**:
-A step that stops the run and waits for a person. The run continues when the
-person answers.
+A step that takes its value from a person, not from code. The run stops and
+waits.
 _Avoid_: Approval, checkpoint, pause, breakpoint
+
+**Workspace**:
+The place where a step acts, and the source of the record of what changed
+there. A code repository is one workspace. A task that changes nothing needs
+none.
+_Avoid_: Environment, sandbox, working directory, context
 
 **Cycle**:
 One pass through a group of steps that repeat, such as code and then review. A

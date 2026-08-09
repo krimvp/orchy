@@ -66,9 +66,10 @@ user adds a component as a TypeScript file that exports one function. Orchy
 loads it with the same loader that Pi uses, so a user writes TypeScript and does
 not compile it.
 
-**Gate** — a step that stops the run and waits for a person. A gate does not
-block a process. The run writes its state to disk and ends. A person answers,
-and `orchy resume` continues the run. See [ADR
+**Gate** — a step that takes its value from a person. A gate is not a component.
+It is a field on a step. The run writes its state to disk and ends. A person
+runs `orchy resume <run-id> --value '{"approved":true}'`, and Orchy checks that
+value against the same contract as any other step. See [ADR
 0005](./adr/0005-a-run-is-a-persisted-state-machine.md).
 
 **Cycle** — a group of steps that repeat, such as code and then review. A step
@@ -88,12 +89,20 @@ and records the disagreement.
 
 Orchy guarantees these rules. Orchy enforces each one, not a prompt.
 
-1. **Tools** — an agent step receives only the tools that it declares.
+1. **Tools** — an agent step calls only the tools that it declares. This is not
+   a sandbox. A step that declares `bash` can change any file and can call the
+   network. Orchy makes no claim about what a tool does after Orchy permits it.
 2. **Contract** — the value of a step must match the schema that the step
-   declares. Orchy checks the value after the step ends.
+   declares. Orchy checks the value after the step ends. A contract is a
+   TypeBox schema, which is also JSON Schema, so it stays inside the flow data.
 3. **Order** — a step starts only after every step that it needs passes.
 4. **Limit** — a cycle stops at its declared limit. A flow cannot run without
    end.
+
+A fifth invariant, **provenance**, is open. It records what a step changed
+outside its returned value, and it is the check that catches what rule 1 cannot.
+It must not assume a code repository, because Orchy must also run a task that
+touches no files.
 
 ## Measurement
 
@@ -131,7 +140,9 @@ Orchy does not ship these until a real flow needs them.
 
 ## Open questions
 
-Round 3 of the grilling covers: the TypeScript signatures, the schema library
-for a contract, whether Orchy records the file changes of a step, whether a step
-runs in an isolated copy of the repository, and the hole in invariant 1 that the
-`bash` tool opens.
+Round 4 of the grilling covers the workspace: what a workspace is, what it
+records, whether a flow has one by default, and whether Orchy proves the
+abstraction with a second flow that touches no code.
+
+It also covers how far the types go. A flow from a file or a graphical editor
+carries no types, so Orchy needs a validator whatever the API does.
