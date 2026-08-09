@@ -7,6 +7,8 @@ export interface AgentRequest {
   tools: string[];
   returns: TSchema;
   cwd: string;
+  /** A string that only this harness reads. Absent means the harness decides. */
+  model?: string;
 }
 
 export interface AgentResult {

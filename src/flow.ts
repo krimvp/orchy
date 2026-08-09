@@ -29,6 +29,10 @@ export interface AgentStep<S extends TSchema = TSchema> extends Common, Acts {
   kind: "agent";
   prompt: string;
   tools: ToolName[];
+  /** Names an adapter. The run supplies the default when a step names none. */
+  harness?: string;
+  /** A string that only the harness reads. Pi wants `provider/model`. */
+  model?: string;
   returns: S;
   cycle?: Cycle<S>;
 }

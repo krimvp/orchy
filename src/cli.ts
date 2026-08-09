@@ -62,11 +62,11 @@ const [command, first, second] = argv;
 
 try {
   if (command === "run" && first) {
-    finish(await run(await load(first), { onEvent: report, harness }));
+    finish(await run(await load(first), { onEvent: report, harness, harnesses: HARNESSES }));
   }
 
   if (command === "resume" && first && second) {
-    finish(await resume(first, JSON.parse(second), { onEvent: report, harness }));
+    finish(await resume(first, JSON.parse(second), { onEvent: report, harness, harnesses: HARNESSES }));
   }
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));

@@ -40,26 +40,33 @@ export interface Trajectory {
   final_metrics: Metrics & { total_steps: number };
 }
 
-export type ToTrajectory = (handle: string, trajectoryId: string, version: string) => Trajectory | undefined;
+export type ToTrajectory = (step: string, handle: string, trajectoryId: string, version: string) => Trajectory | undefined;
 
 export function toAtif(state: RunState, version: string, toTrajectory: ToTrajectory): Trajectory {
   const children: Trajectory[] = [];
   const steps: Step[] = [];
+  const spend: Metrics[] = [];
 
   for (const { step, record } of attempts(state)) {
     const child = record.trajectory
-      ? toTrajectory(record.trajectory, `${state.runId}:${steps.length + 1}:${step}`, version)
+      ? toTrajectory(step, record.trajectory, `${state.runId}:${steps.length + 1}:${step}`, version)
       : undefined;
     // A harness that keeps no cost in its trajectory reports it on the result.
     if (child && record.cost !== undefined) child.final_metrics.cost_usd = record.cost;
     if (child) children.push(child);
+
+    // A step with no trajectory still spent money, so its cost must still count.
+    const spent: Metrics = child
+      ? child.final_metrics
+      : { prompt_tokens: 0, completion_tokens: 0, cached_tokens: 0, cost_usd: record.cost ?? 0 };
+    spend.push(spent);
 
     steps.push({
       step_id: steps.length + 1,
       timestamp: record.endedAt,
       source: record.answeredByPerson ? "user" : "agent",
       message: `step "${step}" ended ${record.status}${record.error ? `: ${record.error}` : ""}`,
-      metrics: child?.final_metrics,
+      metrics: spent,
       subagent_trajectory_ref: child ? { trajectory_id: child.trajectory_id } : undefined,
       extra: {
         orchy: {
@@ -82,7 +89,7 @@ export function toAtif(state: RunState, version: string, toTrajectory: ToTraject
     agent: { name: `orchy/${state.flow.name}`, version, model_name: modelOf(children) },
     steps,
     subagent_trajectories: children,
-    final_metrics: { ...totalMetrics(children.map((child) => child.final_metrics)), total_steps: steps.length },
+    final_metrics: { ...totalMetrics(spend), total_steps: steps.length },
   };
 }
 

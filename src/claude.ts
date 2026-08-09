@@ -53,6 +53,7 @@ export const claude: Harness = {
       ...(tools.length > 0 ? tools : [""]),
       "--allowedTools",
       ...(tools.length > 0 ? tools : [""]),
+      ...(request.model ? ["--model", request.model] : []),
     ];
 
     const { stdout } = await run("claude", args, {

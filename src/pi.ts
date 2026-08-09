@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import {
   DefaultResourceLoader,
+  ModelRuntime,
   SessionManager,
   SettingsManager,
   createAgentSession,
@@ -35,6 +36,18 @@ export const pi: Harness = {
     const resourceLoader = new DefaultResourceLoader({ cwd: request.cwd, agentDir, settingsManager });
     await resourceLoader.reload();
 
+    // Pi needs both halves of the name, because two providers can serve one model.
+    const modelRuntime = await ModelRuntime.create();
+    let model: ReturnType<ModelRuntime["getModel"]>;
+    if (request.model) {
+      const cut = request.model.indexOf("/");
+      if (cut < 1) throw new Error(`pi wants a model named "provider/model", not "${request.model}"`);
+      const provider = request.model.slice(0, cut);
+      const id = request.model.slice(cut + 1);
+      model = modelRuntime.getModel(provider, id);
+      if (!model) throw new Error(`pi does not know the model "${request.model}"`);
+    }
+
     // Invariant 1: the step reaches the declared tools and nothing else.
     const sessionManager = SessionManager.create(request.cwd);
     const { session } = await createAgentSession({
@@ -44,6 +57,8 @@ export const pi: Harness = {
       sessionManager,
       settingsManager,
       resourceLoader,
+      modelRuntime,
+      model,
     });
 
     try {

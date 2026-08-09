@@ -39,6 +39,45 @@ both become `Glob`, because Claude has no separate list tool. So a step that
 declares `ls` gets `Glob`. The list still holds: a step reaches no tool that it
 did not declare.
 
+## A harness and a model for each step
+
+A step names the harness and the model it wants. A step that names neither uses
+the harness of the run and lets that harness choose its model.
+
+```yaml
+  - id: code
+    kind: agent
+    harness: claude
+    model: claude-opus-4-5
+```
+
+The `model` string means whatever the harness says it means. Claude takes a
+model name. Pi takes `provider/model`, because two providers can serve one
+model, for example `ollama/glm-5.2`.
+
+A run refuses a harness it does not have before it runs any step.
+
+### More than one reviewer
+
+A panel is a step for each reviewer and one step that counts the votes. Each
+reviewer names its own harness, model, and prompt. The rule for a disagreement
+is yours, so it lives in a `call` step, not in Orchy.
+
+```yaml
+  - { id: review-opus,   kind: agent, needs: [code], harness: claude, model: claude-opus-4-5,  prompt: prompts/review.md,        tools: [read], changes: false, returns: *verdict }
+  - { id: review-sonnet, kind: agent, needs: [code], harness: claude, model: claude-sonnet-5,  prompt: prompts/review-strict.md, tools: [read], changes: false, returns: *verdict }
+  - { id: review-glm,    kind: agent, needs: [code], harness: pi,     model: ollama/glm-5.2,   prompt: prompts/review.md,        tools: [read], changes: false, returns: *verdict }
+
+  - id: verdict
+    kind: call
+    needs: [review-opus, review-sonnet, review-glm]
+    module: verdict.ts
+    returns: *verdict
+    cycle: { to: code, when: { approved: false }, limit: 2, policy: escalate }
+```
+
+A YAML anchor such as `&verdict` and `*verdict` keeps one copy of a contract.
+
 ## Choose a model
 
 This section is for Pi.

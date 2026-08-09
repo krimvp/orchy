@@ -663,3 +663,96 @@ test("the Claude adapter reads a transcript into ATIF", () => {
 test("the Claude adapter answers nothing for a session it cannot find", () => {
   assert.equal(claude.toTrajectory("no-such-session", "run:1:a", "0.0.0"), undefined);
 });
+
+// -- A harness and a model for each step --
+
+test("each step reaches the harness it names, and the model goes with it", async () => {
+  const cwd = workspace();
+  const fast = fakeHarness({ summary: "from fast" });
+  const slow = fakeHarness({ approved: true });
+
+  const state = await run(
+    flow("mixed", {
+      steps: [
+        agent({ id: "code", harness: "fast", model: "claude-opus-4-5", prompt: "step.md", tools: ["write"], returns: Summary }),
+        agent({
+          id: "review",
+          needs: ["code"],
+          harness: "slow",
+          model: "ollama/glm-5.2",
+          prompt: "step.md",
+          tools: ["read"],
+          returns: Verdict,
+        }),
+      ],
+    }),
+    { cwd, harnesses: { fast, slow } },
+  );
+
+  assert.equal(state.status, "done");
+  assert.equal(fast.seen.length, 1);
+  assert.equal(slow.seen.length, 1);
+  assert.equal(fast.seen[0]?.model, "claude-opus-4-5");
+  assert.equal(slow.seen[0]?.model, "ollama/glm-5.2");
+});
+
+test("a step that names no harness uses the one the run supplies", async () => {
+  const cwd = workspace();
+  const fallback = fakeHarness({ summary: "default" });
+
+  await run(
+    flow("fallback", { steps: [agent({ id: "a", prompt: "step.md", tools: ["read"], returns: Summary })] }),
+    { cwd, harness: fallback, harnesses: { other: fakeHarness({ summary: "wrong" }) } },
+  );
+
+  assert.equal(fallback.seen.length, 1);
+  assert.equal(fallback.seen[0]?.model, undefined);
+});
+
+test("each trajectory is read by the harness of its own step", async () => {
+  const cwd = workspace();
+  const seen: string[] = [];
+  const spy = (name: string, value: unknown): Harness => ({
+    async run() {
+      return { value, trajectory: `${name}-handle`, cost: 1 };
+    },
+    toTrajectory(handle) {
+      seen.push(handle);
+      return undefined;
+    },
+  });
+
+  const state = await run(
+    flow("split", {
+      steps: [
+        agent({ id: "a", harness: "one", prompt: "step.md", tools: ["read"], returns: Summary }),
+        agent({ id: "b", needs: ["a"], harness: "two", prompt: "step.md", tools: ["read"], returns: Verdict }),
+      ],
+    }),
+    { cwd, harnesses: { one: spy("one", { summary: "x" }), two: spy("two", { approved: true }) } },
+  );
+
+  assert.equal(state.status, "done");
+  assert.deepEqual(seen.sort(), ["one-handle", "two-handle"]);
+
+  // A step with no trajectory still spent money, so the total must hold it.
+  const atif = JSON.parse(readFileSync(join(cwd, ".orchy", "runs", state.runId, "trajectory.json"), "utf8"));
+  assert.equal(atif.final_metrics.cost_usd, 2);
+});
+
+test("a run refuses an unknown harness before it runs anything", async () => {
+  const cwd = workspace();
+  const only = fakeHarness({ summary: "x" });
+
+  await assert.rejects(
+    () =>
+      run(
+        flow("ghost", {
+          steps: [agent({ id: "a", harness: "nope", prompt: "step.md", tools: ["read"], returns: Summary })],
+        }),
+        { cwd, harness: only, harnesses: { real: only } },
+      ),
+    /names the harness "nope"/,
+  );
+  assert.equal(only.seen.length, 0);
+});

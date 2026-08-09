@@ -76,13 +76,18 @@ export type RunEvent =
 
 export interface RunOptions {
   cwd?: string;
+  /** The harness for a step that names none. */
   harness?: Harness;
+  /** The adapters a step can name. */
+  harnesses?: Record<string, Harness>;
   onEvent?: (event: RunEvent) => void;
 }
 
 export async function run(flow: Flow, options: RunOptions = {}): Promise<RunState> {
   const problems = validate(flow);
   if (problems.length > 0) throw new Error(`the flow is not valid:\n- ${problems.join("\n- ")}`);
+
+  for (const step of flow.steps) harnessFor(step, options.harness ?? pi, options.harnesses);
 
   const cwd = resolve(options.cwd ?? process.cwd());
   const state: RunState = { runId: randomUUID(), flow, status: "running", steps: {}, cycles: {} };
@@ -125,9 +130,16 @@ async function execute(state: RunState, cwd: string, options: RunOptions): Promi
   // ADR 0005: the state on disk is the run. A gate and a crash recover the same way.
   const file = join(directoryOf(cwd, state.runId), "state.json");
   const save = () => writeFileSync(file, JSON.stringify(state, null, 2));
+  // Each step may use a different harness, so each trajectory is read by its own.
+  const convert = (id: string, handle: string, trajectoryId: string, at: string) => {
+    const step = state.flow.steps.find((candidate) => candidate.id === id);
+    if (!step) return undefined;
+    return harnessFor(step, harness, options.harnesses).toTrajectory(handle, trajectoryId, at);
+  };
   const close = () => {
     save();
-    writeFileSync(join(directoryOf(cwd, state.runId), "trajectory.json"), JSON.stringify(toAtif(state, version, (h, i, v) => harness.toTrajectory(h, i, v)), null, 2));
+    const file = join(directoryOf(cwd, state.runId), "trajectory.json");
+    writeFileSync(file, JSON.stringify(toAtif(state, version, convert), null, 2));
   };
   save();
 
@@ -142,7 +154,7 @@ async function execute(state: RunState, cwd: string, options: RunOptions): Promi
     }
 
     emit({ type: "step_start", step: next.id });
-    const record = await runStep(next, state, cwd, harness);
+    const record = await runStep(next, state, cwd, harnessFor(next, harness, options.harnesses));
     state.steps[next.id] = record;
     emit({ type: "step_end", step: next.id, status: record.status });
 
@@ -199,6 +211,13 @@ function stop(
   return state;
 }
 
+function harnessFor(step: Step, fallback: Harness, named?: Record<string, Harness>): Harness {
+  if (step.kind !== "agent" || !step.harness) return fallback;
+  const chosen = named?.[step.harness];
+  if (!chosen) throw new Error(`step "${step.id}" names the harness "${step.harness}", which this run does not have`);
+  return chosen;
+}
+
 function questionFor(step: Step, cycle: Cycle): string {
   return `Step "${step.id}" reached its limit of ${cycle.limit} cycles back to "${cycle.to}" and still disagrees. Supply the value for "${step.id}".`;
 }
@@ -243,6 +262,7 @@ async function runStep(step: Step, state: RunState, cwd: string, harness: Harnes
             tools: step.tools,
             returns: step.returns,
             cwd,
+            model: step.model,
           })
         : { value: await callModule(step as CallStep, inputs, cwd) };
   } catch (error) {
