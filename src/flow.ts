@@ -100,10 +100,25 @@ export interface Member {
   with?: Record<string, unknown>;
 }
 
+/**
+ * Where a fanout finds its list when a step computes it: the value of a step
+ * this step needs, and the key in that value that holds the list. Each item is
+ * one member: the item is the value of the member, and the `name` field of the
+ * item names it. The run expands this one, because the list arrives with the
+ * value. See ADR 0017.
+ */
+export interface Computed {
+  step: string;
+  key: string;
+}
+
+/** The members a file names, or where the run finds them. */
+export type Fanout = Member[] | Computed;
+
 export interface AgentStep<S extends TSchema = TSchema> extends Common, Acts {
   kind: "agent";
   /** Runs this step once for each member. Orchy expands it before the run. */
-  fanout?: Member[];
+  fanout?: Fanout;
   prompt: string;
   tools: ToolName[];
   /** Names an adapter. The flow, and then the run, supply the default. */
@@ -119,7 +134,7 @@ export interface AgentStep<S extends TSchema = TSchema> extends Common, Acts {
 export interface CallStep<S extends TSchema = TSchema> extends Common, Acts {
   kind: "call";
   /** Runs this step once for each member. Orchy expands it before the run. */
-  fanout?: Member[];
+  fanout?: Fanout;
   module: string;
   /** A value the step holds. The component takes it as its third argument. */
   with?: Record<string, unknown>;
@@ -261,6 +276,11 @@ function rename(steps: Step[], map: Map<string, string[]>): Step[] {
       const to = map.get(cycle.to);
       if (to) (next as AgentStep).cycle = { ...cycle, to: to[to.length - 1] as string };
     }
+    const from = computedOf(next);
+    if (from) {
+      const source = map.get(from.step);
+      if (source) (next as AgentStep).fanout = { ...from, step: source[source.length - 1] as string };
+    }
     return next;
   });
 }
@@ -268,15 +288,17 @@ function rename(steps: Step[], map: Map<string, string[]>): Step[] {
 /**
  * Turns one step into one step for each member. This happens before the run, so
  * the runner sees plain steps and a graphical editor draws the expanded graph.
+ * A computed fanout stays whole here, because its list arrives with the value of
+ * a step. The run calls this again for that one. See ADR 0017.
  */
 export function expandFanout(flow: Flow): Flow {
-  if (!flow.steps.some((step) => fanoutOf(step))) return flow;
+  if (!flow.steps.some((step) => membersOf(step))) return flow;
 
   const map = new Map<string, string[]>();
   const steps: Step[] = [];
 
   for (const step of flow.steps) {
-    const fanout = fanoutOf(step);
+    const fanout = membersOf(step);
     if (!fanout) {
       steps.push(step);
       continue;
@@ -299,8 +321,20 @@ export function expandFanout(flow: Flow): Flow {
   return { ...flow, steps: rename(steps, map) };
 }
 
-export function fanoutOf(step: Step): Member[] | undefined {
+export function fanoutOf(step: Step): Fanout | undefined {
   return step.kind === "agent" || step.kind === "call" ? step.fanout : undefined;
+}
+
+/** The members a file names, or nothing when a step computes the list. */
+export function membersOf(step: Step): Member[] | undefined {
+  const fanout = fanoutOf(step);
+  return Array.isArray(fanout) ? fanout : undefined;
+}
+
+/** Where the run finds the list, or nothing when the file names the members. */
+export function computedOf(step: Step): Computed | undefined {
+  const fanout = fanoutOf(step);
+  return fanout && !Array.isArray(fanout) ? fanout : undefined;
 }
 
 function pick(member: Member, keys: Array<keyof Member>): Partial<Member> {
@@ -350,9 +384,11 @@ export async function expandFlows(flow: Flow, load: (path: string) => Promise<Fl
       if (step.with && (moved.kind === "agent" || moved.kind === "call")) {
         moved.with = { ...step.with, ...moved.with };
       }
-      // A cycle inside a flow stays inside it.
+      // A cycle inside a flow stays inside it, and so does a computed fanout.
       const cycle = cycleOf(moved);
       if (cycle && own.has(cycle.to)) (moved as AgentStep).cycle = { ...cycle, to: id(cycle.to) };
+      const from = computedOf(moved);
+      if (from && own.has(from.step)) (moved as AgentStep).fanout = { ...from, step: id(from.step) };
       steps.push(moved);
     }
     // A cycle on the outer step belongs to the step the inner flow ends with.
@@ -392,6 +428,9 @@ const MEMBER_HOLDS: Record<"agent" | "call", string[]> = {
   agent: ["name", "harness", "model", "prompt", "tools", "with"],
   call: ["name", "module", "with"],
 };
+
+/** What a fanout holds when a step computes the list. See ADR 0017. */
+const FANOUT_HOLDS = ["step", "key"];
 
 const KINDS = Object.keys(HOLDS);
 
@@ -506,6 +545,7 @@ function memberProblems(step: Step): string[] {
       ? [`step "${step.id}" fans out, but only an agent step and a call step can`]
       : [];
   }
+  if (!Array.isArray(fanout)) return computedShape(step, fanout);
   const holds = MEMBER_HOLDS[step.kind as "agent" | "call"];
   const problems: string[] = [];
   for (const member of fanout) {
@@ -517,6 +557,23 @@ function memberProblems(step: Step): string[] {
       if (!holds.includes(key)) {
         problems.push(`member "${member.name}" of "${step.id}" holds "${key}", which ${a(step.kind)} step cannot act on`);
       }
+    }
+  }
+  return problems;
+}
+
+/** The shape of a fanout whose list a step computes. See ADR 0017. */
+function computedShape(step: Step, fanout: Computed): string[] {
+  const write = 'Write a list of members, or { step: <a step it needs>, key: <a list that step returns> }.';
+  if (!isSchema(fanout)) return [`step "${step.id}" fans out over ${JSON.stringify(fanout)}. ${write}`];
+
+  const held = fanout as unknown as Record<string, unknown>;
+  const problems = Object.keys(held)
+    .filter((key) => !FANOUT_HOLDS.includes(key))
+    .map((key) => `step "${step.id}" fans out over a value that holds "${key}", which is not a field of a fanout`);
+  for (const key of FANOUT_HOLDS) {
+    if (typeof held[key] !== "string" || held[key] === "") {
+      problems.push(`step "${step.id}" fans out over a value, and it names no "${key}". ${write}`);
     }
   }
   return problems;
@@ -561,21 +618,30 @@ export function validate(flow: Flow): string[] {
   // leaves no one value to check. A fanout at the end makes several ends.
   if (flow.returns !== undefined) {
     const exits = exitsOf(flow.steps);
+    // A computed fanout makes those ends during the run, so the check is here.
+    const spreading = exits.find((step) => computedOf(step));
     if (exits.length !== 1) {
       const names = exits.map((step) => `"${step.id}"`).join(", ");
       problems.push(
         `the flow returns one value, but it ends in ${exits.length} steps: ${names}. A flow that returns a value ends in one step.`,
       );
+    } else if (spreading) {
+      problems.push(
+        `the flow returns one value, but step "${spreading.id}" fans out over a list, so the run ends in one step for each item`,
+      );
     }
   }
 
   for (const step of flow.steps) {
-    const fanout = fanoutOf(step);
-    if (!fanout) continue;
-    if (fanout.length === 0) problems.push(`step "${step.id}" fans out to nothing`);
-    if (new Set(fanout.map((one) => one.name)).size !== fanout.length) {
-      problems.push(`step "${step.id}" has two members with one name`);
+    if (!fanoutOf(step)) continue;
+    const members = membersOf(step);
+    if (members) {
+      if (members.length === 0) problems.push(`step "${step.id}" fans out to nothing`);
+      if (new Set(members.map((one) => one.name)).size !== members.length) {
+        problems.push(`step "${step.id}" has two members with one name`);
+      }
     }
+    problems.push(...computedProblems(flow, step));
     if (cycleOf(step)) {
       problems.push(`step "${step.id}" both fans out and cycles, so which member cycles is unclear`);
     }
@@ -627,7 +693,7 @@ function toolProblems(flow: Flow, step: Step): string[] {
     step.kind === "agent"
       ? [{ who: `step "${step.id}"`, harness: harnessOf(flow, step), tools: step.tools }]
       : [];
-  for (const member of fanoutOf(step) ?? []) {
+  for (const member of membersOf(step) ?? []) {
     if (!member.tools) continue;
     const harness = member.harness ?? harnessOf(flow, step);
     wanted.push({ who: `member "${member.name}" of "${step.id}"`, harness, tools: member.tools });
@@ -643,6 +709,36 @@ function toolProblems(flow: Flow, step: Step): string[] {
       return [];
     });
   });
+}
+
+/**
+ * The run expands a computed fanout, so this checks everything a file can say
+ * about it: the step it reads, and the list that step declares. A source that
+ * declares no such list fails the check, and not the run. See ADR 0017.
+ */
+function computedProblems(flow: Flow, step: Step): string[] {
+  const from = computedOf(step);
+  if (!from) return [];
+  const at = `step "${step.id}" fans out over "${from.key}" of "${from.step}"`;
+  if (!step.needs.includes(from.step)) {
+    return [`${at}, but it does not need "${from.step}". Add "${from.step}" to "needs".`];
+  }
+
+  const other = flow.steps.find((one) => one.id === from.step) as GateStep | undefined;
+  if (other && fanoutOf(other)) {
+    return [`${at}, and "${from.step}" fans out as well, so it has no one value`];
+  }
+  const properties = other?.returns?.properties as Record<string, unknown> | undefined;
+  if (!properties) return [];
+
+  const declared = properties[from.key] as { type?: string; items?: { properties?: unknown } } | undefined;
+  if (!declared) return [`${at}, which "${from.step}" does not return`];
+  if (declared.type !== "array") return [`${at}, and "${from.key}" is not a list. A fanout runs once for each item.`];
+  const item = declared.items?.properties as Record<string, unknown> | undefined;
+  if (item && !("name" in item)) {
+    return [`${at}, and an item of "${from.key}" holds no "name". An item names the member it becomes.`];
+  }
+  return [];
 }
 
 /** A step runs when the value of every step it names matches. */

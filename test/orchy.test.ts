@@ -8,7 +8,7 @@ import { Type } from "@sinclair/typebox";
 import { type AgentStep, type CallStep, type Flow, type GateStep, agent, call, expandFanout, expandFlows, flow, gate, resolvePaths, validate } from "../src/flow.ts";
 import type { AgentRequest, AgentResult, Harness } from "../src/harness.ts";
 import { notesOf } from "../src/harness.ts";
-import { type RunEvent, resume, run } from "../src/run.ts";
+import { type RunEvent, type RunState, resume, run } from "../src/run.ts";
 import { tail } from "../src/tail.ts";
 import { claude } from "../src/claude.ts";
 import { pi } from "../src/pi.ts";
@@ -2636,6 +2636,183 @@ test("a file keeps a gate that cycles, and a match that holds an operator", () =
     "    question: is it right?",
     "    returns: { type: object, properties: { approved: { type: boolean } } }",
     "    cycle: { to: code, when: { approved: { not: true } }, limit: 2, policy: accept }",
+  ].join("\n");
+
+  const parsed = parseFlow(text);
+  assert.deepEqual(validate(parsed), []);
+  assert.deepEqual(parseFlow(formatFlow(parsed)), parsed);
+});
+
+// ── A fanout over a value the run computes ───────────────────────────────────
+
+const Found = Type.Object({
+  packages: Type.Array(Type.Object({ name: Type.String(), version: Type.Optional(Type.String()) })),
+});
+
+/** A step that finds a list, and a step that runs once for each item of it. */
+function auditFlow(): Flow {
+  return flow("audit", {
+    steps: [
+      call({ id: "find", module: "find.ts", returns: Found }),
+      call({
+        id: "audit",
+        needs: ["find"],
+        module: "audit.ts",
+        returns: Summary,
+        fanout: { step: "find", key: "packages" },
+      }),
+      call({ id: "sum", needs: ["audit"], module: "sum.ts", returns: Summary }),
+    ],
+  });
+}
+
+function auditWorkspace(found: string): string {
+  const cwd = workspace();
+  writeFileSync(join(cwd, "find.ts"), `export default () => (${found});`);
+  writeFileSync(join(cwd, "audit.ts"), "export default (inputs, say, held) => ({ summary: held.name });");
+  writeFileSync(join(cwd, "sum.ts"), "export default (inputs) => ({ summary: Object.keys(inputs).join(',') });");
+  return cwd;
+}
+
+test("a fanout over a list a step computes runs once for each item", async () => {
+  const cwd = auditWorkspace('{ packages: [{ name: "core" }, { name: "cli" }, { name: "api" }] }');
+
+  const state = await run(auditFlow(), { cwd });
+
+  assert.equal(state.status, "done");
+  assert.deepEqual(Object.keys(state.steps), ["find", "audit/core", "audit/cli", "audit/api", "sum"]);
+  assert.deepEqual(state.steps["audit/cli"]?.value, { summary: "cli" });
+});
+
+test("a step that needs a computed fanout waits for every item of it", async () => {
+  const cwd = auditWorkspace('{ packages: [{ name: "core" }, { name: "cli" }] }');
+
+  const state = await run(auditFlow(), { cwd });
+
+  assert.deepEqual(state.steps.sum?.value, { summary: "audit/core,audit/cli" });
+});
+
+test("the steps a computed fanout makes reach the state on disk", async () => {
+  const cwd = auditWorkspace('{ packages: [{ name: "core", version: "1.2" }] }');
+
+  const state = await run(auditFlow(), { cwd });
+
+  // ADR 0005: the state on disk is the run, so a crash recovers the same steps.
+  const onDisk = JSON.parse(readFileSync(join(cwd, ".orchy", "runs", state.runId, "state.json"), "utf8")) as RunState;
+  assert.deepEqual(
+    onDisk.flow.steps.map((step) => step.id),
+    ["find", "audit/core", "sum"],
+  );
+  const audit = onDisk.flow.steps[1] as CallStep;
+  // The item is the value of the member, and no fanout is left to expand twice.
+  assert.deepEqual(audit.with, { name: "core", version: "1.2" });
+  assert.equal(audit.fanout, undefined);
+});
+
+test("a run fails when an item of a computed list carries no name", async () => {
+  const cwd = auditWorkspace('{ packages: ["core", "cli"] }');
+  const loose = auditFlow();
+  loose.steps[0] = call({ id: "find", module: "find.ts", returns: Type.Object({ packages: Type.Array(Type.Any()) }) });
+
+  const state = await run(loose, { cwd });
+
+  assert.equal(state.status, "failed");
+  assert.match(state.steps.audit?.error ?? "", /step "audit" fans out over "packages" of "find"/);
+  assert.match(state.steps.audit?.error ?? "", /holds no "name"/);
+});
+
+test("a run fails when two items of a computed list use one name", async () => {
+  const cwd = auditWorkspace('{ packages: [{ name: "core" }, { name: "core" }] }');
+
+  const state = await run(auditFlow(), { cwd });
+
+  assert.equal(state.status, "failed");
+  assert.match(state.steps.audit?.error ?? "", /two items use the name "core"/);
+});
+
+test("a computed fanout over an empty list skips the step, and the steps that need it", async () => {
+  const cwd = auditWorkspace("{ packages: [] }");
+
+  const state = await run(auditFlow(), { cwd });
+
+  assert.equal(state.status, "done");
+  assert.equal(state.steps.audit?.status, "skipped");
+  assert.match(state.steps.audit?.skipped ?? "", /"find" returned no "packages"/);
+  assert.equal(state.steps.sum?.status, "skipped");
+});
+
+test("validate refuses a computed fanout over a step it does not need", () => {
+  const wrong = auditFlow();
+  (wrong.steps[1] as CallStep).needs = [];
+  (wrong.steps[2] as CallStep).needs = ["find"];
+
+  const problems = validate(wrong);
+
+  assert.ok(problems.some((p) => p.includes('but it does not need "find"')));
+});
+
+test("validate refuses a computed fanout over a key the step it reads does not return as a list", () => {
+  const missing = auditFlow();
+  (missing.steps[1] as CallStep).fanout = { step: "find", key: "modules" };
+  const flat = auditFlow();
+  (flat.steps[0] as CallStep).returns = Type.Object({ packages: Type.String() });
+
+  assert.ok(validate(missing).some((p) => p.includes('which "find" does not return')));
+  assert.ok(validate(flat).some((p) => p.includes('"packages" is not a list')));
+});
+
+test("validate refuses a computed fanout whose items name no member", () => {
+  const nameless = auditFlow();
+  (nameless.steps[0] as CallStep).returns = Type.Object({
+    packages: Type.Array(Type.Object({ path: Type.String() })),
+  });
+
+  const problems = validate(nameless);
+
+  assert.ok(problems.some((p) => p.includes('holds no "name"')));
+});
+
+test("validate refuses a computed fanout that also cycles", () => {
+  const both = auditFlow();
+  (both.steps[1] as CallStep).cycle = { to: "find", when: { summary: "again" }, limit: 2, policy: "accept" };
+
+  assert.ok(validate(both).some((p) => p.includes("both fans out and cycles")));
+});
+
+test("validate refuses a field of a computed fanout that nothing reads", () => {
+  const extra = auditFlow();
+  (extra.steps[1] as CallStep).fanout = { step: "find", key: "packages", name: "package" } as never;
+
+  const problems = validate(extra);
+
+  assert.ok(problems.some((p) => p.includes('holds "name", which is not a field of a fanout')));
+});
+
+test("validate refuses a flow that returns a value and ends in a computed fanout", () => {
+  const ending = flow("audit", {
+    returns: Summary,
+    steps: auditFlow().steps.slice(0, 2),
+  });
+
+  const problems = validate(ending);
+
+  assert.ok(problems.some((p) => p.includes("fans out over a list, so the run ends in one step for each item")));
+});
+
+test("a file keeps a computed fanout, so the editor writes it back unharmed", () => {
+  const text = [
+    "name: audit",
+    "steps:",
+    "  - id: find",
+    "    kind: call",
+    "    module: find.ts",
+    "    returns: { type: object }",
+    "  - id: audit",
+    "    kind: call",
+    "    needs: [find]",
+    "    module: audit.ts",
+    "    returns: { type: object }",
+    "    fanout: { step: find, key: packages }",
   ].join("\n");
 
   const parsed = parseFlow(text);

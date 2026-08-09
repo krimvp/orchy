@@ -2,9 +2,11 @@ export {
   WAVE,
   agent,
   call,
+  computedOf,
   cycleOf,
   expandFanout,
   fanoutOf,
+  membersOf,
   expandFlows,
   flow,
   gate,
@@ -16,7 +18,21 @@ export {
 } from "./flow.ts";
 export { changed, take } from "./workspace.ts";
 export type { Snapshot, Workspace } from "./workspace.ts";
-export type { AgentStep, CallStep, Changes, Cycle, Flow, FlowStep, GateStep, Match, Member, Step, When } from "./flow.ts";
+export type {
+  AgentStep,
+  CallStep,
+  Changes,
+  Computed,
+  Cycle,
+  Fanout,
+  Flow,
+  FlowStep,
+  GateStep,
+  Match,
+  Member,
+  Step,
+  When,
+} from "./flow.ts";
 export { read, resume, run } from "./run.ts";
 export { formatFlow, parseFlow } from "./yaml.ts";
 export { loadFlow, readFlow } from "./load.ts";

@@ -8,12 +8,15 @@ import {
   type AgentStep,
   type CallStep,
   type Changes,
+  type Computed,
   type Cycle,
   type Flow,
   type GateStep,
   type Match,
+  type Member,
   type Step,
   WAVE,
+  computedOf,
   cycleOf,
   exitsOf,
   expandFanout,
@@ -199,7 +202,7 @@ async function execute(state: RunState, cwd: string, options: RunOptions, answer
   save();
   emit({ type: "run_start", runId: state.runId });
 
-  const sorted = order(state.flow.steps);
+  let sorted = order(state.flow.steps);
   const done = (id: string) => state.steps[id]?.status === "done";
   // A skipped step never passes, so a step that needs it never starts either.
   const settled = (id: string) => done(id) || state.steps[id]?.status === "skipped";
@@ -226,6 +229,29 @@ async function execute(state: RunState, cwd: string, options: RunOptions, answer
         state.steps[step.id] = { status: "skipped", startedAt: now, endedAt: now, skipped: why };
         emit({ type: "skip", step: step.id, why: why as string });
       }
+      save();
+      continue;
+    }
+
+    // A computed fanout has no list until the step it reads gives one, so the
+    // run expands it here, and no earlier. It is the one expansion the runner
+    // performs. See ADR 0017.
+    const computed = ready.filter((step) => computedOf(step));
+    if (computed.length > 0) {
+      for (const step of computed) {
+        const problem = spread(state, step);
+        if (!problem) continue;
+        const now = new Date().toISOString();
+        emit({ type: "step_start", step: step.id });
+        state.steps[step.id] = { status: "failed", startedAt: now, endedAt: now, error: problem };
+        emit({ type: "step_end", step: step.id, status: "failed" });
+        state.status = "failed";
+        close();
+        emit({ type: "run_end", status: state.status });
+        return state;
+      }
+      // The expansion made new steps, so the order of the run holds them now.
+      sorted = order(state.flow.steps);
       save();
       continue;
     }
@@ -384,13 +410,58 @@ function harnessFor(flow: Flow, step: Step, fallback: Harness, named?: Record<st
 function skipOf(step: Step, state: RunState): string | undefined {
   const gone = step.needs.filter((need) => state.steps[need]?.status === "skipped");
   if (gone.length > 0) return `it needs "${gone[0]}", which the run skipped`;
-  if (step.kind === "flow" || !step.when) return undefined;
 
+  // A step that fans out over an empty list runs for nothing, so it does not
+  // run at all. Every step that needs it is skipped by the rule above.
+  const from = computedOf(step);
+  const list = from && listOf(state, from);
+  if (Array.isArray(list) && list.length === 0) return `"${from?.step}" returned no "${from?.key}" to fan out over`;
+
+  if (step.kind === "flow" || !step.when) return undefined;
   for (const [id, wanted] of Object.entries(step.when)) {
     if (!matches(wanted, state.steps[id]?.value)) {
       return `"${id}" does not say ${JSON.stringify(wanted)}`;
     }
   }
+  return undefined;
+}
+
+/** The list a computed fanout reads, which is a list only when the step gave one. */
+function listOf(state: RunState, from: Computed): unknown {
+  const value = state.steps[from.step]?.value as Record<string, unknown> | undefined;
+  return value?.[from.key];
+}
+
+/**
+ * Turns a computed fanout into one step for each item of the list, in the run
+ * state. The list arrives with the value of a step, so this expansion happens
+ * during the run. It calls the expansion that a file already uses, because two
+ * expansions drift apart. Answers why it cannot expand, or nothing. See ADR 0017.
+ */
+function spread(state: RunState, step: Step): string | undefined {
+  const from = computedOf(step) as Computed;
+  const at = `step "${step.id}" fans out over "${from.key}" of "${from.step}"`;
+  const list = listOf(state, from);
+  if (!Array.isArray(list)) {
+    return `${at}, and "${from.step}" gave ${JSON.stringify(list)}. A fanout reads a list.`;
+  }
+
+  const members: Member[] = [];
+  for (const item of list) {
+    const name = (item as { name?: unknown } | null)?.name;
+    if (typeof name !== "string" || name === "") {
+      return `${at}, and the item ${JSON.stringify(item)} holds no "name". An item names the member it becomes.`;
+    }
+    if (members.some((one) => one.name === name)) {
+      return `${at}, and two items use the name "${name}". Each item needs a name of its own.`;
+    }
+    members.push({ name, with: item as Record<string, unknown> });
+  }
+
+  const steps = state.flow.steps.map((one) => (one.id === step.id ? ({ ...one, fanout: members } as Step) : one));
+  // ADR 0005: the state on disk is the run, so the expanded steps live there and
+  // a crash recovers them. The step is gone, so nothing expands it a second time.
+  state.flow = expandFanout({ ...state.flow, steps });
   return undefined;
 }
 

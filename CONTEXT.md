@@ -71,12 +71,14 @@ _Avoid_: Guarantee, claim, permission, scope
 
 **Fanout**:
 One step that runs once for each member of a list. Orchy turns it into one step
-for each member before the run.
+for each member before the run. A fanout over a list that a step computes waits
+for that value, and the run expands it.
 _Avoid_: Matrix, spread, parallel, map
 
 **Member**:
 One entry of a fanout. It names itself, holds the value that is its own, and
-overrides only what differs from the step.
+overrides only what differs from the step. One item of a computed list is one
+member: the item is the value, and the `name` field of the item names it.
 _Avoid_: Variant, instance, replica
 
 **Wave**:
