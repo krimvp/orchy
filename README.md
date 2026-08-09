@@ -30,7 +30,7 @@ steps:
     prompt: prompts/review.md
     tools: [read, grep]
     changes: false
-    returns: &verdict
+    returns:
       type: object
       required: [approved, findings]
       properties:
@@ -42,6 +42,10 @@ steps:
 ```bash
 orchy run flow.yaml
 ```
+
+One model writes the code. A different model on a different harness reviews it,
+reaches no tool that can change a file, and sends the work back until it
+approves or a person takes over.
 
 ## What Orchy guarantees
 
@@ -57,8 +61,74 @@ A prompt asks. Orchy enforces.
    step that declares `changes: false` fails when anything moved. This catches
    what `bash` does behind rule 1.
 
-`validate()` refuses a promise that no workspace can check, so a rule never
-looks enforced when it is not.
+`validate()` refuses a promise that no workspace can check, and refuses a tool
+that no harness has. A rule never looks enforced when it is not.
+
+## Compose a flow
+
+- **A step** runs an agent, a module of your own, or waits for a person.
+- **A harness and a model for each step.** Code with one model, review with
+  three others.
+- **A fanout** runs one step once for each member, so a panel of reviewers is
+  one block of YAML.
+- **A flow inside a flow** reuses a whole flow as one step, and carries a cycle
+  of its own.
+- **A wave** runs every step whose needs have passed at the same time, eight at
+  once unless the flow says otherwise.
+- **A gate** stops the run and waits for a person. The run persists, the
+  process ends, and `orchy resume` continues it. So a flow works in CI.
+
+## Examples
+
+Seven flows in [examples](./examples). A test checks every one of them, so a
+broken example fails the build.
+
+| Flow | What it shows |
+| --- | --- |
+| [code-review](./examples/code-review) | a cycle, written twice: as `flow.ts` and as `flow.yaml` |
+| [research](./examples/research) | the web, three readers at once, and a check that reads the sources again |
+| [triage](./examples/triage) | a gate that overrides the agent, and no workspace at all |
+| [docs-audit](./examples/docs-audit) | `changes: false` on every step, proved by the workspace |
+| [release-notes](./examples/release-notes) | a deterministic step reads git, so no model spends tokens on it |
+| [decision](./examples/decision) | three fixed stances argue, then a person chooses |
+| [grilling](./examples/grilling) | a gate that asks a person a round of questions, over and over |
+
+## Harnesses
+
+Orchy drives a harness, and does not replace one.
+
+| Harness | How | Model |
+| --- | --- | --- |
+| `pi` | the [Pi](https://pi.dev) SDK | `provider/model`, such as `ollama/glm-5.2` |
+| `claude` | the `claude` command | a model name, such as `claude-opus-4-5` |
+
+A tool has one name in Orchy and another in each harness.
+
+| Orchy | Pi | Claude |
+| --- | --- | --- |
+| `read` `write` `edit` `bash` `grep` | the same names | `Read` `Write` `Edit` `Bash` `Grep` |
+| `find` `ls` | `find` `ls` | `Glob` |
+| `web` | none, and Pi says so | `WebSearch` `WebFetch` |
+
+A harness refuses a tool it cannot supply. It never drops one in silence.
+
+Adding a third harness costs one adapter with two methods. The runner, the flow
+data, and the five invariants took no edit when the second one arrived.
+
+## Commands
+
+```bash
+orchy run flow.yaml                        # or flow.ts
+orchy run flow.yaml --harness claude       # pi is the default
+orchy resume <run id> '{"approved":true}'  # answer a gate
+```
+
+The command prints the events to the error stream and the run state to the
+output stream. It ends with 0 when the run finishes or waits, and 1 when the
+run fails.
+
+A `prompt` path is relative to the flow file. The working directory is where
+the steps act, so run the command from the directory you want them to work in.
 
 ## What you get from a run
 
@@ -73,29 +143,26 @@ every step, including the runs a cycle threw away. ATIF is a standard format,
 so a tool that already reads it turns the file into OpenTelemetry spans. Orchy
 ships no dashboard.
 
-## Compose a flow
+```bash
+jq .final_metrics .orchy/runs/<run id>/trajectory.json
+```
 
-- **A step** runs an agent, a module of your own, or waits for a person.
-- **A harness and a model for each step.** Code with one model, review with
-  three others.
-- **A fanout** runs one step once for each member, so a panel of reviewers is
-  one block of YAML.
-- **A flow inside a flow** reuses a whole flow as one step.
-- **A wave** runs every step whose needs have passed at the same time.
-- **A gate** stops the run and waits for a person. The run persists, the
-  process ends, and `orchy resume` continues it. So a flow works in CI.
+## How it works
 
-## Harnesses
+```
+TypeScript API ─┐
+YAML file ──────┼──▶ Flow (data) ──▶ expand ──▶ validate ──▶ waves ──▶ record
+Graphical editor┘
+```
 
-Orchy drives a harness, and does not replace one.
+A flow is data, not code. So the API, a file, and one day a graphical editor
+all produce the same flow.
 
-| Harness | How | Model |
-| --- | --- | --- |
-| `pi` | the [Pi](https://pi.dev) SDK | `provider/model`, such as `ollama/glm-5.2` |
-| `claude` | the `claude` command | a model name, such as `claude-opus-4-5` |
+A fanout and a flow step are expansions. They become plain steps before the
+run, so the runner knows neither and an editor draws one flat graph.
 
-Adding a third costs one adapter with two methods. The runner, the flow data,
-and the five invariants took no edit when the second one arrived.
+A run is a state machine on disk. It writes its state after every step, so a
+gate and a crash recover the same way.
 
 ## Install
 
@@ -122,24 +189,45 @@ import { Type } from "@sinclair/typebox";
 
 const state = await run(
   flow("code-and-review", {
-    steps: [agent({ id: "code", prompt: "prompts/code.md", tools: ["edit"], returns: Type.Object({ summary: Type.String() }) })],
+    steps: [
+      agent({
+        id: "code",
+        prompt: "prompts/code.md",
+        tools: ["edit"],
+        returns: Type.Object({ summary: Type.String() }),
+      }),
+    ],
   }),
 );
 ```
 
+`agent()` is generic over its contract, so TypeScript catches a `cycle.when`
+key that the step never returns.
+
+## State
+
+Early, and honest about it.
+
+**Run against a real model:** both harnesses, a cycle that carries its reason
+back, a gate and `orchy resume`, an escalation to a person, a panel of three
+models at once, a flow inside a flow, and a workspace that proves what changed.
+
+**Covered by tests only:** the `none` workspace, and the `docs-audit`,
+`release-notes`, and `decision` examples.
+
+**Not built:** a graphical editor, live agent output for one, an OpenTelemetry
+exporter, a third harness, and a sandbox. Invariant 1 names that last gap
+rather than hiding it.
+
+The API can still change, and the name on npm belongs to another package.
+
 ## Read next
 
-- [docs/running.md](./docs/running.md) — run a flow, choose a harness and a
-  model, answer a gate.
+- [docs/running.md](./docs/running.md) — choose a harness and a model, answer a
+  gate, pace the work.
 - [docs/plan.md](./docs/plan.md) — the design and the milestones.
 - [docs/adr](./docs/adr) — every decision that is hard to reverse, and why.
 - [CONTEXT.md](./CONTEXT.md) — the words this project uses.
 - [AGENTS.md](./AGENTS.md) — how to work in this repository.
-- [examples](./examples) — seven flows, from code review to research.
-
-## State
-
-Early. The design is settled and both harnesses run real flows. The API can
-still change, and the name on npm belongs to another package.
 
 MIT.
