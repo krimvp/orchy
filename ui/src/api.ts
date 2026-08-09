@@ -9,19 +9,26 @@ export interface Member {
   prompt?: string;
   tools?: string[];
   module?: string;
+  with?: Record<string, unknown>;
 }
 
 export interface Cycle {
   to: string;
-  when: Record<string, unknown>;
+  /** A match against the value of the step, or the word `failed`. */
+  when: Record<string, unknown> | "failed";
   limit: number;
   policy: "escalate" | "accept";
 }
+
+/** What a step promises to change in the workspace. */
+export type Changes = "nothing" | { paths: string[] };
 
 export interface Step {
   id: string;
   kind: "agent" | "call" | "gate" | "flow";
   needs: string[];
+  /** Runs the step only when the value of each step named here matches. */
+  when?: Record<string, Record<string, unknown>>;
   prompt?: string;
   module?: string;
   question?: string;
@@ -29,7 +36,8 @@ export interface Step {
   tools?: string[];
   harness?: string;
   model?: string;
-  changes?: false;
+  with?: Record<string, unknown>;
+  changes?: Changes;
   returns?: Schema;
   cycle?: Cycle;
   fanout?: Member[];
@@ -40,6 +48,9 @@ export type Workspace = { kind: "none" } | { kind: "git"; path: string };
 export interface Flow {
   name: string;
   workspace?: Workspace;
+  /** The harness and the model for a step that names neither. */
+  harness?: string;
+  model?: string;
   parallel?: number;
   steps: Step[];
 }
@@ -75,7 +86,7 @@ export interface Ticket {
 }
 
 export interface StepRecord {
-  status: "done" | "failed";
+  status: "done" | "failed" | "skipped";
   startedAt: string;
   endedAt: string;
   value?: unknown;
@@ -83,6 +94,8 @@ export interface StepRecord {
   trajectory?: string;
   answeredByPerson?: boolean;
   disagreement?: "accepted";
+  /** Why a condition ruled the step out. */
+  skipped?: string;
   changed?: string[];
   cost?: number;
 }

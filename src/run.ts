@@ -8,13 +8,17 @@ import { Ajv2020 } from "ajv/dist/2020.js";
 import {
   type AgentStep,
   type CallStep,
+  type Changes,
   type Cycle,
   type Flow,
   type GateStep,
+  type Match,
   type Step,
   WAVE,
   cycleOf,
   expandFanout,
+  harnessOf,
+  modelOf,
   order,
   validate,
 } from "./flow.ts";
@@ -40,7 +44,8 @@ function contractProblem(step: Step, value: unknown): string | undefined {
 }
 
 export interface StepRecord {
-  status: "done" | "failed";
+  /** A condition ruled a skipped step out, or a step it needs was skipped. */
+  status: "done" | "failed" | "skipped";
   startedAt: string;
   endedAt: string;
   value?: unknown;
@@ -50,6 +55,8 @@ export interface StepRecord {
   answeredByPerson?: boolean;
   /** The cycle reached its limit and the policy accepted the disagreement. */
   disagreement?: "accepted";
+  /** Why a condition ruled the step out, so a reader needs no second look. */
+  skipped?: string;
   /** Invariant 5: what the step changed in the workspace. */
   changed?: string[];
   /** The cost of the step, when the trajectory of the harness does not hold it. */
@@ -78,6 +85,8 @@ export type RunEvent =
   /** What a step reports while it works. The trajectory holds the whole of it. */
   | { type: "output"; step: string; kind: Note["kind"]; text: string }
   | { type: "step_end"; step: string; status: "done" | "failed" }
+  /** A condition ruled the step out. It never starts, so it never ends. */
+  | { type: "skip"; step: string; why: string }
   | { type: "cycle"; step: string; to: string; count: number }
   | { type: "waiting"; step: string; question: string }
   | { type: "run_end"; status: RunState["status"] };
@@ -92,15 +101,16 @@ export interface RunOptions {
 }
 
 export async function run(input: Flow, options: RunOptions = {}): Promise<RunState> {
+  // The members go before the expansion does, so check the flow a user wrote first.
+  refuse(validate(input));
   const flow = expandFanout(input);
   // A sub-flow needs a file, so only the loader can expand one. Say so plainly.
   const nested = flow.steps.find((step) => step.kind === "flow");
   if (nested) throw new Error(`step "${nested.id}" holds a flow, and only loading a file expands one`);
 
-  const problems = validate(flow);
-  if (problems.length > 0) throw new Error(`the flow is not valid:\n- ${problems.join("\n- ")}`);
+  refuse(validate(flow));
 
-  for (const step of flow.steps) harnessFor(step, options.harness ?? pi, options.harnesses);
+  for (const step of flow.steps) harnessFor(flow, step, options.harness ?? pi, options.harnesses);
 
   const cwd = resolve(options.cwd ?? process.cwd());
   const state: RunState = { runId: randomUUID(), flow, status: "running", steps: {}, cycles: {} };
@@ -129,6 +139,10 @@ export async function resume(runId: string, value: unknown, options: RunOptions 
   return execute(state, cwd, options);
 }
 
+function refuse(problems: string[]): void {
+  if (problems.length > 0) throw new Error(`the flow is not valid:\n- ${problems.join("\n- ")}`);
+}
+
 export function read(cwd: string, runId: string): RunState {
   return JSON.parse(readFileSync(join(directoryOf(resolve(cwd), runId), "state.json"), "utf8")) as RunState;
 }
@@ -147,7 +161,7 @@ async function execute(state: RunState, cwd: string, options: RunOptions): Promi
   const convert = (id: string, handle: string, trajectoryId: string, at: string) => {
     const step = state.flow.steps.find((candidate) => candidate.id === id);
     if (!step) return undefined;
-    return harnessFor(step, harness, options.harnesses).toTrajectory(handle, trajectoryId, at);
+    return harnessFor(state.flow, step, harness, options.harnesses).toTrajectory(handle, trajectoryId, at);
   };
   const close = () => {
     save();
@@ -159,12 +173,25 @@ async function execute(state: RunState, cwd: string, options: RunOptions): Promi
 
   const sorted = order(state.flow.steps);
   const done = (id: string) => state.steps[id]?.status === "done";
+  // A skipped step never passes, so a step that needs it never starts either.
+  const settled = (id: string) => done(id) || state.steps[id]?.status === "skipped";
 
   for (;;) {
-    // Every step whose needs have passed runs together. Invariant 3 still holds,
+    // Every step whose needs have settled runs together. Invariant 3 still holds,
     // because a step with an unfinished need is not in the wave.
-    const ready = sorted.filter((step) => !done(step.id) && step.needs.every(done));
+    const ready = sorted.filter((step) => !settled(step.id) && step.needs.every(settled));
     if (ready.length === 0) break;
+
+    const ruled = ready.map((step) => [step, skipOf(step, state)] as const).filter(([, why]) => why !== undefined);
+    if (ruled.length > 0) {
+      const now = new Date().toISOString();
+      for (const [step, why] of ruled) {
+        state.steps[step.id] = { status: "skipped", startedAt: now, endedAt: now, skipped: why };
+        emit({ type: "skip", step: step.id, why: why as string });
+      }
+      save();
+      continue;
+    }
 
     const work = ready.filter((step) => step.kind !== "gate");
     if (work.length === 0) {
@@ -178,8 +205,9 @@ async function execute(state: RunState, cwd: string, options: RunOptions): Promi
     const records = await pool(work, state.flow.parallel ?? WAVE, async (step) => {
       emit({ type: "step_start", step: step.id });
       const watch = (note: Note) => emit({ type: "output", step: step.id, ...note });
-      const record = await runStep(step, state, cwd, harnessFor(step, harness, options.harnesses), watch, feedback);
-      emit({ type: "step_end", step: step.id, status: record.status });
+      const chosen = harnessFor(state.flow, step, harness, options.harnesses);
+      const record = await runStep(step, state, cwd, chosen, watch, feedback);
+      emit({ type: "step_end", step: step.id, status: record.status === "failed" ? "failed" : "done" });
       return record;
     });
 
@@ -187,19 +215,45 @@ async function execute(state: RunState, cwd: string, options: RunOptions): Promi
       state.steps[step.id] = records[index] as StepRecord;
     });
 
-    const broken = work.find((step) => state.steps[step.id]?.status === "failed");
-    if (broken) {
+    const failures = work.filter((step) => state.steps[step.id]?.status === "failed");
+    // A step that cycles on a failure goes back instead of ending the run.
+    const retry = failures.length === 1 ? retryOf(failures[0] as Step, state) : undefined;
+    if (failures.length > 0 && !retry) {
       state.status = "failed";
       close();
       emit({ type: "run_end", status: state.status });
       return state;
+    }
+    if (retry) {
+      const step = failures[0] as Step;
+      const record = state.steps[step.id] as StepRecord;
+      if (retry.count > retry.cycle.limit) {
+        // Invariant 4: the retry stops here. A failure carries no value to accept.
+        if (retry.cycle.policy === "accept") {
+          state.status = "failed";
+          close();
+          emit({ type: "run_end", status: state.status });
+          return state;
+        }
+        state.history = [...(state.history ?? []), { step: step.id, record }];
+        delete state.steps[step.id];
+        return stop(state, step.id, questionFor(step, retry.cycle, record), close, emit);
+      }
+      state.cycles[retry.key] = retry.count;
+      // A retry that drops the reason for it makes the same mistake again.
+      state.feedback = { step: step.id, to: retry.cycle.to, value: { error: record.error } };
+      goBackTo(retry.cycle.to, state, sorted);
+      emit({ type: "cycle", step: step.id, to: retry.cycle.to, count: retry.count });
+      save();
+      continue;
     }
 
     // One wave settles one cycle. A second would fight the first for the same steps.
     const turning = work.find((step) => {
       const cycle = cycleOf(step);
       const record = state.steps[step.id] as StepRecord;
-      return cycle && !record.answeredByPerson && matches(cycle.when as Record<string, unknown>, record.value);
+      if (!cycle || cycle.when === "failed" || record.answeredByPerson) return false;
+      return matches(cycle.when as Match, record.value);
     });
 
     if (turning) {
@@ -213,7 +267,7 @@ async function execute(state: RunState, cwd: string, options: RunOptions): Promi
         if (cycle.policy === "escalate") {
           state.history = [...(state.history ?? []), { step: turning.id, record }];
           delete state.steps[turning.id];
-          return stop(state, turning.id, questionFor(turning, cycle), close, emit);
+          return stop(state, turning.id, questionFor(turning, cycle, record), close, emit);
         }
         record.disagreement = "accepted";
       } else {
@@ -265,14 +319,44 @@ async function pool<T, R>(items: T[], limit: number, work: (item: T) => Promise<
   return answers;
 }
 
-function harnessFor(step: Step, fallback: Harness, named?: Record<string, Harness>): Harness {
-  if (step.kind !== "agent" || !step.harness) return fallback;
-  const chosen = named?.[step.harness];
-  if (!chosen) throw new Error(`step "${step.id}" names the harness "${step.harness}", which this run does not have`);
+/** The step names a harness, then the flow does, then the run does. */
+function harnessFor(flow: Flow, step: Step, fallback: Harness, named?: Record<string, Harness>): Harness {
+  const name = harnessOf(flow, step);
+  if (!name) return fallback;
+  const chosen = named?.[name];
+  if (!chosen) throw new Error(`step "${step.id}" names the harness "${name}", which this run does not have`);
   return chosen;
 }
 
-function questionFor(step: Step, cycle: Cycle): string {
+/**
+ * Why a condition rules a step out, or nothing when it runs. A step that needs
+ * a skipped step is skipped too, because the value it waits for never arrives.
+ */
+function skipOf(step: Step, state: RunState): string | undefined {
+  const gone = step.needs.filter((need) => state.steps[need]?.status === "skipped");
+  if (gone.length > 0) return `it needs "${gone[0]}", which the run skipped`;
+  if (step.kind === "flow" || !step.when) return undefined;
+
+  for (const [id, wanted] of Object.entries(step.when)) {
+    if (!matches(wanted, state.steps[id]?.value)) {
+      return `"${id}" does not say ${JSON.stringify(wanted)}`;
+    }
+  }
+  return undefined;
+}
+
+/** The cycle that sends a failed step back, and the count of this attempt. */
+function retryOf(step: Step, state: RunState): { cycle: Cycle; key: string; count: number } | undefined {
+  const cycle = cycleOf(step);
+  if (!cycle || cycle.when !== "failed") return undefined;
+  const key = `${step.id}->${cycle.to}`;
+  return { cycle, key, count: (state.cycles[key] ?? 0) + 1 };
+}
+
+function questionFor(step: Step, cycle: Cycle, record: StepRecord): string {
+  if (cycle.when === "failed") {
+    return `Step "${step.id}" failed ${cycle.limit} times over: ${record.error}. Supply the value for "${step.id}".`;
+  }
   return `Step "${step.id}" reached its limit of ${cycle.limit} cycles back to "${cycle.to}" and still disagrees. Supply the value for "${step.id}".`;
 }
 
@@ -291,7 +375,7 @@ function goBackTo(target: string, state: RunState, sorted: Step[]): void {
   state.history = dropped;
 }
 
-function matches(when: Record<string, unknown>, value: unknown): boolean {
+function matches(when: Match, value: unknown): boolean {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;
   return Object.entries(when).every(([key, wanted]) => isDeepStrictEqual(record[key], wanted));
@@ -324,7 +408,7 @@ async function runStep(
               tools: step.tools,
               returns: step.returns,
               cwd,
-              model: step.model,
+              model: modelOf(state.flow, step),
             },
             watch,
           )
@@ -335,11 +419,13 @@ async function runStep(
 
   // Invariant 5: what the step really did, not what it says it did.
   const touched = changed(before, take(state.flow.workspace, cwd));
-  if ((step.kind === "agent" || step.kind === "call") && step.changes === false && touched.length > 0) {
+  const promised = step.kind === "agent" || step.kind === "call" ? step.changes : undefined;
+  const broken = brokenPromise(promised, touched);
+  if (broken) {
     return {
       ...at(),
       status: "failed",
-      error: `step "${step.id}" promises to change nothing, but it changed ${touched.join(", ")}`,
+      error: `step "${step.id}" ${broken}`,
       value: result.value,
       changed: touched,
     };
@@ -355,15 +441,42 @@ async function runStep(
   return record;
 }
 
+/**
+ * Invariant 5: what a step promises about the workspace. A promise of `nothing`
+ * refuses every path. A promise of paths refuses a path that is not one of them,
+ * and not inside one of them. A commit moves HEAD, which no path holds.
+ */
+function brokenPromise(changes: Changes | undefined, touched: string[]): string | undefined {
+  if (changes === undefined || touched.length === 0) return undefined;
+  if (changes === "nothing") return `promises to change nothing, but it changed ${touched.join(", ")}`;
+
+  const outside = touched.filter((path) => !changes.paths.some((allowed) => under(path, allowed)));
+  if (outside.length === 0) return undefined;
+  return `promises to change only ${changes.paths.join(", ")}, but it changed ${outside.join(", ")}`;
+}
+
+/** A path is the file itself, or anything under it as a directory. */
+function under(path: string, allowed: string): boolean {
+  const root = allowed.replace(/\/+$/, "");
+  return path === root || path.startsWith(`${root}/`);
+}
+
 function buildPrompt(step: AgentStep, inputs: Record<string, unknown>, cwd: string): string {
-  const text = readFileSync(resolve(cwd, step.prompt), "utf8");
-  if (Object.keys(inputs).length === 0) return text;
-  return `${text}\n\n## The values of the steps before this one\n\n\`\`\`json\n${JSON.stringify(inputs, null, 2)}\n\`\`\`\n`;
+  const parts = [readFileSync(resolve(cwd, step.prompt), "utf8")];
+  // A member of a fanout differs by this value, so the step must read it.
+  if (step.with) parts.push(block("The values this step holds", step.with));
+  if (Object.keys(inputs).length > 0) parts.push(block("The values of the steps before this one", inputs));
+  return parts.join("\n\n");
+}
+
+function block(title: string, value: unknown): string {
+  return `## ${title}\n\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\`\n`;
 }
 
 /**
- * A component takes the values of the steps before it, and a way to say what it
- * does. A component that says nothing ignores the second argument.
+ * A component takes the values of the steps before it, a way to say what it
+ * does, and the value that its step holds. A component that wants neither of
+ * the last two ignores them.
  */
 async function callModule(
   step: CallStep,
@@ -372,5 +485,6 @@ async function callModule(
   watch: (note: Note) => void,
 ): Promise<unknown> {
   const module = await import(pathToFileURL(resolve(cwd, step.module)).href);
-  return module.default(inputs, (text: string) => watch({ kind: "text", text: String(text) }));
+  const say = (text: string) => watch({ kind: "text", text: String(text) });
+  return module.default(inputs, say, step.with ?? {});
 }

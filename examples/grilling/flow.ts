@@ -13,7 +13,7 @@ export default flow("grilling", {
       id: "ask",
       prompt: "prompts/ask.md",
       tools: ["read", "grep", "find", "ls"],
-      changes: false,
+      changes: "nothing",
       returns: Type.Object({
         questions: Type.Array(Type.String()),
         frontierEmpty: Type.Boolean(),
@@ -44,7 +44,7 @@ export default flow("grilling", {
       needs: ["record"],
       prompt: "prompts/review.md",
       tools: ["read", "grep", "find", "ls"],
-      changes: false,
+      changes: "nothing",
       returns: Type.Object({
         approved: Type.Boolean(),
         findings: Type.Array(Type.String()),

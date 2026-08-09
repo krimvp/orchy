@@ -1,12 +1,14 @@
 # Research a question with three readers, then one writer, then a check.
-# The readers use the web, so this flow needs a harness that has web tools.
+# The readers use the web, and only Claude Code has a web tool, so the flow
+# names the harness once. `validate()` then refuses the flow under pi.
 name: research
+harness: claude
+model: claude-sonnet-5
 parallel: 3
 
 steps:
   - id: question
     kind: agent
-    harness: claude
     prompt: prompts/question.md
     tools: [read]
     returns:
@@ -19,7 +21,6 @@ steps:
   - id: reader
     kind: agent
     needs: [question]
-    harness: claude
     prompt: prompts/read.md
     tools: [web]
     returns: &finding
@@ -29,15 +30,15 @@ steps:
         angle: { type: string }
         findings: { type: array, items: { type: string } }
         sources: { type: array, items: { type: string } }
+    # Three readers of one model. Each takes one angle from the question.
     fanout:
-      - { name: first, model: claude-sonnet-5 }
-      - { name: second, model: claude-sonnet-5 }
-      - { name: third, model: claude-sonnet-5 }
+      - { name: first, with: { angle: 1 } }
+      - { name: second, with: { angle: 2 } }
+      - { name: third, with: { angle: 3 } }
 
   - id: brief
     kind: agent
     needs: [reader]
-    harness: claude
     model: claude-opus-4-5
     prompt: prompts/brief.md
     tools: [write]
@@ -51,7 +52,6 @@ steps:
   - id: check
     kind: agent
     needs: [brief]
-    harness: claude
     prompt: prompts/check.md
     tools: [read, web]
     returns:

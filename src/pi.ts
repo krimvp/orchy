@@ -9,11 +9,10 @@ import {
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import { type Metrics, SCHEMA_VERSION, type Step, type Trajectory, totalMetrics } from "./atif.ts";
-import { type Harness, notesOf } from "./harness.ts";
+import { type Harness, SUPPLIES, type ToolName, notesOf } from "./harness.ts";
 import { tail } from "./tail.ts";
 
 const SUBMIT = "submit_result";
-const TOOLS = new Set(["read", "bash", "edit", "write", "grep", "find", "ls"]);
 
 export const pi: Harness = {
   async run(request, watch) {
@@ -32,7 +31,7 @@ export const pi: Harness = {
 
     for (const name of request.tools) {
       // Dropping a tool a step asked for would weaken invariant 1 in silence.
-      if (!TOOLS.has(name)) throw new Error(`pi has no tool for "${name}"`);
+      if (!SUPPLIES.pi.includes(name as ToolName)) throw new Error(`pi has no tool for "${name}"`);
     }
 
     // Orchy must load the resources itself. Without this, the extensions and the

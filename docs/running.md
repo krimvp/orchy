@@ -23,37 +23,51 @@ npm i orchy                     # to run a flow from YAML
 
 ## Choose a harness
 
-Orchy ships two adapters. Pi is the default.
+Orchy ships two adapters. A flow names the one it needs. `--harness` sets the
+default for a flow and a step that name none, and Pi is that default.
 
 ```bash
-orchy run flow.yaml --harness pi        # the default
-orchy run flow.yaml --harness claude    # Claude Code
+orchy run flow.yaml                     # the harness the flow names, or pi
+orchy run flow.yaml --harness claude    # Claude Code, for a flow that names none
 ```
 
+A flow that names its harness runs on that harness. Edit the flow to change it,
+because a flag that overruled the flow would start a run that `validate()`
+already refused.
+
 The Claude Code adapter runs the `claude` command, so it needs that command on
-the path and a logged-in account. It takes no model setting from Orchy: Claude
-chooses its own.
+the path and a logged-in account. It passes a `model` on to `--model`, and it
+lets Claude choose when the flow names none.
 
 A tool name changes across the two harnesses, and Orchy maps it. `find` and `ls`
 both become `Glob`, because Claude has no separate list tool. So a step that
 declares `ls` gets `Glob`. The list still holds: a step reaches no tool that it
 did not declare.
 
-## A harness and a model for each step
+## A harness and a model for each flow, and for each step
 
-A step names the harness and the model it wants. A step that names neither uses
-the harness of the run and lets that harness choose its model.
+A flow names the harness and the model it wants, and a step names another when
+it wants another. The narrower one wins: the step, then the flow, then the
+default of the run.
 
 ```yaml
+name: code-and-review
+harness: claude
+model: claude-sonnet-5
+
+steps:
   - id: code
     kind: agent
-    harness: claude
-    model: claude-opus-4-5
+    model: claude-opus-4-5   # this step alone
 ```
 
 The `model` string means whatever the harness says it means. Claude takes a
 model name. Pi takes `provider/model`, because two providers can serve one
 model, for example `ollama/glm-5.2`.
+
+Name the harness on the flow when the flow needs one. `validate()` then refuses
+a tool that the harness does not supply, before the run spends a token. A flow
+that asks for `web` under `pi` fails the check and never starts.
 
 A run refuses a harness it does not have before it runs any step.
 
@@ -69,7 +83,7 @@ the expanded graph.
     kind: agent
     prompt: prompts/review.md
     tools: [read]
-    changes: false
+    changes: nothing
     returns: *verdict
     fanout:
       - { name: opus,   harness: claude, model: claude-opus-4-5 }
@@ -89,7 +103,61 @@ whose needs have passed runs together.
 
 A `call` step fans out as well. A member of a `call` step overrides its
 `module`, and a member of an agent step overrides its `harness`, `model`,
-`prompt`, and `tools`. A member never picks up a field the other kind holds.
+`prompt`, and `tools`. Both kinds hold `with`. `validate()` refuses a member
+that holds a field of the other kind, so nothing is dropped in silence.
+
+### One prompt over a list
+
+A member holds `with`, the value that is its own. So a step that audits six
+packages is one prompt and six members, and not six prompt files.
+
+```yaml
+  - id: audit
+    kind: agent
+    prompt: prompts/audit.md
+    tools: [read, grep]
+    changes: nothing
+    returns: *finding
+    fanout:
+      - { name: ajv,  with: { package: ajv } }
+      - { name: yaml, with: { package: yaml } }
+```
+
+An agent step reads the value in its prompt, under `The values this step holds`.
+A component takes it as a third argument:
+
+```ts
+export default (inputs, say, held) => ({ package: held.package });
+```
+
+### A step that runs only sometimes
+
+A step holds `when`, a match against the value of each step that it needs.
+
+```yaml
+  - id: page
+    kind: agent
+    needs: [sort]
+    when: { sort: { severity: high } }
+```
+
+A step that the condition rules out is skipped, and so is every step that needs
+it. So a step that must run whatever happens needs only the steps it reads. See
+[ADR 0014](./adr/0014-a-step-that-a-condition-rules-out.md).
+
+### A step that retries itself
+
+A cycle to the step itself repeats one step. The word `failed` fires it on a
+step that failed, rather than on a value.
+
+```yaml
+    cycle: { to: advise, when: failed, limit: 2, policy: escalate }
+```
+
+The step hears the error of its last attempt, so it does not repeat the mistake.
+A step that breaks its contract is retried in the same way, because that is a
+failure too. At the limit, `escalate` asks a person for the value, and `accept`
+fails the run: a failure carries no value, so there is nothing to accept.
 
 A step cannot both fan out and cycle, because which member cycles is unclear.
 Put the cycle on the step that reads the members.
@@ -135,9 +203,9 @@ reviewer names its own harness, model, and prompt. The rule for a disagreement
 is yours, so it lives in a `call` step, not in Orchy.
 
 ```yaml
-  - { id: review-opus,   kind: agent, needs: [code], harness: claude, model: claude-opus-4-5,  prompt: prompts/review.md,        tools: [read], changes: false, returns: *verdict }
-  - { id: review-sonnet, kind: agent, needs: [code], harness: claude, model: claude-sonnet-5,  prompt: prompts/review-strict.md, tools: [read], changes: false, returns: *verdict }
-  - { id: review-glm,    kind: agent, needs: [code], harness: pi,     model: ollama/glm-5.2,   prompt: prompts/review.md,        tools: [read], changes: false, returns: *verdict }
+  - { id: review-opus,   kind: agent, needs: [code], harness: claude, model: claude-opus-4-5,  prompt: prompts/review.md,        tools: [read], changes: nothing, returns: *verdict }
+  - { id: review-sonnet, kind: agent, needs: [code], harness: claude, model: claude-sonnet-5,  prompt: prompts/review-strict.md, tools: [read], changes: nothing, returns: *verdict }
+  - { id: review-glm,    kind: agent, needs: [code], harness: pi,     model: ollama/glm-5.2,   prompt: prompts/review.md,        tools: [read], changes: nothing, returns: *verdict }
 
   - id: verdict
     kind: call

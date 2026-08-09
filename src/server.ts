@@ -2,8 +2,8 @@ import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
 import { extname, join, resolve } from "node:path";
 import type { Daemon } from "./daemon.ts";
-import { type Flow, TOOLS, validate } from "./flow.ts";
-import { ADAPTERS } from "./harness.ts";
+import { type Flow, validate } from "./flow.ts";
+import { ADAPTERS, TOOLS } from "./harness.ts";
 import { loadFlow, readFlow } from "./load.ts";
 import { formatFlow } from "./yaml.ts";
 

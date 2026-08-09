@@ -1,0 +1,67 @@
+# One prompt audits many packages, because a member holds the value that
+# differs. The advice retries itself, and the upgrade runs only when the
+# gathered findings say something is risky.
+name: dependency-audit
+harness: claude
+workspace: { kind: git, path: . }
+
+steps:
+  - id: audit
+    kind: agent
+    prompt: prompts/audit.md
+    tools: [read, grep, find, ls]
+    changes: nothing
+    returns: &finding
+      type: object
+      required: [package, version, risky, notes]
+      properties:
+        package: { type: string }
+        version: { type: string }
+        risky: { type: boolean }
+        notes: { type: array, items: { type: string } }
+    # One step for each member. The prompt is the same, and the value is not.
+    fanout:
+      - { name: ajv, with: { package: ajv } }
+      - { name: yaml, with: { package: yaml } }
+      - { name: typebox, with: { package: "@sinclair/typebox" } }
+
+  - id: gather
+    kind: call
+    needs: [audit]
+    module: gather.ts
+    returns:
+      type: object
+      required: [risky, findings]
+      properties:
+        risky: { type: boolean }
+        findings: { type: array, items: *finding }
+
+  - id: advise
+    kind: agent
+    needs: [gather]
+    prompt: prompts/advise.md
+    tools: [read]
+    changes: nothing
+    returns:
+      type: object
+      required: [summary, order]
+      properties:
+        summary: { type: string }
+        order: { type: array, items: { type: string } }
+    # A retry. The step goes back to itself, and it hears the error it made.
+    cycle: { to: advise, when: failed, limit: 2, policy: escalate }
+
+  - id: upgrade
+    kind: agent
+    needs: [gather, advise]
+    when: { gather: { risky: true } }
+    prompt: prompts/upgrade.md
+    tools: [read, edit]
+    # The step may write the manifest, and nothing else.
+    changes: { paths: [package.json] }
+    returns:
+      type: object
+      required: [changed, reason]
+      properties:
+        changed: { type: array, items: { type: string } }
+        reason: { type: string }

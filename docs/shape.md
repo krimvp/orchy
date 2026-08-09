@@ -1,8 +1,14 @@
 # The shape of a flow
 
-Status: a study, not a decision. It names where the flow data is weak, and what
-to change. Nothing here is built. A change that this document proposes needs an
-ADR when it lands.
+Status: built. This document reports the study that found six faults in the flow
+data, and it records what each one cost. Every change below has landed, under
+milestone M8 in [docs/plan.md](./plan.md). The decisions that are hard to
+reverse are in [ADR 0012](./adr/0012-a-flow-names-its-harness.md), [ADR
+0013](./adr/0013-a-promise-is-a-word-not-a-boolean.md), and [ADR
+0014](./adr/0014-a-step-that-a-condition-rules-out.md).
+
+Read this before you add a field, or change one. The study is the reason the
+fields have the shapes they have.
 
 [docs/plan.md](./plan.md) holds the design. This document holds the shape of the
 data that a user writes.
@@ -18,24 +24,31 @@ Two questions drove the probes:
 1. Which field can a user write that nothing ever reads?
 2. Which flow has no shape at all?
 
-## What a flow holds today
+## What a flow holds
+
+The right column is what the study changed.
 
 | Where | Field | Value |
 | --- | --- | --- |
 | flow | `name` | a string |
 | flow | `workspace` | `{ kind: none }` or `{ kind: git, path }` |
+| flow | `harness`, `model` | **new.** The default for every step |
 | flow | `parallel` | a number, 8 when absent |
 | step | `id`, `needs` | a name, and the names it waits for |
 | step | `kind` | `agent`, `call`, `gate`, `flow` |
+| agent, call, gate | `when` | **new.** A match against the value of a step it needs |
 | agent | `prompt`, `tools`, `harness`, `model` | a path, a tool list, two names |
 | call | `module` | a path |
 | gate | `question` | a string |
 | flow step | `flow` | a path |
-| agent, call | `changes` | `false`, and nothing else |
+| agent, call | `changes` | **changed.** `nothing`, or `{ paths }` |
+| agent, call | `with` | **new.** A value the step holds |
 | agent, call | `fanout` | a list of members |
-| agent, call, flow step | `cycle` | `{ to, when, limit, policy }` |
+| agent, call, flow step | `cycle` | `{ to, when, limit, policy }`, and `when` takes `failed` |
 | agent, call, gate | `returns` | JSON Schema |
-| member | `name`, `harness`, `model`, `prompt`, `tools`, `module` | overrides |
+| member | `name`, `with`, and what its kind holds | overrides |
+
+`validate()` refuses every field that this table does not name.
 
 ## Finding 1 — a file states a field, and nothing checks it
 
@@ -63,6 +76,11 @@ for none of them. It crashed on one.
 | `workspace: { kind: git }` with no path | nothing | `TypeError: The "paths[1]" argument must be of type string` |
 | `tool`, not `tools` | `TypeError: step.tools is not iterable` | it never starts |
 
+An eleventh field turned up while the fix went in. `parseFlow` built a flow from
+three fields and dropped the rest, so `parallel` in a file never reached the
+runner at all. Two shipped examples set it. The parser now passes every field
+through, and `validate()` is the one gate.
+
 The last four say something. A Node message and an Ajv message name neither the
 step nor the fix, and the last one crashes the check itself.
 
@@ -76,6 +94,12 @@ once already, and this is the same fault in ten more places.
 
 **This finding blocks every other change here.** Each change below adds a field.
 A user who writes a new field on the wrong kind of step must hear about it.
+
+**What landed.** `validate()` checks the shape before it reads any meaning. A
+table in `flow.ts` names what each kind of step holds and what it must have, and
+the check refuses everything else. It names the kinds that do hold a field, so a
+user learns where it belongs. Every row above is now a sentence that names the
+step and the fix.
 
 ## Finding 2 — `changes` is a boolean, and one value is legal
 
@@ -97,14 +121,19 @@ question for the workspace, and it answered with a tagged value, so a new kind
 costs no change to the format. The same answer fits here:
 
 ```yaml
-changes: nothing            # what `changes: false` says today
-changes: { paths: [docs/**] }   # what the grilling flow and the code flow want
+changes: nothing                     # what `changes: false` said
+changes: { paths: [docs, CONTEXT.md] }
 ```
 
-Two flows in this repository would use the second line. The `record` step of
-[examples/grilling](../examples/grilling) writes `CONTEXT.md` and `docs/adr/`
-and nothing else. The `code` step of
-[examples/code-review](../examples/code-review) writes source and no document.
+**What landed.** Both lines above run. A path names a file, or a directory and
+everything under it. A pattern language would invite `**/*.md`, and partial
+support for one is a hidden failure. `validate()` refuses `changes: false` and
+says what to write instead.
+
+The record had to get more precise for this to mean anything: `git status`
+collapses a wholly untracked directory into one entry such as `docs/`, so the
+snapshot now runs `-uall` and names every file. See [ADR
+0013](./adr/0013-a-promise-is-a-word-not-a-boolean.md).
 
 ## Finding 3 — a fanout carries configuration, and a flow wants data
 
@@ -144,9 +173,12 @@ fanout:
   - { name: cli, with: { package: cli } }
 ```
 
-The value reaches an agent step as a named block in the prompt, beside the
-values of the steps before it. It reaches a component as a third argument, so a
-component that ignores it still answers the same way.
+**What landed.** A member holds `with`, and expansion copies it onto the step.
+An agent step reads it in the prompt under `The values this step holds`. A
+component takes it as a third argument, so a component that ignores it still
+answers the same way. [examples/dependency-audit](../examples/dependency-audit)
+audits three packages from one prompt, and
+[examples/research](../examples/research) now gives each reader its angle.
 
 ## Finding 4 — the flow does not name its harness
 
@@ -181,10 +213,19 @@ pi, at run time: pi has no tool for "web"
 A user who drops the four `harness` lines gets a valid flow that fails in the
 middle of a run, after the first step already spent its tokens.
 
-A flow-level `harness` and `model`, which a step overrides, fixes both. It reads
-the same as `workspace` and `parallel`, which are already flow-level with no
-step override. The command line then overrides the flow, and the index holds a
-default for a flow that names none.
+**What landed.** A flow holds `harness` and `model`, and a step overrides them.
+The narrower one wins, and `--harness` sets the default for a flow that names
+none. `SUPPLIES` in `harness.ts` names the tools
+of each adapter, beside the adapter names and not inside an adapter, so
+`validate()` reads it without loading an SDK. A flow that asks for `web` under
+`pi` now fails the check:
+
+```
+step "a" asks for the tool "web", and the harness "pi" has none
+```
+
+`examples/research/flow.yaml` names its harness once, and not four times. See
+[ADR 0012](./adr/0012-a-flow-names-its-harness.md).
 
 ## Finding 5 — nothing says "do not run this step"
 
@@ -207,9 +248,17 @@ not run has no value, so:
 - The wave loop ends when no step is ready. A skipped step never becomes ready,
   so the run reports `done` with steps missing, and says nothing.
 
-**Do not build this until a real flow needs it.** Refuse `when` on a step today,
-under finding 1. Then no flow written now changes its meaning on the day the
-field arrives.
+**What landed.** The condition, and the answer to each of those three questions.
+A step holds `when`, a match against the values of the steps it needs, keyed by
+step id — the same shape as the inputs those steps already give it. A step that
+the condition rules out is skipped, and so is every step that needs it, which
+keeps invariant 3 whole. A record takes a third status, the run emits a `skip`
+event with the reason, and the page draws a skipped step with a broken outline.
+
+The cost is a join: a step that needs both branches is skipped when either is.
+An optional need would lift that, and it is a second concept with a second
+question for every user. It waits for a flow that needs it. See [ADR
+0014](./adr/0014-a-step-that-a-condition-rules-out.md).
 
 ## Finding 6 — a retry has no home, and the cycle is the home it wants
 
@@ -223,8 +272,14 @@ Two rules block it:
 - A step that throws fails the whole run in the same wave. The cycle never gets
   a turn. I ran this, and the run ended `failed` on the first throw.
 
-So a retry needs a self edge and a condition that reads a failure, not a value.
-It needs no second construct. Keep it deferred, and do not invent one.
+**What landed.** Both rules gave way, and no second construct arrived. A cycle
+may name the step itself, and `when` takes the word `failed`, which reads the
+record rather than a value. A step that throws and a step that breaks its
+contract are both retried, because both are failures. The step hears the error
+of its last attempt, so it does not repeat the mistake.
+
+At the limit, `escalate` asks a person for the value. `accept` fails the run: a
+failure carries no value, so there is nothing to accept.
 
 ## Smaller notes
 
@@ -239,44 +294,47 @@ the steps ran in this order: code, far, review, code, far, review
 `far` paid for its tokens twice. The code marks this a `ponytail`, and `needs`
 already holds what the runner needs to fix it.
 
-**A prompt is a path, so the editor draws a flow it cannot write.** `Editor.tsx`
-edits the path of a prompt, and never the words. A tagged value, as the
-workspace has, would let a short prompt live in the file:
-
-```yaml
-prompt: { file: prompts/review.md }
-prompt: { text: Read the diff. Answer with the findings. }
-```
-
 **A flow is a kind, and a fanout is a field.** Both are expansions. A flow step
 replaces one step, and a fanout multiplies one step, so the two shapes are
 right. The documents never say this, and a reader asks.
 
 **`limit` and `policy` are one idea.** `policy` only acts at the limit. Nesting
-them says so:
+them would say so:
 
 ```yaml
 cycle: { to: code, when: { approved: false }, limit: { count: 3, then: escalate } }
 ```
 
-I do not recommend it. Four flat fields read well, the editor draws them, and
-the nesting buys one fewer question in the head of a reader.
+This did not land, and it should not. Four flat fields read well, the editor
+draws them, and the nesting buys one fewer question in the head of a reader.
 
-**`returns` has no check.** Ajv answers `schema must be object or boolean`, and
-names no step. Finding 1 covers it.
+**`returns` had no check.** Ajv answered `schema must be object or boolean`, and
+named no step. Finding 1 covers it, and the message now names the step.
 
-## What to change
+## What changed
 
-In this order. Each row states the reason and the cost.
+| # | Change | What it fixed |
+| --- | --- | --- |
+| 1 | `validate()` checks the shape before the meaning. | Eleven fields that a user could write and nothing ever read. |
+| 2 | A flow names `harness` and `model`. | A flow could not state what it needs, and the check could not read a tool. |
+| 3 | A member holds `with`. | A fanout over a list had no shape, and a call fanout could not tell its members apart. |
+| 4 | `changes` takes a word, and a list of paths. | A boolean with one legal value, and a promise that looked enforced. |
+| 5 | A step holds a condition. | A flow could not say "only when". |
+| 6 | A retry is a cycle to the step itself. | A retry had no home, and would have grown a second construct. |
 
-| # | Change | Why | Cost |
-| --- | --- | --- | --- |
-| 1 | `validate()` refuses a field that the kind of a step cannot hold, an unknown `kind`, an unknown workspace kind, and a missing `returns`. | Ten silent fields today. One of them makes a promise look enforced. | One table and one loop in `flow.ts`, and tests. No format change. |
-| 2 | A flow names `harness` and `model`. A step overrides them. | A flow states what it needs. `validate()` can then refuse `web` on `pi` before the run. | `flow.ts`, `run.ts`, `cli.ts`, the editor, and `examples/research`. |
-| 3 | A member holds `with`, and the value reaches the prompt and the component. | A fanout over a list has no shape today, and a call fanout cannot tell its members apart. | One field, one block in `buildPrompt`, one argument in `callModule`. |
-| 4 | `changes` takes a word, not a boolean. `nothing` first, `{ paths }` when a flow needs it. | One legal value is not a boolean, and the field cannot grow. | Every example, the README, the editor checkbox, and `run.ts`. |
-| 5 | A condition on a step. | The largest missing concept. | A third status, and a new answer for a step that needs a skipped step. |
-| 6 | A retry, as a self edge on a cycle. | Deferred. Name the home now, so no second construct arrives. | Two rules in `validate()`, and a failure condition. |
+Rows 1 to 3 and 6 add no question that a user must answer. Row 4 replaces one.
+Row 5 adds one, and only for a flow that wants it.
 
-Rows 1 to 3 add no question that a user must answer. Row 4 replaces one. Row 5
-is a new concept, and it waits for a flow that needs it.
+## What is still open
+
+- **A cycle throws away a branch it does not touch.** The smaller note above
+  still holds. `needs` carries what the runner needs to fix it.
+- **A join over a skipped branch.** A step that needs two branches is skipped
+  when either one is. An optional need would lift it.
+- **A fanout whose members a step decides at run time.** Expansion happens
+  before the run, so the list is what the file says. This is what makes a fanout
+  cost the runner nothing, and what a graphical editor draws.
+- **A workspace for one step.** The flow holds one. A flow that reads one
+  repository and patches another has no shape.
+- **A prompt that lives in the file.** A prompt is a path, so the editor draws a
+  flow whose words it cannot write.

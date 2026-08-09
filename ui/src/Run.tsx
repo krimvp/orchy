@@ -202,17 +202,28 @@ function Detail({
             <dd>{step.tools?.join(", ") || "none"}</dd>
           </>
         )}
-        {step.changes === false && (
+        {step.when && (
+          <>
+            <dt>Runs when</dt>
+            <dd>
+              {Object.entries(step.when)
+                .map(([id, match]) => `${id} says ${JSON.stringify(match)}`)
+                .join(", ")}
+            </dd>
+          </>
+        )}
+        {step.changes && (
           <>
             <dt>Promise</dt>
-            <dd>changes nothing</dd>
+            <dd>{step.changes === "nothing" ? "changes nothing" : `changes only ${step.changes.paths.join(", ")}`}</dd>
           </>
         )}
         {step.cycle && (
           <>
             <dt>Cycle</dt>
             <dd>
-              back to {step.cycle.to}, {back ?? 0} of {step.cycle.limit} used
+              {step.cycle.when === "failed" ? "retries" : `back to ${step.cycle.to}`}, {back ?? 0} of{" "}
+              {step.cycle.limit} used
             </dd>
           </>
         )}
@@ -223,6 +234,7 @@ function Detail({
               <span className={`pill ${record.status}`}>{record.status}</span>
               {record.answeredByPerson ? " a person answered" : ""}
               {record.disagreement ? " disagreement accepted" : ""}
+              {record.skipped ? ` ${record.skipped}` : ""}
             </dd>
             <dt>Took</dt>
             <dd>{length(new Date(record.endedAt).getTime() - new Date(record.startedAt).getTime())}</dd>
@@ -338,6 +350,7 @@ function marksOf(state: RunState, events: RunEvent[]): Record<string, Mark> {
   for (const event of events) {
     if (event.type === "step_start") live.add(event.step as string);
     if (event.type === "step_end") live.delete(event.step as string);
+    if (event.type === "skip") marks[event.step as string] = "skipped";
   }
   for (const id of live) marks[id] = "running";
   if (state.waitingFor) marks[state.waitingFor] = "waiting";
@@ -356,6 +369,8 @@ function say(event: RunEvent): string {
       return `${String(event.step)} started`;
     case "step_end":
       return `${String(event.step)} ended ${String(event.status)}`;
+    case "skip":
+      return `${String(event.step)} is skipped, because ${String(event.why)}`;
     case "cycle":
       return `${String(event.step)} goes back to ${String(event.to)} (${String(event.count)})`;
     case "waiting":

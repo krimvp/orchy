@@ -75,6 +75,7 @@ import { Type } from "@sinclair/typebox";
 
 export default flow("code-and-review", {
   workspace: { kind: "git", path: "." },
+  harness: "claude",
   steps: [
     agent({
       id: "code",
@@ -87,7 +88,7 @@ export default flow("code-and-review", {
       needs: ["code"],
       prompt: "prompts/review.md",
       tools: ["read", "grep", "find", "ls"],
-      changes: false,
+      changes: "nothing",
       returns: Type.Object({
         approved: Type.Boolean(),
         findings: Type.Array(Type.String()),
@@ -134,7 +135,14 @@ need is not in the wave.
 
 **Cycle** — a step result can name an earlier step to return to. Orchy counts
 the returns on that edge and stops at the limit. There is no loop construct in
-the flow data.
+the flow data. A cycle that names the step itself is a retry, and a cycle whose
+condition is the word `failed` fires on a step that failed rather than on a
+value. So one construct carries both, and a retry adds no second one.
+
+**Condition** — a step holds `when`, a match against the value of each step that
+it needs. A step that the condition rules out is skipped, and so is every step
+that needs it, because the value it waits for never arrives. See [ADR
+0014](./adr/0014-a-step-that-a-condition-rules-out.md).
 
 Orchy carries the value that sent the run back to the step that it goes back to.
 Without this the step runs again with no knowledge of the fault, and the cycle
@@ -148,7 +156,10 @@ into the run state. A later step reads it. Orchy passes no other state.
 disagree. `escalate` opens a gate. `accept` continues and records the
 disagreement.
 
-**Fanout** — a step that runs once for each member of a list. **A flow step** —
+**Fanout** — a step that runs once for each member of a list. A member holds
+`with`, the value that is its own. An agent step reads that value in its prompt,
+and a component takes it as a third argument. So one prompt serves a list, and a
+fanout over data needs no file for each member. **A flow step** —
 a whole flow used as one step. Orchy turns both into plain steps before the run,
 so the runner knows neither. This is why they cost the runner nothing.
 
@@ -160,6 +171,12 @@ See [ADR 0010](./adr/0010-the-editor-writes-the-same-yaml-file.md).
 **Workspace** — where a step acts, and the source of the record of what changed
 there. One field, no default. See [ADR
 0006](./adr/0006-one-workspace-field-with-no-default.md).
+
+**Harness** — the flow names one, and a step names another when it wants one.
+The narrower one wins, and `--harness` sets the default for a flow that names
+none. Without the field on the flow, a flow could not say what it needs, and
+`validate()` could not refuse `web` under Pi. See [ADR
+0012](./adr/0012-a-flow-names-its-harness.md).
 
 ## The invariants
 
@@ -175,13 +192,25 @@ Orchy enforces these rules. A prompt does not.
 4. **Limit** — a cycle stops at its declared limit. A flow cannot run without
    end.
 5. **Provenance** — Orchy takes a workspace snapshot before and after each step,
-   and records what moved. A step that declares `changes: false` fails when
-   anything moved. This is the rule that catches what `bash` does behind rule 1.
+   and records what moved. A step that declares `changes: nothing` fails when
+   anything moved. A step that declares `changes: { paths: [docs] }` fails when
+   anything outside those paths moved. This is the rule that catches what `bash`
+   does behind rule 1.
 
 Rule 5 needs a workspace. A step with `bash` and no workspace has no record
 beyond the text of the command. Only a sandbox closes that gap, and Orchy does
-not ship one. `validate()` refuses a `changes: false` promise that no workspace
-can check, so the rule never looks enforced when it is not.
+not ship one. `validate()` refuses a promise that no workspace can check, so the
+rule never looks enforced when it is not.
+
+A promise is a word and not a boolean. A boolean holds two values, and only one
+of them ever meant anything. See [ADR
+0013](./adr/0013-a-promise-is-a-word-not-a-boolean.md).
+
+**The shape comes before the meaning.** A file and a graphical editor carry no
+types. So `validate()` first refuses a field that the kind of a step cannot act
+on, an unknown kind, an unknown workspace, and a missing contract. Ten fields
+passed in silence before this landed, and one of them made a promise look
+enforced when it was not.
 
 The `git` workspace ignores everything under `.orchy/`, because the run state of
 Orchy is not the work of the step.
@@ -274,6 +303,20 @@ run that a cycle threw away is marked as one. An adapter reports by reading the
 record that it already writes, so no harness is started a different way. See
 [ADR 0011](./adr/0011-a-step-reports-by-reading-its-own-record.md).
 
+**M8 — the shape of a flow. Done.** A study of the flow data found ten fields
+that a user could write and nothing ever read, and four workflows that had no
+shape at all. See [docs/shape.md](./shape.md). This milestone lands six changes:
+
+1. `validate()` checks the shape before it reads any meaning.
+2. A flow names its harness and its model, and a step overrides them.
+3. A member holds `with`, so one prompt serves a list.
+4. A promise is a word, and it takes a list of paths.
+5. A step holds a condition, and a step it rules out is skipped.
+6. A retry is a cycle to the step itself, on the word `failed`.
+
+[examples/dependency-audit](../examples/dependency-audit) exercises five of the
+six in one flow.
+
 ## The proof flows
 
 Two flows prove the design, and they stress different parts.
@@ -294,7 +337,7 @@ records as a known risk.
 
 Orchy does not ship these until a real flow needs them.
 
-- Retries and timeouts for a step.
+- Timeouts for a step.
 - A remote sandbox workspace.
 - A scheduler. Nothing starts a run except a person and the command line.
 - A user, a password, and a daemon that listens beyond this machine.

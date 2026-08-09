@@ -190,6 +190,26 @@ export function Editor({ id }: { id: number }) {
                 />
               </label>
             )}
+            <label className="field">
+              <span>Harness</span>
+              <select
+                value={flow.harness ?? ""}
+                onChange={(e) => setFlow({ ...flow, harness: e.target.value || undefined })}
+              >
+                <option value="">the default of the run</option>
+                {(health.value?.adapters ?? []).map((name) => (
+                  <option key={name}>{name}</option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              <span>Model</span>
+              <input
+                value={flow.model ?? ""}
+                placeholder="the default of the harness"
+                onChange={(e) => setFlow({ ...flow, model: e.target.value || undefined })}
+              />
+            </label>
             <label className="field" style={{ marginBottom: 0 }}>
               <span>Steps at once</span>
               <input
@@ -353,20 +373,58 @@ function StepFields({
       )}
 
       {(step.kind === "agent" || step.kind === "call") && (
-        <label className="field tick">
-          <input
-            type="checkbox"
-            checked={step.changes === false}
-            onChange={(e) => onChange({ changes: e.target.checked ? false : undefined })}
+        <div className="field set">
+          <span>Promises to change</span>
+          <Segmented
+            value={step.changes === undefined ? "absent" : step.changes === "nothing" ? "nothing" : "paths"}
+            options={[
+              { value: "absent", label: "no promise" },
+              { value: "nothing", label: "nothing" },
+              { value: "paths", label: "these paths" },
+            ]}
+            onChange={(kind) =>
+              onChange({
+                changes: kind === "absent" ? undefined : kind === "nothing" ? "nothing" : { paths: ["docs"] },
+              })
+            }
           />
-          <span>Promises to change nothing in the workspace</span>
-        </label>
+          {step.changes !== undefined && step.changes !== "nothing" && (
+            <input
+              style={{ marginTop: 10 }}
+              value={step.changes.paths.join(", ")}
+              placeholder="docs, README.md"
+              onChange={(e) =>
+                onChange({ changes: { paths: e.target.value.split(",").map((one) => one.trim()).filter(Boolean) } })
+              }
+            />
+          )}
+        </div>
       )}
 
       {step.kind !== "flow" && (
         <div className="field set">
           <span>Returns, as JSON Schema</span>
           <Json value={step.returns ?? OBJECT} onChange={(value) => onChange({ returns: value as Schema })} rows={9} />
+        </div>
+      )}
+
+      {step.kind !== "flow" && step.needs.length > 0 && (
+        <div className="field set">
+          <label className="tick">
+            <input
+              type="checkbox"
+              checked={Boolean(step.when)}
+              onChange={(e) =>
+                onChange({ when: e.target.checked ? { [step.needs[0] as string]: {} } : undefined })
+              }
+            />
+            <span>Runs only when a step it needs says so</span>
+          </label>
+          {step.when && (
+            <div style={{ marginTop: 14 }}>
+              <Json value={step.when} onChange={(value) => onChange({ when: value as Step["when"] })} rows={4} />
+            </div>
+          )}
         </div>
       )}
 
@@ -408,14 +466,34 @@ function CycleFields({
       </label>
       {cycle && (
         <div style={{ marginTop: 14 }}>
-          <label className="field">
-            <span>Back to</span>
-            <select value={cycle.to} onChange={(e) => onChange({ cycle: { ...cycle, to: e.target.value } })}>
-              {others.map((one) => (
-                <option key={one.id}>{one.id}</option>
-              ))}
-            </select>
-          </label>
+          <div className="field">
+            <span>Goes back</span>
+            <Segmented
+              value={cycle.when === "failed" ? "failed" : "value"}
+              options={[
+                { value: "value", label: "when the value holds" },
+                { value: "failed", label: "when the step fails" },
+              ]}
+              onChange={(kind) =>
+                onChange({
+                  cycle:
+                    kind === "failed"
+                      ? { ...cycle, when: "failed", to: step.id }
+                      : { ...cycle, when: {}, to: others[0]?.id ?? "" },
+                })
+              }
+            />
+          </div>
+          {cycle.when !== "failed" && (
+            <label className="field">
+              <span>Back to</span>
+              <select value={cycle.to} onChange={(e) => onChange({ cycle: { ...cycle, to: e.target.value } })}>
+                {others.map((one) => (
+                  <option key={one.id}>{one.id}</option>
+                ))}
+              </select>
+            </label>
+          )}
           <label className="field">
             <span>Limit</span>
             <input
@@ -436,14 +514,16 @@ function CycleFields({
               onChange={(policy) => onChange({ cycle: { ...cycle, policy } })}
             />
           </div>
-          <div className="field" style={{ marginBottom: 0 }}>
-            <span>When the value holds</span>
-            <Json
-              value={cycle.when}
-              onChange={(value) => onChange({ cycle: { ...cycle, when: value as Record<string, unknown> } })}
-              rows={3}
-            />
-          </div>
+          {cycle.when !== "failed" && (
+            <div className="field" style={{ marginBottom: 0 }}>
+              <span>When the value holds</span>
+              <Json
+                value={cycle.when}
+                onChange={(value) => onChange({ cycle: { ...cycle, when: value as Record<string, unknown> } })}
+                rows={3}
+              />
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -470,11 +550,14 @@ function FanoutFields({ step, onChange }: { step: Step; onChange: (patch: Partia
           {members.map((member, index) => (
             <div key={index} className="member">
               <input placeholder="name" value={member.name} onChange={(e) => set(index, { name: e.target.value })} />
-              <input
-                placeholder="model"
-                value={member.model ?? ""}
-                onChange={(e) => set(index, { model: e.target.value || undefined })}
-              />
+              {/* A call step holds no model, so the editor never offers one. */}
+              {step.kind === "agent" && (
+                <input
+                  placeholder="model"
+                  value={member.model ?? ""}
+                  onChange={(e) => set(index, { model: e.target.value || undefined })}
+                />
+              )}
               <input
                 placeholder={step.kind === "call" ? "module" : "prompt"}
                 value={(step.kind === "call" ? member.module : member.prompt) ?? ""}
@@ -486,6 +569,11 @@ function FanoutFields({ step, onChange }: { step: Step; onChange: (patch: Partia
                       : { prompt: e.target.value || undefined },
                   )
                 }
+              />
+              <input
+                placeholder="holds, as JSON"
+                value={member.with ? JSON.stringify(member.with) : ""}
+                onChange={(e) => set(index, { with: read(e.target.value) })}
               />
               <button
                 className="quiet"
@@ -505,6 +593,17 @@ function FanoutFields({ step, onChange }: { step: Step; onChange: (patch: Partia
 }
 
 /** Keeps the text while a person types, and reports the value when it parses. */
+/** Nothing when the text is not JSON, so a half-typed value writes no field. */
+function read(text: string): Record<string, unknown> | undefined {
+  if (!text.trim()) return undefined;
+  try {
+    const value: unknown = JSON.parse(text);
+    return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function Json({ value, onChange, rows }: { value: unknown; onChange: (value: unknown) => void; rows: number }) {
   const [text, setText] = useState(() => JSON.stringify(value, null, 2));
   const [bad, setBad] = useState<string>();

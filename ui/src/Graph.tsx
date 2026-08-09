@@ -1,7 +1,7 @@
 import type { CSSProperties } from "react";
 import type { Cycle, Step } from "./api";
 
-export type Mark = "done" | "failed" | "running" | "waiting" | "idle";
+export type Mark = "done" | "failed" | "skipped" | "running" | "waiting" | "idle";
 
 const W = 184;
 const H = 58;
@@ -321,16 +321,21 @@ export function Graph({
     const to = put.get(edge.to.step.id) as Placed;
     const lane = below.get(edge.key) as number;
 
+    // A step that cycles to itself is a retry. It leaves and returns at its own
+    // foot, so each end takes a place of its own. One point draws no loop.
+    const self = edge.from.step.id === edge.to.step.id;
+    const foot = (node: Placed, side: number): Point => [node.x + W / 2 + (self ? side * 16 : 0), node.y + H];
+
     // The foot of a step, when nothing stands below it. The gap beside it when
     // something does.
     const down: Point[] = clear(edge.from)
-      ? [[from.x + W / 2, from.y + H]]
+      ? [foot(from, 1)]
       : [
           [from.x + W, exit(from, edge.key)],
           [channel(edge.from.column, edge.key), exit(from, edge.key)],
         ];
     const up: Point[] = clear(edge.to)
-      ? [[to.x + W / 2, to.y + H]]
+      ? [foot(to, -1)]
       : [
           [channel(edge.to.column - 1, edge.key), port(to, edge.key)],
           [to.x, port(to, edge.key)],

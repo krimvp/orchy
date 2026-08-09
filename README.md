@@ -9,12 +9,12 @@ control flow, and gives each step one job, one tool list, and one contract.
 ```yaml
 name: code-and-review
 workspace: { kind: git, path: . }
+harness: claude
+model: claude-opus-4-5
 
 steps:
   - id: code
     kind: agent
-    harness: claude
-    model: claude-opus-4-5
     prompt: prompts/code.md
     tools: [read, write, edit, grep, find, ls]
     returns:
@@ -29,7 +29,7 @@ steps:
     model: ollama/glm-5.2
     prompt: prompts/review.md
     tools: [read, grep]
-    changes: false
+    changes: nothing
     returns:
       type: object
       required: [approved, findings]
@@ -58,19 +58,23 @@ A prompt asks. Orchy enforces.
 3. **Order** — a step starts only after every step it needs passes.
 4. **Limit** — a cycle stops at its declared limit. A flow cannot run forever.
 5. **Provenance** — Orchy records what each step changed in the workspace. A
-   step that declares `changes: false` fails when anything moved. This catches
-   what `bash` does behind rule 1.
+   step that declares `changes: nothing`, or `changes: { paths: [docs] }`,
+   fails when anything else moved. This catches what `bash` does behind rule 1.
 
-`validate()` refuses a promise that no workspace can check, and refuses a tool
-that no harness has. A rule never looks enforced when it is not.
+`validate()` refuses a promise that no workspace can check, a tool that the
+harness of the flow does not supply, and a field that the kind of a step cannot
+act on. A rule never looks enforced when it is not, and a field that no step
+reads never passes in silence.
 
 ## Compose a flow
 
 - **A step** runs an agent, a module of your own, or waits for a person.
-- **A harness and a model for each step.** Code with one model, review with
-  three others.
+- **A harness and a model** for the flow, and for any step that wants another.
+  Code with one model, review with three others.
 - **A fanout** runs one step once for each member, so a panel of reviewers is
-  one block of YAML.
+  one block of YAML. A member holds a value, so one prompt serves a list.
+- **A condition** on a step, so a step runs only when an earlier value says so.
+- **A retry** is a cycle to the step itself, on the word `failed`.
 - **A flow inside a flow** reuses a whole flow as one step, and carries a cycle
   of its own.
 - **A wave** runs every step whose needs have passed at the same time, eight at
@@ -80,7 +84,7 @@ that no harness has. A rule never looks enforced when it is not.
 
 ## Examples
 
-Seven flows in [examples](./examples). A test checks every one of them, so a
+Eight flows in [examples](./examples). A test checks every one of them, so a
 broken example fails the build.
 
 | Flow | What it shows |
@@ -88,9 +92,10 @@ broken example fails the build.
 | [code-review](./examples/code-review) | a cycle, written twice: as `flow.ts` and as `flow.yaml` |
 | [research](./examples/research) | the web, three readers at once, and a check that reads the sources again |
 | [triage](./examples/triage) | a gate that overrides the agent, and no workspace at all |
-| [docs-audit](./examples/docs-audit) | `changes: false` on every step, proved by the workspace |
+| [docs-audit](./examples/docs-audit) | `changes: nothing` on every step, proved by the workspace |
 | [release-notes](./examples/release-notes) | a deterministic step reads git, so no model spends tokens on it |
 | [decision](./examples/decision) | three fixed stances argue, then a person chooses |
+| [dependency-audit](./examples/dependency-audit) | one prompt over a list, a retry, and a step a condition rules out |
 | [grilling](./examples/grilling) | a gate that asks a person a round of questions, over and over |
 
 ## Harnesses
@@ -119,7 +124,7 @@ data, and the five invariants took no edit when the second one arrived.
 
 ```bash
 orchy run flow.yaml                        # or flow.ts
-orchy run flow.yaml --harness claude       # pi is the default
+orchy run flow.yaml --harness claude       # for a flow that names none
 orchy resume <run id> '{"approved":true}'  # answer a gate
 orchy daemon                               # a queue, an API, and a page
 ```
@@ -266,13 +271,17 @@ Early, and honest about it.
 back, a gate and `orchy resume`, an escalation to a person, a panel of three
 models at once, a flow inside a flow, and a workspace that proves what changed.
 
+**Covered by a run of the whole flow, with a stand-in model:** a member that
+holds a value, a step that retries itself, and a step that a condition rules
+out. See [dependency-audit](./examples/dependency-audit).
+
 **Driven in a browser:** the daemon, the queue, the live events, the notes a
 step reports while it works, the gate form, the step view, the trajectory view,
 and the editor. A test drives each one through the API, and a flow of
 deterministic steps stands in for a model.
 
 **Covered by tests only:** the `none` workspace, and the `docs-audit`,
-`release-notes`, and `decision` examples.
+`release-notes`, `decision`, and `dependency-audit` examples.
 
 **Not built:** a scheduler, an OpenTelemetry exporter, a third harness, a
 sandbox, and any user or password on the daemon. Invariant 1 names the sandbox

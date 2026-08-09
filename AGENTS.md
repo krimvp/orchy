@@ -52,10 +52,10 @@ This is the rule that matters most in this project. Orchy sells a guarantee, so
 a rule that looks enforced and is not costs more than a missing rule.
 
 - A field that Orchy cannot act on must fail, and must say why. It must never
-  be quietly ignored. A `fanout` on the wrong kind of step did nothing at all
-  for a while, and nothing said so.
-- Do not promise what you do not check. `validate()` refuses `changes: false`
-  when no workspace can check it, for this reason.
+  be quietly ignored. Eleven fields did nothing at all for a while, and nothing
+  said so. [docs/shape.md](./docs/shape.md) names every one of them.
+- Do not promise what you do not check. `validate()` refuses a `changes`
+  promise when no workspace can check it, for this reason.
 - State the limit of a rule in the words of the rule. Invariant 1 says that a
   tool list is not a sandbox, because `bash` walks through it.
 - An error message names the step, what went wrong, and what to do.
@@ -106,6 +106,8 @@ the daemon serves that directory.
 - `npm test` runs everything. `npm run check` runs the compiler.
 - A test for the daemon uses a flow of `call` steps and a gate, so it needs no
   model. It drives the real API over HTTP.
+- A field that a step cannot act on needs a test that proves it fails. Ten of
+  them passed in silence once.
 - `npm --prefix ui run build` runs the compiler over the page.
 - One test states one behaviour. Its name says that behaviour in a sentence.
 - Test through the public surface: `run`, `validate`, `expandFanout`,
@@ -148,7 +150,12 @@ Know these before you change the runner.
   a contract is JSON Schema.
 - **A fanout and a flow step are expansions.** They become plain steps before
   the run. The runner knows neither. Put a new construct here first: an
-  expansion costs the runner nothing.
+  expansion costs the runner nothing. A flow step is a `kind` because it
+  replaces one step. A fanout is a field because it multiplies one.
+- **The shape comes before the meaning.** `validate()` refuses a field that the
+  kind of a step cannot act on, before it reads any field. A table in `flow.ts`
+  names what each kind holds. Add a field to that table in the same change, or
+  the field passes in silence. See [docs/shape.md](./docs/shape.md).
 - **A run is a state machine on disk.** See [ADR
   0005](./docs/adr/0005-a-run-is-a-persisted-state-machine.md). A gate and a
   crash recover the same way. Anything you add to the run state must be JSON.

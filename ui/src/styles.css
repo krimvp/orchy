@@ -394,6 +394,10 @@ ul.list li {
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
+/* A step that never ran carries no colour of its own. */
+.pill.skipped {
+  color: var(--text-3);
+}
 
 /* A run on the way says so without a word. */
 .pill.running::before,
@@ -524,6 +528,15 @@ ul.list li {
 }
 .graph .node.running .box {
   stroke: var(--orange);
+}
+/* A broken outline says that the step never ran. */
+.graph .node.skipped .box {
+  stroke: var(--text-3);
+  stroke-dasharray: 5 4;
+}
+.graph .node.skipped .name,
+.graph .node.skipped .kind {
+  fill: var(--text-3);
 }
 
 .graph .node.chosen .box {

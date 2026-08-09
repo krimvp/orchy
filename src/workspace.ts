@@ -47,9 +47,13 @@ function git(args: string[], cwd: string): string {
   }
 }
 
+/**
+ * `-uall` names every untracked file. Without it git collapses a new directory
+ * into one entry, such as `docs/`, and a promise about paths cannot read that.
+ */
 function status(at: string): Record<string, string> {
   const files: Record<string, string> = {};
-  for (const line of git(["status", "--porcelain"], at).split("\n")) {
+  for (const line of git(["status", "--porcelain", "-uall"], at).split("\n")) {
     if (line.length < 4) continue;
     const path = line.slice(3);
     // The run state of Orchy is not the work of the step.

@@ -7,18 +7,17 @@ import type { Flow, Step } from "./flow.ts";
  * editor writes the same file with no translation.
  */
 export function parseFlow(text: string): Flow {
-  const raw = parse(text) as { name?: string; workspace?: Flow["workspace"]; steps?: Array<Partial<Step>> } | null;
+  const raw = parse(text) as (Omit<Partial<Flow>, "steps"> & { steps?: Array<Partial<Step>> }) | null;
   if (!raw || typeof raw !== "object") throw new Error("the file holds no flow");
 
-  const flow: Flow = {
+  // Every field passes through. A parser that keeps only the fields it knows
+  // drops the rest in silence, and `parallel` went that way for a while.
+  // `validate()` is the one gate, and it refuses a field that no step reads.
+  return {
+    ...raw,
     name: String(raw.name ?? ""),
     steps: (raw.steps ?? []).map((step) => ({ needs: [], ...step }) as Step),
   };
-  if (raw.workspace) flow.workspace = raw.workspace;
-
-  // No check here. A file can be a fragment of a larger flow, and a fragment
-  // holds no workspace and reaches steps it cannot see. The run checks the whole.
-  return flow;
 }
 
 /**

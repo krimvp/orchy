@@ -5,13 +5,17 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { type Metrics, SCHEMA_VERSION, type Step, type Trajectory, totalMetrics } from "./atif.ts";
-import { type Harness, type Watch, notesOf } from "./harness.ts";
+import { type Harness, type ToolName, type Watch, notesOf } from "./harness.ts";
 import { tail } from "./tail.ts";
 
 const run = promisify(execFile);
 
-/** Invariant 1 crosses the two vocabularies here. Claude has no separate list tool. */
-const TOOLS: Record<string, string[]> = {
+/**
+ * Invariant 1 crosses the two vocabularies here. Claude has no separate list
+ * tool. The type covers every name, so `SUPPLIES.claude` cannot claim a tool
+ * that this table does not map.
+ */
+const TOOLS: Record<ToolName, string[]> = {
   read: ["Read"],
   write: ["Write"],
   edit: ["Edit"],
@@ -40,7 +44,7 @@ export const claude: Harness = {
     const tools = [
       ...new Set(
         request.tools.flatMap((name) => {
-          const mapped = TOOLS[name];
+          const mapped = TOOLS[name as ToolName];
           // Dropping a tool a step asked for would weaken invariant 1 in silence.
           if (!mapped) throw new Error(`claude has no tool for "${name}"`);
           return mapped;

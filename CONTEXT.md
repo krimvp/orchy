@@ -49,8 +49,19 @@ _Avoid_: Environment, sandbox, working directory, context
 
 **Cycle**:
 One pass through a group of steps that repeat, such as code and then review. A
-flow sets a limit on the number of cycles.
+flow sets a limit on the number of cycles. A cycle to the step itself repeats
+one step, which is how a flow retries.
 _Avoid_: Iteration, loop, round, retry
+
+**Condition**:
+A partial match against a value. A condition on a step decides whether the step
+runs. A condition on a cycle decides whether the run goes back.
+_Avoid_: Predicate, expression, filter, guard
+
+**Promise**:
+What a step says it changes in the workspace. Orchy checks the promise against
+the record of what moved. A step promises nothing, or a list of paths.
+_Avoid_: Guarantee, claim, permission, scope
 
 **Fanout**:
 One step that runs once for each member of a list. Orchy turns it into one step
@@ -58,8 +69,8 @@ for each member before the run.
 _Avoid_: Matrix, spread, parallel, map
 
 **Member**:
-One entry of a fanout. It names itself and overrides only what differs from the
-step.
+One entry of a fanout. It names itself, holds the value that is its own, and
+overrides only what differs from the step.
 _Avoid_: Variant, instance, replica
 
 **Wave**:
@@ -70,6 +81,11 @@ _Avoid_: Batch, round, tier, level
 **Invariant**:
 A rule that Orchy enforces while a step runs. A broken invariant fails the step.
 _Avoid_: Constraint, guard, policy
+
+**Shape**:
+The fields that a flow and each kind of step hold. A file and a graphical editor
+carry no types, so Orchy checks the shape before it reads any meaning.
+_Avoid_: Schema, structure, format
 
 **Contract**:
 The schema that the value of a step must match. The contract is one kind of

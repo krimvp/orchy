@@ -9,6 +9,22 @@ export const ADAPTERS = ["pi", "claude"] as const;
 
 export type AdapterName = (typeof ADAPTERS)[number];
 
+/** Invariant 1 speaks these names. Each adapter maps them to its own. */
+export const TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls", "web"] as const;
+
+export type ToolName = (typeof TOOLS)[number];
+
+/**
+ * The tools each adapter supplies. This table lives beside the names and not
+ * inside an adapter, so `validate()` refuses a tool the harness lacks without
+ * loading the SDK of that harness. Each adapter checks a request against its
+ * own row, so one table answers both.
+ */
+export const SUPPLIES: Record<AdapterName, readonly ToolName[]> = {
+  pi: ["read", "bash", "edit", "write", "grep", "find", "ls"],
+  claude: TOOLS,
+};
+
 export interface AgentRequest {
   step: string;
   prompt: string;

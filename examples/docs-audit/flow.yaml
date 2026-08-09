@@ -8,7 +8,7 @@ steps:
     kind: agent
     prompt: prompts/audit.md
     tools: [read, grep, find, ls]
-    changes: false
+    changes: nothing
     returns: &report
       type: object
       required: [checked, disagreements]

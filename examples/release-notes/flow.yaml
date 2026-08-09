@@ -38,7 +38,7 @@ steps:
     needs: [draft, log]
     prompt: prompts/check.md
     tools: [read, grep]
-    changes: false
+    changes: nothing
     returns:
       type: object
       required: [approved, findings]
