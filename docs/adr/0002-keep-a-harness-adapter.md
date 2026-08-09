@@ -32,3 +32,8 @@ its own way: Pi answers a file path, and Claude Code answers a session id.
 
 Nothing else changed. The runner, the flow data, and the five invariants took
 no edit. That is the evidence this ADR asked for. Two members of five spent.
+
+The adapter drives the `claude` command, not the Claude Agent SDK. The SDK
+spawns that same command, so it wraps a subprocess. It cost two packages, and
+it described a tool with Zod, which forced a conversion from the contract. The
+command takes the contract as JSON Schema and needs no package at all.

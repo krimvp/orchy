@@ -24,11 +24,9 @@ Ajv is the only schema library that Orchy needs to run a flow. TypeBox is an
 optional peer: it is a type-only import, so nothing calls it at run time, and a
 user who writes a flow in YAML never installs it.
 
-The Claude Code adapter adds Zod, because its SDK describes a tool with Zod and
-takes no JSON Schema. That conversion covers the shapes a contract uses, and
-Ajv still checks the value, so a gap in it fails a step and never passes a
-wrong value. The Claude SDK names Zod as a peer dependency, so the adapter
-brings no package that was not already there.
+The Claude Code adapter adds no schema library. The `claude` command takes the
+contract with `--json-schema` and answers `structured_output`, so the contract
+reaches the model unchanged.
 
 A contract can use only the JSON Schema that Ajv supports. A TypeBox type with
 no JSON Schema form, such as a function or a symbol, cannot be a contract. This

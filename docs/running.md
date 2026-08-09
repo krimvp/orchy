@@ -5,12 +5,12 @@
 A contract is JSON Schema. That is the one form that Orchy keeps, because a
 flow is data and a file or a graphical editor must produce the same contract.
 
-Orchy uses two libraries at run time:
+Orchy uses one library at run time: **Ajv** checks every value against the
+contract. That is the guarantee.
 
-- **Ajv** checks every value against the contract. This is the guarantee.
-- **Zod** describes the `submit_result` tool of the Claude Code adapter, because
-  its SDK takes no JSON Schema. The Claude SDK names Zod as a peer, so it is
-  installed for that adapter in any case.
+Each adapter gives the contract to its harness whole. Pi builds a
+`submit_result` tool from it. The `claude` command takes it with
+`--json-schema`. Neither converts it.
 
 **TypeBox** is optional. You need it only to write a flow in TypeScript, where
 it gives one source for the contract and the static type that makes
@@ -30,8 +30,9 @@ orchy run flow.yaml --harness pi        # the default
 orchy run flow.yaml --harness claude    # Claude Code
 ```
 
-The Claude Code adapter needs the `claude` command and a logged-in account. It
-takes no model setting from Orchy: Claude chooses its own.
+The Claude Code adapter runs the `claude` command, so it needs that command on
+the path and a logged-in account. It takes no model setting from Orchy: Claude
+chooses its own.
 
 A tool name changes across the two harnesses, and Orchy maps it. `find` and `ls`
 both become `Glob`, because Claude has no separate list tool. So a step that
@@ -90,7 +91,7 @@ The `cost` numbers come from you. A provider with a subscription price reports
 no cost for one call, so `cost_usd` in the trajectory stays at zero.
 
 Claude Code writes no cost into its transcript, so the adapter takes the cost
-from the result of the run and Orchy keeps it in the step record.
+from the answer of the command and Orchy keeps it in the step record.
 
 ## Run
 

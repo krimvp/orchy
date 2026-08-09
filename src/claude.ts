@@ -1,14 +1,13 @@
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { createSdkMcpServer, query, tool } from "@anthropic-ai/claude-agent-sdk";
-import { type ZodTypeAny, z } from "zod";
+import { promisify } from "node:util";
 import { type Metrics, SCHEMA_VERSION, type Step, type Trajectory, totalMetrics } from "./atif.ts";
 import type { Harness } from "./harness.ts";
 
-const SUBMIT = "submit_result";
-const SERVER = "orchy";
+const run = promisify(execFile);
 
 /** Invariant 1 crosses the two vocabularies here. Claude has no separate list tool. */
 const TOOLS: Record<string, string> = {
@@ -21,52 +20,62 @@ const TOOLS: Record<string, string> = {
   ls: "Glob",
 };
 
+interface Answer {
+  subtype?: string;
+  is_error?: boolean;
+  result?: unknown;
+  structured_output?: unknown;
+  total_cost_usd?: number;
+}
+
+/**
+ * Orchy drives the `claude` command, not the Claude Agent SDK. The SDK spawns
+ * this same command, and it costs two packages to do so. The command takes the
+ * contract as JSON Schema directly, so no schema conversion happens at all.
+ */
 export const claude: Harness = {
   async run(request) {
-    let value: unknown;
-
-    const server = createSdkMcpServer({
-      name: SERVER,
-      tools: [
-        tool(
-          SUBMIT,
-          "Report the result of this step. Call this once, when the work is complete.",
-          shapeOf(request.returns as JsonSchema),
-          async (args: unknown) => {
-            value = args;
-            return { content: [{ type: "text" as const, text: "Recorded." }] };
-          },
-        ),
-      ],
-    });
-
-    const submitTool = `mcp__${SERVER}__${SUBMIT}`;
-    const builtin = [...new Set(request.tools.map((name) => TOOLS[name]).filter(Boolean) as string[])];
+    const tools = [...new Set(request.tools.map((name) => TOOLS[name]).filter(Boolean) as string[])];
     // A fresh id keeps a step out of the transcript of whatever session started it.
     const sessionId = randomUUID();
 
-    const answer = query({
-      prompt: request.prompt,
-      options: {
-        cwd: request.cwd,
-        sessionId,
-        mcpServers: { [SERVER]: server },
-        // Invariant 1: `tools` limits what exists, `allowedTools` runs it without a prompt.
-        tools: builtin,
-        allowedTools: [...builtin, submitTool],
-      },
+    const args = [
+      "--print",
+      request.prompt,
+      "--output-format",
+      "json",
+      "--session-id",
+      sessionId,
+      "--json-schema",
+      JSON.stringify(request.returns),
+      // Invariant 1: `--tools` limits what exists, `--allowedTools` runs it without a prompt.
+      "--tools",
+      ...(tools.length > 0 ? tools : [""]),
+      "--allowedTools",
+      ...(tools.length > 0 ? tools : [""]),
+    ];
+
+    const { stdout } = await run("claude", args, {
+      cwd: request.cwd,
+      maxBuffer: 64 * 1024 * 1024,
     });
 
-    // Claude writes no cost into its transcript, so take it from the result.
-    let cost: number | undefined;
-    for await (const message of answer) {
-      if (message.type !== "result") continue;
-      if (message.subtype !== "success") throw new Error(`the step ended as ${message.subtype}`);
-      cost = message.total_cost_usd;
+    let answer: Answer;
+    try {
+      answer = JSON.parse(stdout) as Answer;
+    } catch {
+      throw new Error("the claude command answered something that is not JSON");
     }
 
-    if (value === undefined) throw new Error(`the step ended without a call to ${SUBMIT}`);
-    return { value, trajectory: sessionId, cost };
+    if (answer.is_error || answer.subtype !== "success") {
+      throw new Error(`the step ended as ${answer.subtype ?? "an error"}: ${String(answer.result).slice(0, 300)}`);
+    }
+    if (answer.structured_output === undefined) {
+      throw new Error("the step ended with no structured output");
+    }
+
+    // Claude writes no cost into its transcript, so take it from the answer.
+    return { value: answer.structured_output, trajectory: sessionId, cost: answer.total_cost_usd };
   },
 
   /** The handle is a session id. Claude writes the transcript under its own directory. */
@@ -207,49 +216,4 @@ function toStep(entry: Entry, id: number): Step | undefined {
       cost_usd: 0,
     },
   };
-}
-
-interface JsonSchema {
-  type?: string;
-  description?: string;
-  properties?: Record<string, JsonSchema>;
-  required?: string[];
-  items?: JsonSchema;
-}
-
-/**
- * The Claude SDK describes a tool with Zod, but a contract is JSON Schema.
- * This covers the shapes a contract uses. It only tells the model what to
- * produce: Ajv still checks the value, so a gap here fails the step, it does
- * not pass a wrong one.
- */
-function shapeOf(schema: JsonSchema): Record<string, ZodTypeAny> {
-  const required = new Set(schema.required ?? []);
-  const shape: Record<string, ZodTypeAny> = {};
-  for (const [key, property] of Object.entries(schema.properties ?? {})) {
-    const type = typeOf(property);
-    shape[key] = required.has(key) ? type : type.optional();
-  }
-  return shape;
-}
-
-function typeOf(schema: JsonSchema): ZodTypeAny {
-  const base = (() => {
-    switch (schema.type) {
-      case "string":
-        return z.string();
-      case "number":
-      case "integer":
-        return z.number();
-      case "boolean":
-        return z.boolean();
-      case "array":
-        return z.array(schema.items ? typeOf(schema.items) : z.unknown());
-      case "object":
-        return z.object(shapeOf(schema));
-      default:
-        return z.unknown();
-    }
-  })();
-  return schema.description ? base.describe(schema.description) : base;
 }
