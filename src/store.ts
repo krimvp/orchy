@@ -62,6 +62,14 @@ export interface RunRow {
 
 export type StoredEvent = RunEvent & { at: string };
 
+/**
+ * How many runs the index holds. The list gives back this many rows, so a run
+ * that falls behind is a run that no page shows, and its events go. 200 rows
+ * fill a list that a person reads, and ADR 0009 keeps the state and the
+ * trajectory of every run on disk.
+ */
+export const KEPT = 200;
+
 export type Store = ReturnType<typeof open>;
 
 export function open(file: string) {
@@ -93,7 +101,7 @@ export function open(file: string) {
 
     removeFlow: (id: number): void => void db.prepare("delete from flow where id = ?").run(id),
 
-    runs: (limit = 200): RunRow[] => all<RunRow>("select * from run order by startedAt desc limit ?", limit),
+    runs: (limit = KEPT): RunRow[] => all<RunRow>("select * from run order by startedAt desc limit ?", limit),
 
     run: (runId: string): RunRow | undefined => one<RunRow>("select * from run where runId = ?", runId),
 
@@ -133,6 +141,18 @@ export function open(file: string) {
       all<{ json: string }>("select json from event where runId = ? order by id", runId).map(
         (row) => JSON.parse(row.json) as StoredEvent,
       ),
+
+    /**
+     * Drops the events of every run that falls behind the list. ADR 0009: the
+     * state on disk is the run, so this costs the events and no run. It names
+     * the rows it drops, so an event that reaches the index before its row does
+     * stays.
+     */
+    trim(): void {
+      db.prepare(
+        "delete from event where runId in (select runId from run order by startedAt desc limit -1 offset ?)",
+      ).run(KEPT);
+    },
 
     /** Reads every run on disk, so a lost index costs nothing but the events. */
     index(runs: string): number {

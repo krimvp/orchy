@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { request as ask } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { daemon } from "../src/daemon.ts";
 import { serve } from "../src/server.ts";
-import { open, rowOf } from "../src/store.ts";
+import { KEPT, open, rowOf } from "../src/store.ts";
 import { formatFlow, parseFlow } from "../src/yaml.ts";
 
 const COUNT = `export default (inputs: Record<string, unknown>) => ({ count: Object.keys(inputs).length });\n`;
@@ -59,6 +60,20 @@ async function running(root: string) {
     return { code: response.status, body: (await response.json()) as never };
   };
 
+  /** Sends the headers of a browser, such as `Origin` and `Host`, which `fetch` holds back. */
+  const raw = (path: string, headers: Record<string, string>, method = "GET", body = "") =>
+    new Promise<{ code: number; error?: string }>((done, fail) => {
+      const sent = ask({ host: "127.0.0.1", port, path, method, headers }, (answer) => {
+        let text = "";
+        answer.on("data", (chunk: Buffer) => (text += chunk.toString()));
+        answer.on("end", () =>
+          done({ code: answer.statusCode ?? 0, error: (JSON.parse(text) as { error?: string }).error }),
+        );
+      });
+      sent.on("error", fail);
+      sent.end(body);
+    });
+
   /** Opens the stream of a run, keeps what it gives back, and lets go. */
   const read = async (path: string): Promise<Array<{ kind: string; event: { type: string; text?: string } }>> => {
     const control = new AbortController();
@@ -87,7 +102,9 @@ async function running(root: string) {
 
   return {
     engine,
+    port,
     call,
+    raw,
     read,
     close: () =>
       new Promise<void>((done) => {
@@ -329,6 +346,108 @@ test("a run that waits has no end, so it reports no length", () => {
 
   assert.equal(row.endedAt, null);
   assert.equal(row.waitingFor, "ask");
+});
+
+test("a page on another site cannot start a run, because the daemon refuses its Origin", async () => {
+  const site = await running(project());
+  try {
+    await site.call("/api/flows", { method: "POST", body: JSON.stringify({ path: "flow.yaml" }) });
+
+    const named = await site.raw("/api/flows/1/runs", { origin: "https://elsewhere.example" }, "POST", "{}");
+    assert.equal(named.code, 403);
+    assert.match(named.error as string, /https:\/\/elsewhere\.example/);
+
+    // A page on `https` sends the word `null` for a request that it does not read.
+    const hidden = await site.raw("/api/flows/1/runs", { origin: "null" }, "POST", "{}");
+    assert.equal(hidden.code, 403);
+
+    assert.deepEqual((await site.call("/api/runs")).body, []);
+  } finally {
+    await site.close();
+  }
+});
+
+test("a name that resolves to this machine reaches nothing, because the daemon refuses its Host", async () => {
+  const site = await running(project());
+  try {
+    const listed = await site.raw("/api/flows", { host: `rebound.example:${site.port}` });
+    assert.equal(listed.code, 403);
+    assert.match(listed.error as string, /rebound\.example/);
+
+    // The port is a part of the name, so a second daemon is a different one.
+    const other = await site.raw("/api/flows", { host: "127.0.0.1:1" });
+    assert.equal(other.code, 403);
+  } finally {
+    await site.close();
+  }
+});
+
+test("the page keeps working, because the daemon answers its own Origin and the name localhost", async () => {
+  const site = await running(project());
+  try {
+    const added = await site.raw(
+      "/api/flows",
+      { origin: `http://127.0.0.1:${site.port}`, "content-type": "application/json" },
+      "POST",
+      JSON.stringify({ path: "flow.yaml" }),
+    );
+    assert.equal(added.code, 200);
+
+    // A person types either name, and both reach this machine only.
+    const listed = await site.raw("/api/flows", { host: `localhost:${site.port}` });
+    assert.equal(listed.code, 200);
+  } finally {
+    await site.close();
+  }
+});
+
+test("the daemon refuses a flow file outside its root, and names the root", async () => {
+  const root = project();
+  const site = await running(root);
+  try {
+    const added = await site.call("/api/flows", { method: "POST", body: JSON.stringify({ path: "../../etc/hosts" }) });
+
+    assert.equal(added.code, 400);
+    const error = (added.body as { error: string }).error;
+    assert.match(error, /outside the root/);
+    assert.ok(error.includes(root), `the message names no root: ${error}`);
+    assert.deepEqual((await site.call("/api/flows")).body, []);
+  } finally {
+    await site.close();
+  }
+});
+
+test("the index drops the events of a run that falls behind the list, and keeps the run", () => {
+  const root = mkdtempSync(join(tmpdir(), "orchy-trim-"));
+  const store = open(join(root, "index.db"));
+  const at = (minute: number) => new Date(Date.UTC(2026, 0, 1, 0, minute)).toISOString();
+
+  // One run more than the index keeps, so the oldest one falls behind the list.
+  for (let count = 0; count <= KEPT; count += 1) {
+    const runId = `run-${String(count).padStart(4, "0")}`;
+    store.saveRun({
+      runId,
+      flowName: "counted",
+      path: null,
+      status: "done",
+      startedAt: at(count),
+      endedAt: at(count),
+      waitingFor: null,
+      question: null,
+      cost: null,
+      tokens: null,
+    });
+    store.addEvent(runId, { type: "run_start", runId });
+  }
+
+  store.trim();
+
+  assert.equal(store.runs().length, KEPT);
+  assert.equal(store.events(`run-${String(KEPT).padStart(4, "0")}`).length, 1);
+  assert.deepEqual(store.events("run-0000"), []);
+  // ADR 0009: the index is not the run, so the run stays.
+  assert.equal(store.run("run-0000")?.flowName, "counted");
+  store.close();
 });
 
 test("a flow written as YAML parses back to the same data", () => {

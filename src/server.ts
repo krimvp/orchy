@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
-import { extname, join, resolve } from "node:path";
+import type { AddressInfo } from "node:net";
+import { extname, isAbsolute, join, relative, resolve } from "node:path";
 import type { Daemon } from "./daemon.ts";
 import { type Flow, validate } from "./flow.ts";
 import { ADAPTERS, TOOLS } from "./harness.ts";
@@ -41,7 +42,12 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
       "POST",
       "/api/flows",
       async (_p, body) => {
-        const path = resolve(daemon.root, String(body.path ?? ""));
+        const root = resolve(daemon.root);
+        const path = resolve(root, String(body.path ?? ""));
+        // Every step acts in the root, so a flow file above it is another project.
+        if (!under(root, path)) {
+          throw new Error(`the flow at "${path}" is outside the root "${root}". Put the flow file under the root.`);
+        }
         if (!existsSync(path)) throw new Error(`there is no file at "${path}"`);
         const harness = adapterOf(body.harness);
         const flow = await readFlow(path);
@@ -170,19 +176,29 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
     ],
   ];
 
+  let origins = new Set<string>();
   const server = createServer((request, response) => {
-    void answer(routes, daemon, request, response);
+    void answer(routes, origins, request, response);
   });
 
-  return new Promise((keep) => server.listen(port, host, () => keep(server)));
+  return new Promise((keep) =>
+    server.listen(port, host, () => {
+      // The caller can ask for the port 0, so this daemon learns its name here.
+      origins = originsOf(host, (server.address() as AddressInfo).port);
+      keep(server);
+    }),
+  );
 }
 
 async function answer(
   routes: Array<[string, string, Handler]>,
-  daemon: Daemon,
+  origins: Set<string>,
   request: IncomingMessage,
   response: ServerResponse,
 ): Promise<void> {
+  const foreign = elsewhere(request, origins);
+  if (foreign) return send(response, 403, { error: foreign });
+
   const url = new URL(request.url ?? "/", "http://orchy");
   const method = request.method ?? "GET";
 
@@ -200,6 +216,55 @@ async function answer(
 
   if (url.pathname.startsWith("/api/")) return send(response, 404, { error: `no route for ${url.pathname}` });
   file(url.pathname, response);
+}
+
+/**
+ * Every name that reaches this daemon. The loopback address and `localhost` are
+ * the same machine, so a person types either one.
+ */
+function originsOf(host: string, port: number): Set<string> {
+  const loopback = host === "127.0.0.1" || host === "::1";
+  const names = loopback ? ["127.0.0.1", "[::1]", "localhost"] : [host];
+  return new Set(names.map((name) => originOf(`${name}:${port}`)));
+}
+
+/**
+ * The daemon has no user and no password, and it starts an agent that can hold
+ * `bash`. So a request from a page somewhere else must reach nothing.
+ *
+ * A browser sends `Origin` with every request that changes something, even one
+ * that it cannot read, so a foreign `Origin` is a cross-site request. It sends
+ * no `Origin` for a request of a page to its own daemon, which is what the
+ * `fetch` of the page and its `EventSource` both send. A `Host` that this
+ * daemon does not answer to is a name that resolves here from somewhere else,
+ * which is how DNS rebinding starts.
+ */
+function elsewhere(request: IncomingMessage, origins: Set<string>): string | undefined {
+  const own = [...origins][0] as string;
+  const host = request.headers.host ?? "";
+  if (!origins.has(originOf(host))) {
+    return `this daemon does not answer to the host "${host}". Reach it at ${own}.`;
+  }
+  const origin = request.headers.origin;
+  if (origin !== undefined && !origins.has(origin)) {
+    return `the page at "${origin}" is not this daemon, so it starts nothing here. Open the page at ${own}.`;
+  }
+  return undefined;
+}
+
+/** The origin of a host and a port, in the words a browser uses for it. */
+function originOf(host: string): string {
+  try {
+    return new URL(`http://${host}`).origin;
+  } catch {
+    return "";
+  }
+}
+
+/** A path is under the root when it reaches it with no step back. */
+function under(root: string, path: string): boolean {
+  const step = relative(root, path);
+  return step !== "" && !step.startsWith("..") && !isAbsolute(step);
 }
 
 function match(pattern: string, path: string): Params | undefined {

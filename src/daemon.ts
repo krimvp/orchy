@@ -146,6 +146,8 @@ export function daemon(root: string) {
       });
       child.on("close", (code) => {
         record(job, true);
+        // A run ends, so a run falls behind the list. The index bounds what it holds here.
+        if (!closed) store.trim();
         // Never hide a failure: a child that started no run keeps its ticket and its reason.
         if (!job.runId) job.error = job.stderr.trim() || `the run ended with the code ${code}`;
         finish(job);
