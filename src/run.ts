@@ -12,6 +12,7 @@ import {
   type Flow,
   type GateStep,
   type Step,
+  WAVE,
   cycleOf,
   expandFanout,
   order,
@@ -169,14 +170,12 @@ async function execute(state: RunState, cwd: string, options: RunOptions): Promi
     const feedback = state.feedback;
     state.feedback = undefined;
 
-    for (const step of work) emit({ type: "step_start", step: step.id });
-    const records = await Promise.all(
-      work.map(async (step) => {
-        const record = await runStep(step, state, cwd, harnessFor(step, harness, options.harnesses), feedback);
-        emit({ type: "step_end", step: step.id, status: record.status });
-        return record;
-      }),
-    );
+    const records = await pool(work, state.flow.parallel ?? WAVE, async (step) => {
+      emit({ type: "step_start", step: step.id });
+      const record = await runStep(step, state, cwd, harnessFor(step, harness, options.harnesses), feedback);
+      emit({ type: "step_end", step: step.id, status: record.status });
+      return record;
+    });
 
     work.forEach((step, index) => {
       state.steps[step.id] = records[index] as StepRecord;
@@ -242,6 +241,22 @@ function stop(
   close();
   emit({ type: "waiting", step, question });
   return state;
+}
+
+/** Runs at most `limit` at once, and keeps the answers in the order it was given. */
+async function pool<T, R>(items: T[], limit: number, work: (item: T) => Promise<R>): Promise<R[]> {
+  const answers = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (;;) {
+      const index = next;
+      next += 1;
+      if (index >= items.length) return;
+      answers[index] = await work(items[index] as T);
+    }
+  });
+  await Promise.all(workers);
+  return answers;
 }
 
 function harnessFor(step: Step, fallback: Harness, named?: Record<string, Harness>): Harness {

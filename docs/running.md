@@ -87,7 +87,12 @@ A step that needs `reviewer` needs every member, and the module reads them with
 `Object.values(inputs)`. The members run at the same time, because every step
 whose needs have passed runs together.
 
+A `call` step fans out as well. A member of a `call` step overrides its
+`module`, and a member of an agent step overrides its `harness`, `model`,
+`prompt`, and `tools`. A member never picks up a field the other kind holds.
+
 A step cannot both fan out and cycle, because which member cycles is unclear.
+Put the cycle on the step that reads the members.
 
 ### A flow inside a flow
 
@@ -107,6 +112,18 @@ whoever needed `review` now needs the step the inner flow ends with.
 
 An inner flow must end in exactly one step, so that reference is never unclear.
 A cycle inside an inner flow stays inside it.
+
+A `kind: flow` step carries a cycle of its own, and expansion hangs it on the
+step the inner flow ends with. So a panel sends the work back without the outer
+flow knowing how the panel reaches its answer.
+
+```yaml
+  - id: review
+    kind: flow
+    needs: [code]
+    flow: ./review-panel.yaml
+    cycle: { to: code, when: { approved: false }, limit: 3, policy: escalate }
+```
 
 An inner file is a fragment: it holds no workspace and the run checks the whole
 flow after it joins the parts.
@@ -131,6 +148,19 @@ is yours, so it lives in a `call` step, not in Orchy.
 ```
 
 A YAML anchor such as `&verdict` and `*verdict` keeps one copy of a contract.
+
+## How many steps at once
+
+Every step whose needs have passed runs together, up to eight at a time. A flow
+sets its own number.
+
+```yaml
+name: panel-review
+parallel: 3
+```
+
+The number only paces the work. It changes no result, so raise it when the
+harness and the provider allow more.
 
 ## Choose a model
 

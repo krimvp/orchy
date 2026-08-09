@@ -117,7 +117,8 @@ The same stop serves the `escalate` policy. When a cycle reaches its limit,
 Orchy clears the value of the step and waits for a person to supply it. So one
 mechanism covers a declared gate and an escalation.
 
-**Wave** — every step whose needs have passed runs at the same time. Orchy runs
+**Wave** — every step whose needs have passed runs at the same time, eight at
+once unless the flow sets `parallel`. Orchy runs
 a wave, settles it, and then works out the next one. So a panel of reviewers
 runs together, and invariant 3 still holds because a step with an unfinished
 need is not in the wave.

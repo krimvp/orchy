@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { Type } from "@sinclair/typebox";
-import { type AgentStep, agent, call, expandFanout, expandFlows, flow, gate, resolvePaths, validate } from "../src/flow.ts";
+import { type AgentStep, type CallStep, agent, call, expandFanout, expandFlows, flow, gate, resolvePaths, validate } from "../src/flow.ts";
 import type { AgentRequest, AgentResult, Harness } from "../src/harness.ts";
 import { resume, run } from "../src/run.ts";
 import { claude } from "../src/claude.ts";
@@ -951,4 +951,161 @@ test("a cycle inside a sub-flow points inside it after expansion", async () => {
   const judge = expanded.steps.find((step) => step.id === "review/judge") as AgentStep;
   assert.equal(judge.cycle?.to, "review/look");
   assert.deepEqual(validate(expanded), []);
+});
+
+test("a cycle on a flow step lands on the step the inner flow ends with", async () => {
+  const inner = flow("panel", {
+    steps: [
+      agent({ id: "look", prompt: "look.md", tools: ["read"], returns: Verdict }),
+      call({ id: "sum", needs: ["look"], module: "sum.ts", returns: Verdict }),
+    ],
+  });
+
+  const expanded = await expandFlows(
+    flow("outer", {
+      steps: [
+        agent({ id: "code", prompt: "code.md", tools: ["write"], returns: Summary }),
+        {
+          kind: "flow",
+          id: "review",
+          needs: ["code"],
+          flow: "./panel.yaml",
+          cycle: { to: "code", when: { approved: false }, limit: 2, policy: "escalate" },
+        },
+      ],
+    }),
+    async () => inner,
+  );
+
+  const last = expanded.steps.find((step) => step.id === "review/sum") as CallStep;
+  assert.equal(last.cycle?.to, "code");
+  assert.equal(last.cycle?.limit, 2);
+  assert.deepEqual(validate(expanded), []);
+});
+
+test("a flow step refuses to cycle when the step it ends with already does", async () => {
+  const inner = flow("panel", {
+    steps: [
+      agent({ id: "look", prompt: "look.md", tools: ["read"], returns: Verdict }),
+      agent({
+        id: "judge",
+        needs: ["look"],
+        prompt: "judge.md",
+        tools: ["read"],
+        returns: Verdict,
+        cycle: { to: "look", when: { approved: false }, limit: 2, policy: "accept" },
+      }),
+    ],
+  });
+
+  await assert.rejects(
+    () =>
+      expandFlows(
+        flow("outer", {
+          steps: [
+            {
+              kind: "flow",
+              id: "review",
+              needs: [],
+              flow: "./panel.yaml",
+              cycle: { to: "review/look", when: { approved: false }, limit: 1, policy: "accept" },
+            },
+          ],
+        }),
+        async () => inner,
+      ),
+    /cycles, and so does the step/,
+  );
+});
+
+test("a wave runs no more steps at once than the flow allows", async () => {
+  const cwd = workspace();
+  let running = 0;
+  let peak = 0;
+  const counting: Harness = {
+    toTrajectory: () => undefined,
+    async run() {
+      running += 1;
+      peak = Math.max(peak, running);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      running -= 1;
+      return { value: { summary: "done" } };
+    },
+  };
+
+  const state = await run(
+    flow("capped", {
+      parallel: 2,
+      steps: Array.from({ length: 6 }, (_, index) =>
+        agent({ id: `s${index}`, prompt: "step.md", tools: ["read"], returns: Summary }),
+      ),
+    }),
+    { cwd, harness: counting },
+  );
+
+  assert.equal(state.status, "done");
+  assert.equal(Object.keys(state.steps).length, 6);
+  assert.equal(peak, 2);
+});
+
+test("validate refuses a flow that runs fewer than one step at a time", () => {
+  const problems = validate(
+    flow("zero", {
+      parallel: 0,
+      steps: [agent({ id: "a", prompt: "a.md", tools: ["read"], returns: Summary })],
+    }),
+  );
+
+  assert.ok(problems.some((p) => p.includes("fewer than one step")));
+});
+
+test("a call step fans out too, and a member overrides its module", () => {
+  const expanded = expandFanout(
+    flow("split", {
+      steps: [
+        call({
+          id: "check",
+          module: "default.ts",
+          returns: Verdict,
+          fanout: [{ name: "one" }, { name: "two", module: "other.ts" }],
+        }),
+        call({ id: "sum", needs: ["check"], module: "sum.ts", returns: Verdict }),
+      ],
+    }),
+  );
+
+  const [one, two, sum] = expanded.steps as CallStep[];
+  assert.equal(one?.id, "check/one");
+  assert.equal(one?.module, "default.ts");
+  assert.equal(two?.module, "other.ts");
+  assert.deepEqual(sum?.needs, ["check/one", "check/two"]);
+  // A member of a call step never picks up a field only an agent step holds.
+  assert.equal((two as { harness?: string }).harness, undefined);
+});
+
+test("validate refuses a fanout on a step that cannot have one", () => {
+  const problems = validate({
+    name: "gated",
+    steps: [{ kind: "gate", id: "g", needs: [], question: "ok?", returns: Verdict, fanout: [{ name: "a" }] } as never],
+  });
+
+  assert.ok(problems.some((p) => p.includes("only an agent step and a call step can")));
+});
+
+test("validate refuses two members with one name", () => {
+  const problems = validate(
+    flow("clash", {
+      steps: [
+        agent({
+          id: "a",
+          prompt: "a.md",
+          tools: ["read"],
+          returns: Verdict,
+          fanout: [{ name: "x" }, { name: "x" }],
+        }),
+      ],
+    }),
+  );
+
+  assert.ok(problems.some((p) => p.includes("two members with one name")));
 });

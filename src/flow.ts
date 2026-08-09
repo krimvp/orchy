@@ -32,6 +32,7 @@ export interface Member {
   model?: string;
   prompt?: string;
   tools?: ToolName[];
+  module?: string;
 }
 
 export interface AgentStep<S extends TSchema = TSchema> extends Common, Acts {
@@ -50,6 +51,8 @@ export interface AgentStep<S extends TSchema = TSchema> extends Common, Acts {
 
 export interface CallStep<S extends TSchema = TSchema> extends Common, Acts {
   kind: "call";
+  /** Runs this step once for each member. Orchy expands it before the run. */
+  fanout?: Member[];
   module: string;
   returns: S;
   cycle?: Cycle<S>;
@@ -66,6 +69,8 @@ export interface GateStep<S extends TSchema = TSchema> extends Common {
 export interface FlowStep extends Common {
   kind: "flow";
   flow: string;
+  /** Expansion hangs this on the step the inner flow ends with. */
+  cycle?: Cycle;
 }
 
 export type Step = AgentStep | CallStep | GateStep | FlowStep;
@@ -73,6 +78,8 @@ export type Step = AgentStep | CallStep | GateStep | FlowStep;
 export interface Flow {
   name: string;
   workspace?: Workspace;
+  /** How many steps run at once. Eight when the flow does not say. */
+  parallel?: number;
   steps: Step[];
 }
 
@@ -90,8 +97,16 @@ export function gate<S extends TSchema>(step: Declared<GateStep<S>>): GateStep<S
   return { kind: "gate", needs: [], ...step };
 }
 
-export function flow(name: string, definition: { workspace?: Workspace; steps: Step[] }): Flow {
-  return { name, workspace: definition.workspace, steps: definition.steps };
+export const WAVE = 8;
+
+export function flow(
+  name: string,
+  definition: { workspace?: Workspace; parallel?: number; steps: Step[] },
+): Flow {
+  const built: Flow = { name, steps: definition.steps };
+  if (definition.workspace) built.workspace = definition.workspace;
+  if (definition.parallel !== undefined) built.parallel = definition.parallel;
+  return built;
 }
 
 /**
@@ -134,28 +149,42 @@ function rename(steps: Step[], map: Map<string, string[]>): Step[] {
  * the runner sees plain steps and a graphical editor draws the expanded graph.
  */
 export function expandFanout(flow: Flow): Flow {
-  if (!flow.steps.some((step) => step.kind === "agent" && step.fanout)) return flow;
+  if (!flow.steps.some((step) => fanoutOf(step))) return flow;
 
   const map = new Map<string, string[]>();
   const steps: Step[] = [];
 
   for (const step of flow.steps) {
-    if (step.kind !== "agent" || !step.fanout) {
+    const fanout = fanoutOf(step);
+    if (!fanout) {
       steps.push(step);
       continue;
     }
-    const { fanout, ...base } = step;
+    const base = { ...step } as Record<string, unknown>;
+    delete base.fanout;
     const names: string[] = [];
     for (const member of fanout) {
-      const { name, ...overrides } = member;
-      const id = `${step.id}/${name}`;
+      const id = `${step.id}/${member.name}`;
       names.push(id);
-      steps.push({ ...base, ...overrides, id });
+      // A member overrides only what its kind of step can hold.
+      const overrides =
+        step.kind === "agent" ? pick(member, ["harness", "model", "prompt", "tools"]) : pick(member, ["module"]);
+      steps.push({ ...base, ...overrides, id } as unknown as Step);
     }
     map.set(step.id, names);
   }
 
   return { ...flow, steps: rename(steps, map) };
+}
+
+export function fanoutOf(step: Step): Member[] | undefined {
+  return step.kind === "agent" || step.kind === "call" ? step.fanout : undefined;
+}
+
+function pick(member: Member, keys: Array<keyof Member>): Partial<Member> {
+  const taken: Partial<Member> = {};
+  for (const key of keys) if (member[key] !== undefined) Object.assign(taken, { [key]: member[key] });
+  return taken;
 }
 
 /**
@@ -197,6 +226,18 @@ export async function expandFlows(flow: Flow, load: (path: string) => Promise<Fl
       if (cycle && own.has(cycle.to)) (moved as AgentStep).cycle = { ...cycle, to: id(cycle.to) };
       steps.push(moved);
     }
+    // A cycle on the outer step belongs to the step the inner flow ends with.
+    if (step.cycle) {
+      const last = steps.find((one) => one.id === id((exits[0] as Step).id)) as Step;
+      if (cycleOf(last)) {
+        throw new Error(`step "${step.id}" cycles, and so does the step "${last.id}" it ends with`);
+      }
+      if (last.kind === "gate") {
+        throw new Error(`step "${step.id}" cycles, but the step it ends with takes its value from a person`);
+      }
+      (last as AgentStep).cycle = step.cycle;
+    }
+
     map.set(step.id, [id((exits[0] as Step).id)]);
   }
 
@@ -211,6 +252,10 @@ export function validate(flow: Flow): string[] {
   const problems: string[] = [];
   if (!flow.name) problems.push("the flow has no name");
   if (flow.steps.length === 0) problems.push("the flow has no steps");
+
+  if (flow.parallel !== undefined && flow.parallel < 1) {
+    problems.push("the flow runs fewer than one step at a time");
+  }
 
   const ids = new Set<string>();
   for (const step of flow.steps) {
@@ -231,9 +276,20 @@ export function validate(flow: Flow): string[] {
   if (problems.length > 0) return problems;
 
   for (const step of flow.steps) {
-    if (step.kind === "agent" && step.fanout) {
-      if (step.fanout.length === 0) problems.push(`step "${step.id}" fans out to nothing`);
-      if (step.cycle) problems.push(`step "${step.id}" both fans out and cycles, so which member cycles is unclear`);
+    const fanout = fanoutOf(step);
+    // A fanout that no one can expand must say so, not quietly do nothing.
+    if (!fanout) {
+      if ((step as { fanout?: unknown }).fanout) {
+        problems.push(`step "${step.id}" fans out, but only an agent step and a call step can`);
+      }
+      continue;
+    }
+    if (fanout.length === 0) problems.push(`step "${step.id}" fans out to nothing`);
+    if (new Set(fanout.map((one) => one.name)).size !== fanout.length) {
+      problems.push(`step "${step.id}" has two members with one name`);
+    }
+    if (cycleOf(step)) {
+      problems.push(`step "${step.id}" both fans out and cycles, so which member cycles is unclear`);
     }
   }
   if (problems.length > 0) return problems;
