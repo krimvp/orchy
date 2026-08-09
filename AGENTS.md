@@ -82,8 +82,9 @@ the daemon serves that directory.
 
 - The UI states no rule of its own. It asks the daemon, and the daemon asks
   `validate()`. A copy of a rule falls behind.
-- The tool list and the harness list come from `GET /api/health`, for the same
-  reason.
+- The tool list, the harness list, and the operators of a match come from `GET
+  /api/health`, for the same reason. A set that the page must draw goes there.
+  The answer names the set and holds no rule: `validate()` still refuses.
 - `styles.css` holds every colour as a token, once for light and once for dark.
   A component names a token. No component names a colour.
 - Motion uses the two curves that the stylesheet declares, and it carries
