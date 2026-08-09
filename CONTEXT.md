@@ -88,9 +88,14 @@ carry no types, so Orchy checks the shape before it reads any meaning.
 _Avoid_: Schema, structure, format
 
 **Contract**:
-The schema that the value of a step must match. The contract is one kind of
-invariant.
+The schema that the value of a step must match. A flow declares one as well, for
+the value that it produces. The contract is one kind of invariant.
 _Avoid_: Output schema, signature, interface
+
+**Takes**:
+The values that a run supplies to a flow. A flow declares them as a schema.
+Every step of the run reads them, and a name in a prompt takes one.
+_Avoid_: Parameter, argument, input, variable
 
 **Policy**:
 The choice that Orchy makes when a cycle reaches its limit and the steps still

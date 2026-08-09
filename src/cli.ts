@@ -7,11 +7,12 @@ import { pi } from "./pi.ts";
 import { type RunEvent, type RunState, resume, run } from "./run.ts";
 import { serve } from "./server.ts";
 
-const USAGE = `use: orchy run <flow file> [--harness pi|claude] [--events]
+const USAGE = `use: orchy run <flow file> [--with <json>] [--harness pi|claude] [--events]
      orchy resume <run id> <json value> [--harness pi|claude] [--events]
      orchy daemon [--port 4000]
 
 A flow file is TypeScript or YAML.
+--with supplies the values that the flow takes, as one JSON object.
 --events writes one JSON event for each line, for a parent process to read.`;
 
 const PORT = 4000;
@@ -43,6 +44,7 @@ const events = take(argv, "--events");
 const at = argv.indexOf("--harness");
 const chosen = at === -1 ? "pi" : (argv[at + 1] ?? "");
 if (at !== -1) argv.splice(at, 2);
+const given = text(argv, "--with");
 const port = number(argv, "--port") ?? PORT;
 
 function take(list: string[], flag: string): boolean {
@@ -50,6 +52,29 @@ function take(list: string[], flag: string): boolean {
   if (found === -1) return false;
   list.splice(found, 1);
   return true;
+}
+
+function text(list: string[], flag: string): string | undefined {
+  const found = list.indexOf(flag);
+  if (found === -1) return undefined;
+  const value = list[found + 1];
+  list.splice(found, 2);
+  return value;
+}
+
+/** The values that the flow takes. One JSON object, so every key has a name. */
+function valuesOf(source: string | undefined): Record<string, unknown> | undefined {
+  if (source === undefined) return undefined;
+  let value: unknown;
+  try {
+    value = JSON.parse(source);
+  } catch {
+    throw new Error(`--with holds "${source}", which is not JSON`);
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`--with holds "${source}". Write one JSON object, such as '{"issue":123}'.`);
+  }
+  return value as Record<string, unknown>;
 }
 
 function number(list: string[], flag: string): number | undefined {
@@ -86,7 +111,7 @@ const [command, first, second] = argv;
 
 try {
   if (command === "run" && first) {
-    const options = { onEvent: emit, harness, harnesses: HARNESSES };
+    const options = { onEvent: emit, harness, harnesses: HARNESSES, with: valuesOf(given) };
     finish(await run(await loadFlow(first), options));
   }
 

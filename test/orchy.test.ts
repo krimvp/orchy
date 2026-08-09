@@ -2118,3 +2118,250 @@ test("the narrower harness wins: the step, then the flow, then the run", async (
   assert.equal(two.seen.length, 1, "the step names none, so it takes the flow");
   assert.equal(three.seen.length, 0, "the flow names one, so the run never answers");
 });
+
+// ── The values a flow takes, and the value it returns ────────────────────────
+
+const Issue = Type.Object({ issue: Type.Number() });
+
+function takingFlow(step: AgentStep): Flow {
+  return flow("issued", { takes: Issue, steps: [step] });
+}
+
+test("a run that supplies values for a flow that takes none is refused", async () => {
+  const cwd = workspace();
+  const harness = fakeHarness({ summary: "done" });
+
+  await assert.rejects(
+    () =>
+      run(flow("plain", { steps: [agent({ id: "a", prompt: "step.md", tools: ["read"], returns: Summary })] }), {
+        cwd,
+        harness,
+        with: { issue: 123 },
+      }),
+    /takes no values, and this run supplies issue/,
+  );
+  assert.equal(harness.seen.length, 0);
+});
+
+test("a run that supplies no values for a flow that takes them is refused", async () => {
+  const cwd = workspace();
+  const harness = fakeHarness({ summary: "done" });
+
+  await assert.rejects(
+    () =>
+      run(takingFlow(agent({ id: "a", prompt: "step.md", tools: ["read"], returns: Summary })), { cwd, harness }),
+    /takes values, and this run supplies none/,
+  );
+  assert.equal(harness.seen.length, 0);
+});
+
+test("a value that breaks what the flow takes fails before any step spends a token", async () => {
+  const cwd = workspace();
+  const harness = fakeHarness({ summary: "done" });
+
+  await assert.rejects(
+    () =>
+      run(takingFlow(agent({ id: "a", prompt: "step.md", tools: ["read"], returns: Summary })), {
+        cwd,
+        harness,
+        with: { issue: "123" },
+      }),
+    /break what the flow "issued" takes at "\/issue": must be number/,
+  );
+  assert.equal(harness.seen.length, 0);
+});
+
+test("an agent step reads the values the run takes, and a component takes them as well", async () => {
+  const cwd = workspace();
+  const harness = fakeHarness({ summary: "done" });
+  writeFileSync(join(cwd, "m.ts"), "export default (inputs, say, values) => ({ summary: String(values.issue) });");
+
+  const state = await run(
+    flow("issued", {
+      takes: Issue,
+      steps: [
+        agent({ id: "a", prompt: "step.md", tools: ["read"], returns: Summary }),
+        call({ id: "b", needs: ["a"], module: "m.ts", returns: Summary }),
+      ],
+    }),
+    { cwd, harness, with: { issue: 123 } },
+  );
+
+  assert.equal(state.status, "done");
+  assert.match(harness.seen[0]?.prompt ?? "", /The values this run takes[\s\S]*"issue": 123/);
+  assert.deepEqual(state.steps.b?.value, { summary: "123" });
+});
+
+test("a name in a prompt takes its value from the flow and from the step", async () => {
+  const cwd = workspace();
+  const harness = fakeHarness({ summary: "done" });
+  writeFileSync(join(cwd, "named.md"), "Read issue {{ issue }} for {{who}}.");
+
+  await run(
+    flow("issued", {
+      takes: Issue,
+      steps: [
+        agent({
+          id: "a",
+          prompt: "named.md",
+          tools: ["read"],
+          returns: Summary,
+          with: { who: "the platform team" },
+        }),
+      ],
+    }),
+    { cwd, harness, with: { issue: 123 } },
+  );
+
+  assert.match(harness.seen[0]?.prompt ?? "", /Read issue 123 for the platform team\./);
+});
+
+test("a name that nothing supplies fails the step, and names the step and the name", async () => {
+  const cwd = workspace();
+  const harness = fakeHarness({ summary: "done" });
+  writeFileSync(join(cwd, "named.md"), "Read issue {{ ticket }}.");
+
+  const state = await run(
+    takingFlow(agent({ id: "a", prompt: "named.md", tools: ["read"], returns: Summary })),
+    { cwd, harness, with: { issue: 123 } },
+  );
+
+  assert.equal(state.status, "failed");
+  assert.match(state.steps.a?.error ?? "", /step "a" reads "\{\{ ticket \}\}" in its prompt/);
+  assert.match(state.steps.a?.error ?? "", /nothing supplies "ticket"/);
+  assert.equal(harness.seen.length, 0);
+});
+
+test("validate refuses a flow that returns a value and ends in more than one step", () => {
+  const problems = validate(
+    flow("two-ends", {
+      returns: Summary,
+      steps: [
+        agent({ id: "a", prompt: "p.md", tools: ["read"], returns: Summary }),
+        agent({ id: "b", prompt: "p.md", tools: ["read"], returns: Summary }),
+      ],
+    }),
+  );
+
+  assert.ok(problems.some((p) => p.includes('it ends in 2 steps: "a", "b"')));
+});
+
+test("the value of the step a flow ends with is checked against what the flow returns", async () => {
+  const cwd = workspace();
+
+  const state = await run(
+    flow("checked", {
+      returns: Verdict,
+      steps: [agent({ id: "a", prompt: "step.md", tools: ["read"], returns: Summary })],
+    }),
+    { cwd, harness: fakeHarness({ summary: "done" }) },
+  );
+
+  assert.equal(state.status, "failed");
+  assert.match(state.error ?? "", /the value of "a" breaks what the flow "checked" returns/);
+});
+
+test("a flow that returns the value it declares ends done", async () => {
+  const cwd = workspace();
+
+  const state = await run(
+    flow("checked", {
+      returns: Summary,
+      steps: [agent({ id: "a", prompt: "step.md", tools: ["read"], returns: Summary })],
+    }),
+    { cwd, harness: fakeHarness({ summary: "done" }) },
+  );
+
+  assert.equal(state.status, "done");
+  assert.equal(state.error, undefined);
+});
+
+test("a flow step passes its values down to the steps of the flow it names", async () => {
+  const inner = flow("panel", {
+    takes: Issue,
+    steps: [
+      agent({ id: "look", prompt: "look.md", tools: ["read"], returns: Verdict, with: { angle: "risk" } }),
+      call({ id: "sum", needs: ["look"], module: "sum.ts", returns: Verdict }),
+    ],
+  });
+
+  const expanded = await expandFlows(
+    flow("outer", {
+      steps: [{ kind: "flow", id: "review", needs: [], flow: "./panel.yaml", with: { issue: 123 } }],
+    }),
+    async () => inner,
+  );
+
+  // The step keeps what only it holds, and takes what the flow step supplies.
+  assert.deepEqual((expanded.steps[0] as AgentStep).with, { issue: 123, angle: "risk" });
+  assert.deepEqual((expanded.steps[1] as CallStep).with, { issue: 123 });
+  assert.deepEqual(validate(expanded), []);
+});
+
+test("a flow step that supplies a value the flow it names does not take is refused", async () => {
+  const inner = flow("panel", {
+    steps: [agent({ id: "look", prompt: "look.md", tools: ["read"], returns: Verdict })],
+  });
+
+  await assert.rejects(
+    () =>
+      expandFlows(
+        flow("outer", {
+          steps: [{ kind: "flow", id: "review", needs: [], flow: "./panel.yaml", with: { issue: 123 } }],
+        }),
+        async () => inner,
+      ),
+    /takes no values, and step "review" supplies issue/,
+  );
+});
+
+test("a flow step that supplies none to a flow that takes values is refused", async () => {
+  const inner = flow("panel", {
+    takes: Issue,
+    steps: [agent({ id: "look", prompt: "look.md", tools: ["read"], returns: Verdict })],
+  });
+
+  await assert.rejects(
+    () =>
+      expandFlows(
+        flow("outer", { steps: [{ kind: "flow", id: "review", needs: [], flow: "./panel.yaml" }] }),
+        async () => inner,
+      ),
+    /takes values, and step "review" supplies none/,
+  );
+});
+
+test("validate refuses what a flow takes when it is not JSON Schema", () => {
+  const problems = validate(
+    parseFlow(
+      [
+        "name: bad",
+        "takes: issue",
+        "steps:",
+        "  - id: one",
+        "    kind: agent",
+        "    prompt: p.md",
+        "    tools: [read]",
+        "    returns: { type: object }",
+      ].join("\n"),
+    ),
+  );
+
+  assert.ok(problems.some((p) => p.includes('the flow takes "issue", which is not JSON Schema')));
+});
+
+test("a component in a sub-flow reads the values of that flow, as it does in a run of its own", async () => {
+  const cwd = workspace();
+  writeFileSync(join(cwd, "m.ts"), "export default (inputs, say, values) => ({ summary: String(values.issue) });");
+
+  const inner = flow("panel", { takes: Issue, steps: [call({ id: "open", module: "m.ts", returns: Summary })] });
+  const outer = await expandFlows(
+    flow("outer", {
+      steps: [{ kind: "flow", id: "sub", needs: [], flow: "./panel.yaml", with: { issue: 123 } }],
+    }),
+    async () => inner,
+  );
+
+  const state = await run(outer, { cwd });
+  assert.deepEqual(state.steps["sub/open"]?.value, { summary: "123" });
+});

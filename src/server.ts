@@ -101,10 +101,12 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
         const flow = await loadFlow(row.path, daemon.root);
         const problems = validate(flow);
         if (problems.length > 0) throw new Error(`the flow is not valid:\n- ${problems.join("\n- ")}`);
+        // The daemon adds no rule: it passes the values on, and the child checks them.
         return daemon.start({
           path: row.path,
           flowName: flow.name,
           harness: body.harness ? adapterOf(body.harness) : row.harness,
+          with: body.with as Record<string, unknown> | undefined,
         });
       },
     ],

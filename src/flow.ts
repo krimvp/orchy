@@ -1,7 +1,25 @@
 import { isAbsolute, resolve } from "node:path";
 import type { Static, TSchema } from "@sinclair/typebox";
+import { Ajv2020 } from "ajv/dist/2020.js";
 import { ADAPTERS, type AdapterName, SUPPLIES, TOOLS, type ToolName } from "./harness.ts";
 import type { Workspace } from "./workspace.ts";
+
+/**
+ * A schema is checked as plain JSON Schema, not as a TypeBox object. A schema
+ * that has been through a file, a resume, or a graphical editor is data, and it
+ * no longer carries the symbols that TypeBox needs.
+ */
+const ajv = new Ajv2020({ strict: false });
+
+/**
+ * Where a value breaks a schema, or nothing when it holds. Invariant 2 checks a
+ * contract with this, and a flow checks what it takes and what it returns.
+ */
+export function schemaProblem(schema: TSchema, value: unknown): string | undefined {
+  if (ajv.validate(schema, value)) return undefined;
+  const [first] = ajv.errors ?? [];
+  return `at "${first?.instancePath || "/"}": ${first?.message ?? "unknown"}`;
+}
 
 /**
  * A partial match against a value, not an expression. A small expression
@@ -92,6 +110,8 @@ export interface GateStep<S extends TSchema = TSchema> extends Common {
 export interface FlowStep extends Omit<Common, "when"> {
   kind: "flow";
   flow: string;
+  /** The values the inner flow takes. Expansion gives them to every step of it. */
+  with?: Record<string, unknown>;
   /** Expansion hangs this on the step the inner flow ends with. */
   cycle?: Cycle;
 }
@@ -105,6 +125,10 @@ export interface Flow {
   harness?: string;
   /** The model for a step that names none. */
   model?: string;
+  /** The values a run supplies. Every step of the run reads them. */
+  takes?: TSchema;
+  /** The value the flow produces, which is the value of the step it ends with. */
+  returns?: TSchema;
   /** How many steps run at once. Eight when the flow does not say. */
   parallel?: number;
   steps: Step[];
@@ -133,8 +157,36 @@ export function flow(name: string, definition: Definition): Flow {
   if (definition.workspace) built.workspace = definition.workspace;
   if (definition.harness) built.harness = definition.harness;
   if (definition.model) built.model = definition.model;
+  if (definition.takes) built.takes = definition.takes;
+  if (definition.returns) built.returns = definition.returns;
   if (definition.parallel !== undefined) built.parallel = definition.parallel;
   return built;
+}
+
+/**
+ * Whether the values that reach a flow match what it takes. A value that no
+ * flow takes reaches no step, and a flow that takes values and gets none leaves
+ * a hole in every prompt. Both fail before a step spends a token. `who` names
+ * the run, or the step that holds the flow.
+ */
+export function takesProblem(flow: Flow, values: Record<string, unknown> | undefined, who: string): string | undefined {
+  if (!flow.takes) {
+    // An empty object drops no value, so only a name that no step reads fails.
+    const names = Object.keys(values ?? {});
+    if (names.length === 0) return undefined;
+    return `the flow "${flow.name}" takes no values, and ${who} supplies ${names.join(", ")}. Declare "takes" on the flow, or supply no values.`;
+  }
+  if (values === undefined) {
+    return `the flow "${flow.name}" takes values, and ${who} supplies none. Supply the values that "takes" names.`;
+  }
+  const problem = schemaProblem(flow.takes, values);
+  return problem && `the values ${who} supplies break what the flow "${flow.name}" takes ${problem}`;
+}
+
+/** The steps that no step needs. A flow that returns a value ends in one of them. */
+export function exitsOf(steps: Step[]): Step[] {
+  const wanted = new Set(steps.flatMap((step) => step.needs));
+  return steps.filter((step) => !wanted.has(step.id));
 }
 
 /** The harness that runs a step: the step names one, or the flow does. */
@@ -243,8 +295,10 @@ export async function expandFlows(flow: Flow, load: (path: string) => Promise<Fl
     }
 
     const inner = expandFanout(await expandFlows(await load(step.flow), load));
-    const wanted = new Set(inner.steps.flatMap((one) => one.needs));
-    const exits = inner.steps.filter((one) => !wanted.has(one.id));
+    const takes = takesProblem(inner, step.with, `step "${step.id}"`);
+    if (takes) throw new Error(takes);
+
+    const exits = exitsOf(inner.steps);
     if (exits.length !== 1) {
       throw new Error(
         `the flow at "${step.flow}" ends in ${exits.length} steps, and step "${step.id}" needs exactly one`,
@@ -260,6 +314,11 @@ export async function expandFlows(flow: Flow, load: (path: string) => Promise<Fl
         // A step that starts the inner flow waits for whatever the outer step waits for.
         needs: one.needs.length === 0 ? step.needs : one.needs.map(id),
       } as Step;
+      // Expansion drops the inner flow, so the values it takes ride on each step
+      // that reads one. The step keeps what only it holds, which is the narrower.
+      if (step.with && (moved.kind === "agent" || moved.kind === "call")) {
+        moved.with = { ...step.with, ...moved.with };
+      }
       // A cycle inside a flow stays inside it.
       const cycle = cycleOf(moved);
       if (cycle && own.has(cycle.to)) (moved as AgentStep).cycle = { ...cycle, to: id(cycle.to) };
@@ -283,7 +342,7 @@ export async function expandFlows(flow: Flow, load: (path: string) => Promise<Fl
   return { ...flow, steps: rename(steps, map) };
 }
 
-const FLOW_HOLDS = ["name", "workspace", "harness", "model", "parallel", "steps"];
+const FLOW_HOLDS = ["name", "workspace", "harness", "model", "takes", "returns", "parallel", "steps"];
 
 /**
  * What each kind of step holds. A field that this table does not name is a
@@ -297,7 +356,7 @@ const HOLDS: Record<Step["kind"], { must: string[]; may: string[] }> = {
   },
   call: { must: ["module", "returns"], may: ["needs", "when", "with", "changes", "cycle", "fanout"] },
   gate: { must: ["question", "returns"], may: ["needs", "when"] },
-  flow: { must: ["flow"], may: ["needs", "cycle"] },
+  flow: { must: ["flow"], may: ["needs", "with", "cycle"] },
 };
 
 /** The first name is the member itself. The rest are what it overrides. */
@@ -332,6 +391,12 @@ function shapeProblems(flow: Flow): string[] {
     if (!FLOW_HOLDS.includes(key)) problems.push(`the flow holds "${key}", which is not a field of a flow`);
   }
   problems.push(...workspaceProblems(flow.workspace));
+  if (flow.takes !== undefined && !isSchema(flow.takes)) {
+    problems.push(`the flow takes ${JSON.stringify(flow.takes)}, which is not JSON Schema`);
+  }
+  if (flow.returns !== undefined && !isSchema(flow.returns)) {
+    problems.push(`the flow returns ${JSON.stringify(flow.returns)}, which is not JSON Schema`);
+  }
   if (!Array.isArray(flow.steps)) return [...problems, "the flow has no steps"];
 
   for (const step of flow.steps) {
@@ -463,6 +528,18 @@ export function validate(flow: Flow): string[] {
 
   problems.push(...findLoops(flow.steps));
   if (problems.length > 0) return problems;
+
+  // A flow returns the value of the step it ends with, so more than one end
+  // leaves no one value to check. A fanout at the end makes several ends.
+  if (flow.returns !== undefined) {
+    const exits = exitsOf(flow.steps);
+    if (exits.length !== 1) {
+      const names = exits.map((step) => `"${step.id}"`).join(", ");
+      problems.push(
+        `the flow returns one value, but it ends in ${exits.length} steps: ${names}. A flow that returns a value ends in one step.`,
+      );
+    }
+  }
 
   for (const step of flow.steps) {
     const fanout = fanoutOf(step);

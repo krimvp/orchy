@@ -20,7 +20,22 @@ const TELLS = `export default (inputs: Record<string, unknown>, say: (text: stri
 };
 `;
 
+/** A component that reads the values of the run, which the daemon passes to the child. */
+const ISSUE = `export default (
+  inputs: Record<string, unknown>,
+  say: (text: string) => void,
+  values: Record<string, unknown>,
+) => ({ count: Number(values.issue) });
+`;
+
 const NUMBER = { type: "object", required: ["count"], properties: { count: { type: "number" } } };
+
+/** A flow that takes one value, so a test proves the whole chain of a run. */
+const TAKING = {
+  name: "taking",
+  takes: { type: "object", required: ["issue"], properties: { issue: { type: "number" } } },
+  steps: [{ id: "work", kind: "call", module: "issue.ts", returns: NUMBER }],
+};
 
 /** A flow of two deterministic steps and a gate, so a test needs no model. */
 const FLOW = {
@@ -42,6 +57,7 @@ function project(flow: unknown = FLOW): string {
   const root = mkdtempSync(join(tmpdir(), "orchy-daemon-"));
   writeFileSync(join(root, "count.ts"), COUNT);
   writeFileSync(join(root, "tells.ts"), TELLS);
+  writeFileSync(join(root, "issue.ts"), ISSUE);
   writeFileSync(join(root, "flow.yaml"), formatFlow(flow as never));
   return root;
 }
@@ -459,4 +475,42 @@ test("a flow written as YAML parses back to the same data", () => {
   );
   assert.deepEqual(flow.steps[1]?.needs, ["first"]);
   assert.deepEqual(flow.steps[0]?.needs, []);
+});
+
+test("the daemon passes the values of a run to the child, and every step reads them", async () => {
+  const site = await running(project(TAKING));
+  try {
+    await site.call("/api/flows", { method: "POST", body: JSON.stringify({ path: "flow.yaml" }) });
+    const started = await site.call("/api/flows/1/runs", {
+      method: "POST",
+      body: JSON.stringify({ with: { issue: 42 } }),
+    });
+    assert.equal(started.code, 200);
+    await until(async () => ((await site.call("/api/runs")).body as Array<{ status: string }>)[0]?.status === "done");
+
+    const [row] = (await site.call("/api/runs")).body as Array<{ runId: string }>;
+    const run = (await site.call(`/api/runs/${row?.runId}`)).body as {
+      state: { with: unknown; steps: Record<string, { value: unknown }> };
+    };
+    assert.deepEqual(run.state.with, { issue: 42 });
+    assert.deepEqual(run.state.steps.work?.value, { count: 42 });
+  } finally {
+    await site.close();
+  }
+});
+
+test("the daemon adds no rule of its own, so the child refuses a run with no values", async () => {
+  const site = await running(project(TAKING));
+  try {
+    await site.call("/api/flows", { method: "POST", body: JSON.stringify({ path: "flow.yaml" }) });
+    const started = await site.call("/api/flows/1/runs", { method: "POST", body: "{}" });
+    assert.equal(started.code, 200);
+
+    await until(async () => ((await site.call("/api/queue")).body as Array<{ error?: string }>)[0]?.error !== undefined);
+    const [ticket] = (await site.call("/api/queue")).body as Array<{ error: string }>;
+    assert.match(ticket?.error as string, /takes values, and this run supplies none/);
+    assert.deepEqual((await site.call("/api/runs")).body, []);
+  } finally {
+    await site.close();
+  }
 });

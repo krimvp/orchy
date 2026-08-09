@@ -42,10 +42,13 @@ export interface Order {
   path: string;
   flowName: string;
   harness: string;
+  /** The values the flow takes. The daemon passes them on, and the child checks them. */
+  with?: Record<string, unknown>;
 }
 
 interface Job extends Ticket {
   harness: string;
+  with?: Record<string, unknown>;
   runId?: string;
   /** A resume carries the value that answers the gate. */
   value?: unknown;
@@ -127,9 +130,10 @@ export function daemon(root: string) {
     while (running < RUNS && queue.length > 0) {
       const job = queue.shift() as Job;
       running += 1;
+      // A resume reads the values from the state on disk, so only a run carries them.
       const args =
         job.value === undefined
-          ? ["run", job.path]
+          ? ["run", job.path, ...(job.with ? ["--with", JSON.stringify(job.with)] : [])]
           : ["resume", job.runId as string, JSON.stringify(job.value)];
       const child = spawn(process.execPath, [CLI, ...args, "--harness", job.harness, "--events"], {
         cwd: root,

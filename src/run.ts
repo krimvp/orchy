@@ -4,7 +4,6 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
-import { Ajv2020 } from "ajv/dist/2020.js";
 import {
   type AgentStep,
   type CallStep,
@@ -16,10 +15,13 @@ import {
   type Step,
   WAVE,
   cycleOf,
+  exitsOf,
   expandFanout,
   harnessOf,
   modelOf,
   order,
+  schemaProblem,
+  takesProblem,
   validate,
 } from "./flow.ts";
 import type { Harness, Note } from "./harness.ts";
@@ -29,18 +31,27 @@ import { changed, take } from "./workspace.ts";
 
 const version = String(createRequire(import.meta.url)("../package.json").version);
 
-/**
- * A contract is checked as plain JSON Schema, not as a TypeBox object. A schema
- * that has been through a file, a resume, or a graphical editor is data, and it
- * no longer carries the symbols that TypeBox needs.
- */
-const ajv = new Ajv2020({ strict: false });
-
 function contractProblem(step: Step, value: unknown): string | undefined {
   if (step.kind === "flow") return `step "${step.id}" is a flow that no one expanded`;
-  if (ajv.validate(step.returns, value)) return undefined;
-  const [first] = ajv.errors ?? [];
-  return `the value of "${step.id}" breaks the contract at "${first?.instancePath || "/"}": ${first?.message ?? "unknown"}`;
+  const problem = schemaProblem(step.returns, value);
+  return problem && `the value of "${step.id}" breaks the contract ${problem}`;
+}
+
+/**
+ * A flow that declares `returns` is checked once, at the end. `validate()`
+ * refuses a flow that declares it and ends in more than one step, so the step
+ * that holds the value of the run is the one end.
+ */
+function returnProblem(state: RunState): string | undefined {
+  const schema = state.flow.returns;
+  if (!schema) return undefined;
+  const exit = exitsOf(state.flow.steps)[0] as Step;
+  const record = state.steps[exit.id];
+  if (record?.status !== "done") {
+    return `the flow "${state.flow.name}" returns the value of "${exit.id}", and the run has no value for it`;
+  }
+  const problem = schemaProblem(schema, record.value);
+  return problem && `the value of "${exit.id}" breaks what the flow "${state.flow.name}" returns ${problem}`;
 }
 
 export interface StepRecord {
@@ -69,7 +80,11 @@ export interface RunState {
   runId: string;
   /** The flow is data, so a run holds the whole of it and resumes without the file. */
   flow: Flow;
+  /** The values this run supplies for what the flow takes. Every step reads them. */
+  with?: Record<string, unknown>;
   status: "running" | "waiting" | "done" | "failed";
+  /** Why the run failed, when the fault belongs to the run and not to one step. */
+  error?: string;
   waitingFor?: string;
   question?: string;
   steps: Record<string, StepRecord>;
@@ -95,6 +110,8 @@ export type RunEvent =
 
 export interface RunOptions {
   cwd?: string;
+  /** The values the flow takes. `--with` and the daemon both supply them. */
+  with?: Record<string, unknown>;
   /** The harness for a step that names none. */
   harness?: Harness;
   /** The adapters a step can name. */
@@ -105,6 +122,11 @@ export interface RunOptions {
 export async function run(input: Flow, options: RunOptions = {}): Promise<RunState> {
   // The members go before the expansion does, so check the flow a user wrote first.
   refuse(validate(input));
+  // The values come before the first step, so a value that no step can use costs
+  // no token.
+  const takes = takesProblem(input, options.with, "this run");
+  if (takes) throw new Error(takes);
+
   const flow = expandFanout(input);
   // A sub-flow needs a file, so only the loader can expand one. Say so plainly.
   const nested = flow.steps.find((step) => step.kind === "flow");
@@ -116,6 +138,8 @@ export async function run(input: Flow, options: RunOptions = {}): Promise<RunSta
 
   const cwd = resolve(options.cwd ?? process.cwd());
   const state: RunState = { runId: randomUUID(), flow, status: "running", steps: {}, cycles: {} };
+  // ADR 0005: the state on disk is the run, so a resume reads the values again.
+  if (options.with) state.with = options.with;
   mkdirSync(directoryOf(cwd, state.runId), { recursive: true });
   return execute(state, cwd, options);
 }
@@ -311,7 +335,9 @@ async function execute(state: RunState, cwd: string, options: RunOptions): Promi
     save();
   }
 
-  state.status = "done";
+  const problem = returnProblem(state);
+  state.status = problem ? "failed" : "done";
+  if (problem) state.error = problem;
   close();
   emit({ type: "run_end", status: state.status });
   return state;
@@ -436,7 +462,7 @@ async function runStep(
         ? await harness.run(
             {
               step: step.id,
-              prompt: buildPrompt(step, inputs, cwd),
+              prompt: buildPrompt(step, inputs, cwd, state.with),
               tools: step.tools,
               returns: step.returns,
               cwd,
@@ -444,7 +470,7 @@ async function runStep(
             },
             watch,
           )
-        : { value: await callModule(step as CallStep, inputs, cwd, watch) };
+        : { value: await callModule(step as CallStep, inputs, cwd, watch, state.with) };
   } catch (error) {
     return { ...at(), status: "failed", error: String(error) };
   }
@@ -497,12 +523,42 @@ function under(path: string, allowed: string): boolean {
   return path === root || path.startsWith(`${root}/`);
 }
 
-function buildPrompt(step: AgentStep, inputs: Record<string, unknown>, cwd: string): string {
-  const parts = [readFileSync(resolve(cwd, step.prompt), "utf8")];
+function buildPrompt(
+  step: AgentStep,
+  inputs: Record<string, unknown>,
+  cwd: string,
+  takes?: Record<string, unknown>,
+): string {
+  // A name in the prompt reads both. The step is the narrower one, so it wins,
+  // by the same rule as the harness of a step.
+  const named = { ...takes, ...step.with };
+  const parts = [fill(readFileSync(resolve(cwd, step.prompt), "utf8"), step.id, named)];
+  if (takes) parts.push(block("The values this run takes", takes));
   // A member of a fanout differs by this value, so the step must read it.
   if (step.with) parts.push(block("The values this step holds", step.with));
   if (Object.keys(inputs).length > 0) parts.push(block("The values of the steps before this one", inputs));
   return parts.join("\n\n");
+}
+
+/** Every pair of braces, so a name that resolves to nothing is never missed. */
+const NAMED = /\{\{([^{}]*)\}\}/g;
+
+/**
+ * A name in a prompt takes its value. A name that nothing supplies fails the
+ * step: a model that reads the braces, or the word `undefined`, does the wrong
+ * work and says nothing about it.
+ */
+function fill(text: string, step: string, values: Record<string, unknown>): string {
+  return text.replace(NAMED, (_all, inside: string) => {
+    const name = inside.trim();
+    if (!Object.hasOwn(values, name)) {
+      throw new Error(
+        `step "${step}" reads "{{ ${name} }}" in its prompt, and nothing supplies "${name}". Add it to "takes" on the flow, or to "with" on the step.`,
+      );
+    }
+    const value = values[name];
+    return typeof value === "string" ? value : JSON.stringify(value);
+  });
 }
 
 function block(title: string, value: unknown): string {
@@ -511,16 +567,21 @@ function block(title: string, value: unknown): string {
 
 /**
  * A component takes the values of the steps before it, a way to say what it
- * does, and the value that its step holds. A component that wants neither of
- * the last two ignores them.
+ * does, and the values it works on: what the run takes, under what its own step
+ * holds. A component that wants neither of the last two ignores them.
+ *
+ * The two arrive as one value, and a prompt resolves a name the same way. So a
+ * component reads one place whether its flow is the run or a step of another
+ * flow, because expansion turns the values of a sub-flow into values of a step.
  */
 async function callModule(
   step: CallStep,
   inputs: Record<string, unknown>,
   cwd: string,
   watch: (note: Note) => void,
+  takes?: Record<string, unknown>,
 ): Promise<unknown> {
   const module = await import(pathToFileURL(resolve(cwd, step.module)).href);
   const say = (text: string) => watch({ kind: "text", text: String(text) });
-  return module.default(inputs, say, step.with ?? {});
+  return module.default(inputs, say, { ...takes, ...step.with });
 }
