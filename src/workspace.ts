@@ -23,7 +23,7 @@ export function take(workspace: Workspace | undefined, cwd: string): Snapshot | 
     throw new Error(`the workspace at "${at}" is not a git repository`);
   }
 
-  return { head: git(["rev-parse", "HEAD"], at), files: status(at) };
+  return { head: git(["rev-parse", "HEAD"], at).trim(), files: status(at) };
 }
 
 export function changed(before: Snapshot | undefined, after: Snapshot | undefined): string[] {
@@ -34,10 +34,14 @@ export function changed(before: Snapshot | undefined, after: Snapshot | undefine
   return before.head === after.head ? moved : ["HEAD", ...moved];
 }
 
-/** A repository with no commit answers nothing, which is a valid starting point. */
+/**
+ * The output keeps its leading space. A porcelain line starts with two status
+ * characters, and the first is a space for a file that only the working tree
+ * changed. Trimming here eats the first letter of that path.
+ */
 function git(args: string[], cwd: string): string {
   try {
-    return execFileSync("git", args, { cwd, encoding: "utf8", stdio: "pipe" }).trim();
+    return execFileSync("git", args, { cwd, encoding: "utf8", stdio: "pipe" });
   } catch {
     return "";
   }

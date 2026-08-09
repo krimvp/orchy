@@ -408,6 +408,22 @@ test("a step without the promise records what it changed and passes", async () =
   assert.deepEqual(state.steps.a?.changed, ["new.txt"]);
 });
 
+test("a change to a tracked file keeps its whole path", async () => {
+  const cwd = gitWorkspace();
+
+  // A tracked file gives a porcelain line that starts with a space. An untracked
+  // one does not, so only this case catches a trim that eats the first letter.
+  const state = await run(
+    flow("tracked", {
+      workspace: { kind: "git", path: "." },
+      steps: [agent({ id: "a", prompt: "step.md", tools: ["edit"], returns: Summary })],
+    }),
+    { cwd, harness: writingHarness(cwd, "step.md", { summary: "changed a tracked file" }) },
+  );
+
+  assert.deepEqual(state.steps.a?.changed, ["step.md"]);
+});
+
 test("the run state of Orchy is not counted as a change", async () => {
   const cwd = gitWorkspace();
 

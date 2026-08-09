@@ -1,4 +1,11 @@
-import { SessionManager, createAgentSession, defineTool } from "@earendil-works/pi-coding-agent";
+import {
+  DefaultResourceLoader,
+  SessionManager,
+  SettingsManager,
+  createAgentSession,
+  defineTool,
+  getAgentDir,
+} from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "@sinclair/typebox";
 
 export interface AgentRequest {
@@ -38,6 +45,14 @@ export const pi: Harness = {
       },
     });
 
+    // Orchy must load the resources itself. Without this, the extensions of the
+    // user never load, so a custom provider is unknown and Pi falls back to
+    // another model without a word.
+    const agentDir = getAgentDir();
+    const settingsManager = SettingsManager.create(request.cwd, agentDir);
+    const resourceLoader = new DefaultResourceLoader({ cwd: request.cwd, agentDir, settingsManager });
+    await resourceLoader.reload();
+
     // Invariant 1: the step reaches the declared tools and nothing else.
     const sessionManager = SessionManager.create(request.cwd);
     const { session } = await createAgentSession({
@@ -45,6 +60,8 @@ export const pi: Harness = {
       tools: [...request.tools, SUBMIT],
       customTools: [submit],
       sessionManager,
+      settingsManager,
+      resourceLoader,
     });
 
     try {

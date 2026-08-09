@@ -51,6 +51,10 @@ that tool to the list. The agent calls it once, and the arguments are the value.
 So a contract shapes the tool that the model sees, and Orchy does not parse
 prose.
 
+The adapter loads the resources of Pi itself, with a `DefaultResourceLoader` and
+a `SettingsManager`. Without this the extensions and the skills of the user
+never load. [docs/running.md](./running.md) says how to choose a model.
+
 A run is local-first, and it also runs on a server and in CI. No part of a run
 needs a terminal.
 
