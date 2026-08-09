@@ -91,8 +91,7 @@ and `cycle.to` are plain strings, and `validate()` checks them. A chained
 builder would type those names, but it would cost the array, and it would help
 only the users who write TypeScript.
 
-The `workspace` field and `changes: false` arrive with M3. Everything else in
-this example runs today.
+Every field in this example runs today.
 
 ## The model
 
@@ -117,6 +116,11 @@ mechanism covers a declared gate and an escalation.
 **Cycle** — a step result can name an earlier step to return to. Orchy counts
 the returns on that edge and stops at the limit. There is no loop construct in
 the flow data.
+
+Orchy carries the value that sent the run back to the step that it goes back to.
+Without this the step runs again with no knowledge of the fault, and the cycle
+repeats the same work. The value arrives as an input named after the step that
+sent it.
 
 **Value** — what a step returns. A step returns a JSON value, and Orchy puts it
 into the run state. A later step reads it. Orchy passes no other state.
@@ -143,13 +147,16 @@ Orchy enforces these rules. A prompt does not.
 4. **Limit** — a cycle stops at its declared limit. A flow cannot run without
    end.
 5. **Provenance** — Orchy takes a workspace snapshot before and after each step,
-   and records the difference. A step that declares `changes: false` fails when
-   the snapshot moves. This is the rule that catches what `bash` does behind
-   rule 1.
+   and records what moved. A step that declares `changes: false` fails when
+   anything moved. This is the rule that catches what `bash` does behind rule 1.
 
 Rule 5 needs a workspace. A step with `bash` and no workspace has no record
 beyond the text of the command. Only a sandbox closes that gap, and Orchy does
-not ship one.
+not ship one. `validate()` refuses a `changes: false` promise that no workspace
+can check, so the rule never looks enforced when it is not.
+
+The `git` workspace ignores everything under `.orchy/`, because the run state of
+Orchy is not the work of the step.
 
 ## Events
 
@@ -183,9 +190,10 @@ run, and `orchy resume <run id> <json value>` continues it. A run reports what i
 does through events. This milestone lands the first proof flow, in
 [examples/code-review](../examples/code-review).
 
-**M3 — the workspace.** Rule 5, with the `git` and `none` kinds. This milestone
-lands the second proof flow: a grilling session that asks a person questions in
-rounds, and reviews its own decisions.
+**M3 — the workspace. Done.** Rule 5, with the `git` and `none` kinds. This
+milestone lands the second proof flow, in [examples/grilling](../examples/grilling):
+a grilling session that asks a person questions in rounds, and reviews its own
+decisions.
 
 **M4 — ATIF.** Convert the Pi session file into an ATIF trajectory.
 

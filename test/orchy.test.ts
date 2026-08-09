@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -341,4 +342,116 @@ test("a run reports what it does through events", async () => {
     "step_start", "step_end", "step_start", "step_end", "cycle",
     "step_start", "step_end", "step_start", "step_end", "run_end",
   ]);
+});
+
+// -- The workspace and invariant 5 --
+
+function gitWorkspace(): string {
+  const directory = workspace();
+  const run = (...args: string[]) => execFileSync("git", args, { cwd: directory, stdio: "pipe" });
+  run("init", "-q");
+  run("config", "user.email", "test@example.com");
+  run("config", "user.name", "Test");
+  run("add", "step.md");
+  run("commit", "-qm", "first");
+  return directory;
+}
+
+/** A harness that writes a file before it answers, like an agent with `bash`. */
+function writingHarness(directory: string, name: string, value: unknown): Harness {
+  return {
+    async run() {
+      writeFileSync(join(directory, name), "written by the step");
+      return { value };
+    },
+  };
+}
+
+test("validate refuses a promise that no workspace can check", () => {
+  const problems = validate(
+    flow("unchecked", {
+      steps: [agent({ id: "a", prompt: "step.md", tools: ["read"], returns: Summary, changes: false })],
+    }),
+  );
+
+  assert.ok(problems.some((p) => p.includes("no workspace to check it")));
+});
+
+test("a step that promises to change nothing fails when it changes a file", async () => {
+  const cwd = gitWorkspace();
+
+  const state = await run(
+    flow("promise", {
+      workspace: { kind: "git", path: "." },
+      steps: [agent({ id: "a", prompt: "step.md", tools: ["read"], returns: Summary, changes: false })],
+    }),
+    { cwd, harness: writingHarness(cwd, "sneaky.txt", { summary: "I changed nothing" }) },
+  );
+
+  assert.equal(state.status, "failed");
+  assert.match(state.steps.a?.error ?? "", /promises to change nothing, but it changed sneaky\.txt/);
+});
+
+test("a step without the promise records what it changed and passes", async () => {
+  const cwd = gitWorkspace();
+
+  const state = await run(
+    flow("records", {
+      workspace: { kind: "git", path: "." },
+      steps: [agent({ id: "a", prompt: "step.md", tools: ["write"], returns: Summary })],
+    }),
+    { cwd, harness: writingHarness(cwd, "new.txt", { summary: "wrote a file" }) },
+  );
+
+  assert.equal(state.status, "done");
+  assert.deepEqual(state.steps.a?.changed, ["new.txt"]);
+});
+
+test("the run state of Orchy is not counted as a change", async () => {
+  const cwd = gitWorkspace();
+
+  const state = await run(
+    flow("quiet", {
+      workspace: { kind: "git", path: "." },
+      steps: [agent({ id: "a", prompt: "step.md", tools: ["read"], returns: Summary, changes: false })],
+    }),
+    { cwd, harness: fakeHarness({ summary: "read only" }) },
+  );
+
+  assert.equal(state.status, "done");
+  assert.equal(state.steps.a?.changed, undefined);
+});
+
+test("a workspace that is not a git repository says so", async () => {
+  const cwd = workspace();
+
+  await assert.rejects(
+    () =>
+      run(
+        flow("nogit", {
+          workspace: { kind: "git", path: "." },
+          steps: [agent({ id: "a", prompt: "step.md", tools: ["read"], returns: Summary })],
+        }),
+        { cwd, harness: fakeHarness({ summary: "x" }) },
+      ),
+    /is not a git repository/,
+  );
+});
+
+test("a cycle carries the value that sent the run back", async () => {
+  const cwd = workspace();
+  const harness = fakeHarness({ summary: "v1" }, { approved: false }, { summary: "v2" }, { approved: true });
+
+  await run(reviewFlow(3, "accept"), { cwd, harness });
+
+  // Call 3 is "code" running again. It needs nothing, so only the cycle can inform it.
+  assert.ok(harness.seen[2]?.prompt.includes('"approved": false'));
+  assert.ok(!harness.seen[0]?.prompt.includes("approved"));
+});
+
+test("the example flows are valid", async () => {
+  for (const name of ["code-review", "grilling"]) {
+    const module = await import(`../examples/${name}/flow.ts`);
+    assert.deepEqual(validate(module.default), [], `examples/${name} is not valid`);
+  }
 });

@@ -15,6 +15,7 @@ import {
   validate,
 } from "./flow.ts";
 import { type Harness, pi } from "./pi.ts";
+import { changed, take } from "./workspace.ts";
 
 /**
  * A contract is checked as plain JSON Schema, not as a TypeBox object. A schema
@@ -38,6 +39,8 @@ export interface StepRecord {
   answeredByPerson?: boolean;
   /** The cycle reached its limit and the policy accepted the disagreement. */
   disagreement?: "accepted";
+  /** Invariant 5: what the step changed in the workspace. */
+  changed?: string[];
 }
 
 export interface RunState {
@@ -49,6 +52,8 @@ export interface RunState {
   question?: string;
   steps: Record<string, StepRecord>;
   cycles: Record<string, number>;
+  /** The value that sent the run back, carried to the step it went back to. */
+  feedback?: { step: string; value: unknown };
 }
 
 export type RunEvent =
@@ -146,6 +151,8 @@ async function execute(state: RunState, cwd: string, options: RunOptions): Promi
         record.disagreement = "accepted";
       } else {
         state.cycles[key] = count;
+        // A cycle that drops the reason for it sends the step back blind.
+        state.feedback = { step: next.id, value: record.value };
         goBackTo(cycle.to, state, sorted);
         emit({ type: "cycle", step: next.id, to: cycle.to, count });
       }
@@ -196,6 +203,10 @@ function matches(when: Record<string, unknown>, value: unknown): boolean {
 
 async function runStep(step: Step, state: RunState, cwd: string, harness: Harness): Promise<StepRecord> {
   const inputs = Object.fromEntries(step.needs.map((need) => [need, state.steps[need]?.value]));
+  if (state.feedback) inputs[state.feedback.step] = state.feedback.value;
+  state.feedback = undefined;
+
+  const before = take(state.flow.workspace, cwd);
 
   let result: { value: unknown; trajectory?: string };
   try {
@@ -212,16 +223,29 @@ async function runStep(step: Step, state: RunState, cwd: string, harness: Harnes
     return { status: "failed", error: String(error) };
   }
 
+  // Invariant 5: what the step really did, not what it says it did.
+  const touched = changed(before, take(state.flow.workspace, cwd));
+  if (step.kind !== "gate" && step.changes === false && touched.length > 0) {
+    return {
+      status: "failed",
+      error: `step "${step.id}" promises to change nothing, but it changed ${touched.join(", ")}`,
+      value: result.value,
+      changed: touched,
+    };
+  }
+
   // Invariant 2: the value must match the contract of the step.
   const problem = contractProblem(step, result.value);
-  if (problem) return { status: "failed", error: problem, value: result.value };
+  if (problem) return { status: "failed", error: problem, value: result.value, changed: touched };
 
-  return { status: "done", value: result.value, trajectory: result.trajectory };
+  const record: StepRecord = { status: "done", value: result.value, trajectory: result.trajectory };
+  if (touched.length > 0) record.changed = touched;
+  return record;
 }
 
 function buildPrompt(step: AgentStep, inputs: Record<string, unknown>, cwd: string): string {
   const text = readFileSync(resolve(cwd, step.prompt), "utf8");
-  if (step.needs.length === 0) return text;
+  if (Object.keys(inputs).length === 0) return text;
   return `${text}\n\n## The values of the steps before this one\n\n\`\`\`json\n${JSON.stringify(inputs, null, 2)}\n\`\`\`\n`;
 }
 

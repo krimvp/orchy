@@ -1,4 +1,5 @@
 import type { Static, TSchema } from "@sinclair/typebox";
+import type { Workspace } from "./workspace.ts";
 
 export type ToolName = "read" | "bash" | "edit" | "write" | "grep" | "find" | "ls";
 
@@ -18,7 +19,12 @@ interface Common {
   needs: string[];
 }
 
-export interface AgentStep<S extends TSchema = TSchema> extends Common {
+/** Invariant 5 is opt-in. A step that promises to change nothing declares it. */
+interface Acts {
+  changes?: false;
+}
+
+export interface AgentStep<S extends TSchema = TSchema> extends Common, Acts {
   kind: "agent";
   prompt: string;
   tools: ToolName[];
@@ -26,7 +32,7 @@ export interface AgentStep<S extends TSchema = TSchema> extends Common {
   cycle?: Cycle<S>;
 }
 
-export interface CallStep<S extends TSchema = TSchema> extends Common {
+export interface CallStep<S extends TSchema = TSchema> extends Common, Acts {
   kind: "call";
   module: string;
   returns: S;
@@ -44,6 +50,7 @@ export type Step = AgentStep | CallStep | GateStep;
 
 export interface Flow {
   name: string;
+  workspace?: Workspace;
   steps: Step[];
 }
 
@@ -61,8 +68,8 @@ export function gate<S extends TSchema>(step: Declared<GateStep<S>>): GateStep<S
   return { kind: "gate", needs: [], ...step };
 }
 
-export function flow(name: string, definition: { steps: Step[] }): Flow {
-  return { name, steps: definition.steps };
+export function flow(name: string, definition: { workspace?: Workspace; steps: Step[] }): Flow {
+  return { name, workspace: definition.workspace, steps: definition.steps };
 }
 
 export function cycleOf(step: Step): Cycle | undefined {
@@ -95,6 +102,13 @@ export function validate(flow: Flow): string[] {
 
   problems.push(...findLoops(flow.steps));
   if (problems.length > 0) return problems;
+
+  const records = flow.workspace !== undefined && flow.workspace.kind !== "none";
+  for (const step of flow.steps) {
+    if (step.kind !== "gate" && step.changes === false && !records) {
+      problems.push(`step "${step.id}" promises to change nothing, but the flow has no workspace to check it`);
+    }
+  }
 
   const sorted = order(flow.steps).map((step) => step.id);
   for (const step of flow.steps) {
