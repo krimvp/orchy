@@ -89,6 +89,10 @@ the daemon serves that directory.
 - Motion uses the two curves that the stylesheet declares, and it carries
   meaning: a step that runs pulses, and a cycle keeps moving. Every animation
   stops under `prefers-reduced-motion`, and nothing is invisible when it does.
+- The drawing is a diagram, not a sketch. Every segment is flat or upright. An
+  edge that jumps a column passes above the steps, a cycle passes below them,
+  and an upright run sits in the gap between two columns. So no line crosses a
+  step. Keep that true for any edge you add.
 - The UI adds no package. React, and nothing else.
 
 ## Tests

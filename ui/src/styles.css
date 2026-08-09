@@ -585,6 +585,10 @@ ul.list li {
   fill: var(--text-3);
 }
 
+.graph .tip.cycle {
+  fill: var(--orange);
+}
+
 /* The label sits on its own line, so it paints its background out first. */
 .graph .limit {
   fill: var(--orange);
