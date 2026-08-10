@@ -60,6 +60,9 @@ A prompt asks. Orchy enforces.
 5. **Provenance** — Orchy records what each step changed in the workspace. A
    step that declares `changes: nothing`, or `changes: { paths: [docs] }`,
    fails when anything else moved. This catches what `bash` does behind rule 1.
+   A promise bounds what a step may change. It does not require the step to
+   change anything, and the record covers the workspace, so a step that writes
+   outside it moved nothing that Orchy can see.
 
 `validate()` refuses a promise that no workspace can check, a tool that the
 harness of the flow does not supply, and a field that the kind of a step cannot
@@ -74,11 +77,14 @@ reads never passes in silence.
 - **A fanout** runs one step once for each member, so a panel of reviewers is
   one block of YAML. A member holds a value, so one prompt serves a list.
 - **A condition** on a step, so a step runs only when an earlier value says so.
-- **A retry** is a cycle to the step itself, on the word `failed`.
+- **A retry** is a cycle to the step itself, on the word `failed`. A fanout
+  takes one too, and each member retries its own work.
 - **A flow inside a flow** reuses a whole flow as one step, and carries a cycle
   of its own.
 - **A wave** runs every step whose needs have passed at the same time, eight at
-  once unless the flow says otherwise.
+  once unless the flow says otherwise. A wave that can change the workspace
+  runs one step at a time, because one record cannot tell two writers apart. A
+  wave where every step promises `nothing` has no writer, so it runs whole.
 - **A gate** stops the run and waits for a person. The run persists, the
   process ends, and `orchy resume` continues it. So a flow works in CI.
 

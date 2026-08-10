@@ -133,9 +133,10 @@ run end as **done** with a value naming a file that does not exist.
 
 So the layering worked as designed — a reader with `read` caught what the
 workspace could not — but two things are worth knowing: a `paths` promise is
-one-sided, and `policy: accept` means the run reports success after the last
-refusal. The brief itself was good; it is quoted from a real file, in the wrong
-directory.
+one-sided, and `policy: accept` ends the run as `done` after the last refusal.
+The record of the refusing step does carry `disagreement: "accepted"`, so the
+state says what happened; only the status of the run does not. The brief itself
+was good; it is quoted from a real file, in the wrong directory.
 
 ### A promise costs the whole wave its parallelism
 
@@ -230,6 +231,47 @@ Both examples ran once their prompts were copied next to the working directory.
   shape got `the value of "decide" breaks the contract at "/": must have
   required property 'choice'`, and the run stayed waiting rather than
   proceeding on a malformed answer.
+
+## What these runs changed
+
+Five of the faults above are now fixed in `src/`, and each one was checked
+against the same thing that found it.
+
+**The Pi adapter reminds a model that skipped the call.** When a step ends with
+no `submit_result`, the adapter sends one more turn and then fails. The five
+models that failed this contract every time — `gpt-oss:120b`, `gpt-oss:20b`,
+`deepseek-v4-pro`, `mistral-large-3:675b`, `nemotron-3-super` — now pass it,
+five out of five. `lease-review` re-ran with no member failing at all.
+
+**The error names what happened.** Forced with a prompt that tells the model
+never to call a tool:
+
+> step "answer" ended without a call to submit_result, and again when reminded.
+> The model "ollama/gemma4:31b" answered in prose instead: "I cannot call any
+> tools, including submit_result, as I am restricted to providing prose only
+> for the remainder of this conversation.". Give the step a cycle on "failed",
+> or name a model that calls a tool.
+
+**A fanout retries each member.** `validate()` now refuses only a cycle that
+leaves the step, and expansion points each member's retry at itself. See [ADR
+0020](../docs/adr/0020-a-member-of-a-fanout-retries-itself.md). `lease-review`
+and `curriculum` carry the retry now.
+
+**A read-only wave runs whole.** Only a wave that holds a promise *and* a step
+that may write runs one at a time. `incident-postmortem` starts its three
+lenses together and finished in 178s against 241s, with the same empty change
+record on every step.
+
+**An unpriced session reports no cost.** `costOf` returns nothing when every
+message prices at zero, so a `budget` over Ollama now refuses the run with the
+message ADR 0019 already wrote, instead of counting the spend as zero.
+
+**A member's prompt resolves against the flow file.** `examples/docs-audit` ran
+from a fresh clone with no workaround. A test now opens every path that every
+example names, from a directory that holds none of them.
+
+**Every step is told where it is.** The prompt carries the working directory,
+which is the line that was missing when a model wrote 16 KB one directory away.
 
 ## Setting Pi up for Ollama Cloud
 

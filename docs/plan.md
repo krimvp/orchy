@@ -131,7 +131,10 @@ mechanism covers a declared gate and an escalation.
 once unless the flow sets `parallel`. Orchy runs
 a wave, settles it, and then works out the next one. So a panel of reviewers
 runs together, and invariant 3 still holds because a step with an unfinished
-need is not in the wave.
+need is not in the wave. A wave that holds a promise and a step that may write
+runs one step at a time, because one workspace record cannot say which of two
+steps moved a file. A wave where every step promises `nothing` holds no writer,
+so it keeps the width of the flow.
 
 **Cycle** — a step result can name an earlier step to return to. Orchy counts
 the returns on that edge and stops at the limit. There is no loop construct in

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { Type } from "@sinclair/typebox";
 import { type AgentStep, type CallStep, type Flow, type GateStep, agent, call, expandFanout, expandFlows, flow, gate, resolvePaths, validate } from "../src/flow.ts";
+import { loadFlow } from "../src/load.ts";
 import type { AgentRequest, AgentResult, Harness } from "../src/harness.ts";
 import { notesOf } from "../src/harness.ts";
 import { type RunEvent, type RunState, resume, run } from "../src/run.ts";
@@ -110,6 +111,21 @@ test("a step runs after the steps it needs, and gets their values", async () => 
     [false, true],
   );
   assert.equal(state.steps.first?.trajectory, "/sessions/fake.jsonl");
+});
+
+test("the prompt names the working directory the step acts in", async () => {
+  const cwd = workspace();
+  const harness = fakeHarness({ summary: "done" });
+
+  // A step that guesses this writes its file where invariant 5 cannot see it
+  // and the step after it cannot read it.
+  await run(flow("placed", { steps: [agent({ id: "a", prompt: "step.md", tools: ["write"], returns: Summary })] }), {
+    cwd,
+    harness,
+  });
+
+  assert.match(harness.seen[0]?.prompt ?? "", /The working directory is `.+`\. Read and write by a path inside it\./);
+  assert.ok(harness.seen[0]?.prompt.includes(cwd));
 });
 
 test("the declared tools reach the harness, and nothing else", async () => {
@@ -612,6 +628,28 @@ test("every example flow is valid", async () => {
   }
 });
 
+test("every path an example flow names exists, from any working directory", async () => {
+  // `validate()` opens no file, so it cannot answer this. A member that kept a
+  // relative path passed every check and then failed in the middle of a run,
+  // anywhere but its own directory.
+  const root = join(import.meta.dirname, "..", "examples");
+  const names = readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name);
+
+  for (const name of names) {
+    for (const file of readdirSync(join(root, name)).filter((one) => /^flow\.(ts|ya?ml)$/.test(one))) {
+      // Loaded from a directory that holds none of it, which is how a run works.
+      const loaded = expandFanout(await loadFlow(join(root, name, file), tmpdir()));
+      for (const step of loaded.steps) {
+        const path = step.kind === "agent" ? step.prompt : step.kind === "call" ? step.module : undefined;
+        if (path === undefined) continue;
+        assert.ok(existsSync(path), `examples/${name}/${file}: step "${step.id}" names "${path}", which is not there`);
+      }
+    }
+  }
+});
+
 // -- The file format and ATIF --
 
 test("the YAML file and the TypeScript file produce the same flow", async () => {
@@ -764,6 +802,36 @@ test("a prompt and a module resolve against the flow file, not the working direc
 
   assert.equal((resolved.steps[0] as { prompt: string }).prompt, "/flows/grilling/prompts/ask.md");
   assert.equal((resolved.steps[1] as { module: string }).module, "/already/absolute.ts");
+});
+
+test("the prompt and the module a member overrides resolve against the flow file too", () => {
+  const resolved = resolvePaths(
+    flow("panel", {
+      steps: [
+        agent({
+          id: "a",
+          prompt: "prompts/audit.md",
+          tools: ["read"],
+          returns: Summary,
+          fanout: [{ name: "readme", prompt: "prompts/audit-readme.md" }, { name: "docs" }],
+        }),
+        call({
+          id: "b",
+          needs: ["a"],
+          module: "report.ts",
+          returns: Summary,
+          fanout: [{ name: "one", module: "other.ts" }],
+        }),
+      ],
+    }),
+    "/flows/docs-audit",
+  );
+
+  const members = (step: unknown) => (step as { fanout: Array<Record<string, string>> }).fanout;
+  assert.equal(members(resolved.steps[0])[0]?.prompt, "/flows/docs-audit/prompts/audit-readme.md");
+  // A member that overrides nothing takes the path of its step, which is resolved.
+  assert.equal(members(resolved.steps[0])[1]?.prompt, undefined);
+  assert.equal(members(resolved.steps[1])[0]?.module, "/flows/docs-audit/other.ts");
 });
 
 // -- The Claude adapter --
@@ -1043,7 +1111,89 @@ test("validate refuses a fanout that also cycles", () => {
     }),
   );
 
-  assert.ok(problems.some((p) => p.includes("both fans out and cycles")));
+  assert.ok(problems.some((p) => p.includes('step "b" fans out and cycles to "a"')));
+});
+
+test("validate accepts a fanout that retries itself, because each member takes its own", () => {
+  const panel = flow("retrying", {
+    steps: [
+      agent({
+        id: "b",
+        prompt: "b.md",
+        tools: ["read"],
+        returns: Verdict,
+        fanout: [{ name: "one" }, { name: "two" }],
+        cycle: { to: "b", when: "failed", limit: 1, policy: "accept" },
+      }),
+    ],
+  });
+
+  assert.deepEqual(validate(panel), []);
+});
+
+test("a retry on a fanout points each member at itself, and not at the last one", () => {
+  const expanded = expandFanout(
+    flow("retrying", {
+      steps: [
+        agent({
+          id: "b",
+          prompt: "b.md",
+          tools: ["read"],
+          returns: Verdict,
+          fanout: [{ name: "one" }, { name: "two" }],
+          cycle: { to: "b", when: "failed", limit: 1, policy: "accept" },
+        }),
+      ],
+    }),
+  );
+
+  assert.deepEqual(
+    expanded.steps.map((step) => [step.id, (step as AgentStep).cycle?.to]),
+    [
+      ["b/one", "b/one"],
+      ["b/two", "b/two"],
+    ],
+  );
+});
+
+test("one member of a fanout retries its own failure, and the others keep their values", async () => {
+  const cwd = workspace();
+  // The second member fails once, which is how a model that answers in prose
+  // instead of calling the tool ends. Ten good members used to die with it.
+  const failed = new Set<string>();
+  const flaky: Harness = {
+    toTrajectory: () => undefined,
+    async run(request: AgentRequest) {
+      if (request.step === "read/two" && !failed.has(request.step)) {
+        failed.add(request.step);
+        throw new Error("the step ended without a call to submit_result");
+      }
+      return { value: { approved: true } };
+    },
+  };
+
+  const state = await run(
+    flow("panel", {
+      steps: [
+        agent({
+          id: "read",
+          prompt: "step.md",
+          tools: ["read"],
+          returns: Verdict,
+          fanout: [{ name: "one" }, { name: "two" }, { name: "three" }],
+          cycle: { to: "read", when: "failed", limit: 1, policy: "accept" },
+        }),
+      ],
+    }),
+    { cwd, harness: flaky },
+  );
+
+  assert.equal(state.status, "done");
+  assert.equal(state.steps["read/two"]?.status, "done");
+  assert.equal(state.steps["read/one"]?.status, "done");
+  assert.equal(state.cycles["read/two->read/two"], 1);
+  // The failure of the member is still a cost, so the record of it is kept.
+  assert.equal(state.history?.filter((one) => one.step === "read/two").length, 1);
 });
 
 test("a sub-flow takes the id of its step as a prefix and joins the graph", async () => {
@@ -1213,6 +1363,57 @@ test("a wave runs no more steps at once than the flow allows", async () => {
   assert.equal(state.status, "done");
   assert.equal(Object.keys(state.steps).length, 6);
   assert.equal(peak, 2);
+});
+
+/** A harness that reports how many steps ran at the same time. */
+function countingHarness(): Harness & { peak: () => number } {
+  let running = 0;
+  let peak = 0;
+  return {
+    peak: () => peak,
+    toTrajectory: () => undefined,
+    async run() {
+      running += 1;
+      peak = Math.max(peak, running);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      running -= 1;
+      return { value: { summary: "done" } };
+    },
+  };
+}
+
+/** A panel of three, each one promising what the test gives it. */
+function panelFlow(changes: Array<"nothing" | undefined>): Flow {
+  return flow("panel", {
+    workspace: { kind: "git", path: "." },
+    parallel: 3,
+    steps: changes.map((promise, index) =>
+      agent({ id: `s${index}`, prompt: "step.md", tools: ["read"], returns: Summary, changes: promise }),
+    ),
+  });
+}
+
+test("a wave where every step promises nothing runs at the width of the flow", async () => {
+  const cwd = gitWorkspace();
+  const counting = countingHarness();
+
+  // Nothing in the wave may write, so no step can disturb the record of another.
+  const state = await run(panelFlow(["nothing", "nothing", "nothing"]), { cwd, harness: counting });
+
+  assert.equal(state.status, "done");
+  assert.equal(counting.peak(), 3);
+});
+
+test("a wave that holds a promise and a step that may write runs one step at a time", async () => {
+  const cwd = gitWorkspace();
+  const counting = countingHarness();
+
+  // The last step promises nothing about what it changes, so it may change
+  // anything, and one git status cannot tell its work from the others.
+  const state = await run(panelFlow(["nothing", "nothing", undefined]), { cwd, harness: counting });
+
+  assert.equal(state.status, "done");
+  assert.equal(counting.peak(), 1);
 });
 
 test("validate refuses a flow that runs fewer than one step at a time", () => {
@@ -2781,7 +2982,42 @@ test("validate refuses a computed fanout that also cycles", () => {
   const both = auditFlow();
   (both.steps[1] as CallStep).cycle = { to: "find", when: { summary: "again" }, limit: 2, policy: "accept" };
 
-  assert.ok(validate(both).some((p) => p.includes("both fans out and cycles")));
+  assert.ok(validate(both).some((p) => p.includes('step "audit" fans out and cycles to "find"')));
+});
+
+test("a member of a computed fanout retries its own failure", async () => {
+  const cwd = auditWorkspace('{ packages: [{ name: "core" }, { name: "cli" }] }');
+  // The run expands a computed fanout, so the retry has to survive that
+  // expansion as well as the one that happens before the run.
+  const failed = new Set<string>();
+  const flaky: Harness = {
+    toTrajectory: () => undefined,
+    async run(request: AgentRequest) {
+      if (request.step === "audit/core" && !failed.has(request.step)) {
+        failed.add(request.step);
+        throw new Error("the step ended without a call to submit_result");
+      }
+      return { value: { summary: request.step } };
+    },
+  };
+
+  const audited = auditFlow();
+  audited.steps[1] = agent({
+    id: "audit",
+    needs: ["find"],
+    prompt: "step.md",
+    tools: ["read"],
+    returns: Summary,
+    fanout: { step: "find", key: "packages" },
+    cycle: { to: "audit", when: "failed", limit: 1, policy: "accept" },
+  });
+
+  const state = await run(audited, { cwd, harness: flaky });
+
+  assert.equal(state.status, "done");
+  assert.equal(state.steps["audit/core"]?.status, "done");
+  assert.equal(state.steps["audit/cli"]?.status, "done");
+  assert.equal(state.cycles["audit/core->audit/core"], 1);
 });
 
 test("validate refuses a field of a computed fanout that nothing reads", () => {
@@ -3289,6 +3525,9 @@ test("the pi adapter reports what a session spent, and nothing when no message p
   assert.equal(costOf(write({ input: 10, output: 2, cost: { total: 0.25 } })), 0.5);
   // A provider that reports no price leaves the cost unknown, and not zero.
   assert.equal(costOf(write({ input: 10, output: 2 })), undefined);
+  // A provider with no price table prices every message at zero, which is the
+  // same thing wearing a number. A budget that read it as zero was not enforced.
+  assert.equal(costOf(write({ input: 10, output: 2, cost: { total: 0 } })), undefined);
   assert.equal(costOf(join(cwd, "no-session.jsonl")), undefined);
 });
 

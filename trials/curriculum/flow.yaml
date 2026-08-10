@@ -62,6 +62,8 @@ steps:
               doing: { type: string }
         project: { type: string }
         checkpoint: { type: string }
+    # A module that fails takes no other module with it. See ADR 0020.
+    cycle: { to: module, when: failed, limit: 1, policy: accept }
 
   - id: hours
     kind: call

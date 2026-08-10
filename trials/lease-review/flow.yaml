@@ -41,6 +41,9 @@ steps:
         standing: { type: string, enum: [normal, aggressive, unusual, likely unenforceable] }
         risk: { type: integer, minimum: 0, maximum: 5 }
         ask: { type: string }
+    # Eleven clauses, and one model that answers in prose takes the other ten
+    # with it. Each member retries its own work, and then asks a person.
+    cycle: { to: judge, when: failed, limit: 1, policy: escalate }
 
   - id: score
     kind: call
