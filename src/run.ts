@@ -325,12 +325,16 @@ async function execute(state: RunState, cwd: string, options: RunOptions, answer
     state.feedback = undefined;
 
     // Invariant 5: a promise needs a workspace that no other step disturbs, so a
-    // wave that holds a promise runs one step at a time.
+    // wave that holds a promise and a step that can write runs one step at a
+    // time. A wave where every step promises `nothing` holds no writer, so it
+    // runs at the width of the flow: a change there breaks every promise in the
+    // wave, which names too many steps and never too few. A step with no
+    // promise writes what it likes, and counts as a writer.
     // ponytail: two runs in one working directory still disturb each other, so a
     // promise holds inside one run only. A workspace for each run lifts that.
-    const parallel = work.some((step) => changesOf(state.flow, step) !== undefined)
-      ? 1
-      : (state.flow.parallel ?? WAVE);
+    const promises = work.some((step) => changesOf(state.flow, step) !== undefined);
+    const writes = work.some((step) => changesOf(state.flow, step) !== "nothing");
+    const parallel = promises && writes ? 1 : (state.flow.parallel ?? WAVE);
 
     await pool(work, parallel, async (step) => {
       emit({ type: "step_start", step: step.id });
@@ -741,6 +745,9 @@ function buildPrompt(
   takes?: Record<string, unknown>,
 ): string {
   const parts = [fill(readFileSync(resolve(cwd, step.prompt), "utf8"), step.id, values)];
+  // A step that guesses this writes its file outside the workspace, where
+  // invariant 5 cannot see it and the step after it cannot read it.
+  parts.push(`The working directory is \`${cwd}\`. Read and write by a path inside it.`);
   if (takes) parts.push(block("The values this run takes", takes));
   // A member of a fanout differs by this value, so the step must read it.
   if (step.with) parts.push(block("The values this step holds", step.with));

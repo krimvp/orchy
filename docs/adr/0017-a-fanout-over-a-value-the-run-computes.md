@@ -88,6 +88,10 @@ one name, fail the run and name the step.
 
 **A cycle.** `validate()` already refuses a step that fans out and cycles,
 because which member cycles is unclear. A computed fanout keeps that refusal.
+[ADR 0021](./0021-a-member-of-a-fanout-retries-itself.md) later narrows it: a
+cycle to the step itself is a retry, each member takes its own, and so it is
+allowed. Every other cycle on a fanout is refused as this ADR states, and a
+computed fanout follows the same rule as one a file names.
 
 **An item that cannot name itself.** A number for each item would read
 `audit/0`, and a list that comes back in another order would move the work under

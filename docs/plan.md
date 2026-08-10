@@ -144,11 +144,16 @@ a wave, settles it, and then works out the next one. So a panel of reviewers
 runs together, and invariant 3 still holds because a step with an unfinished
 need is not in the wave.
 
-A wave that holds a promise runs one step at a time, and `parallel` does not
-raise it. Invariant 5 reads a snapshot of the whole workspace, so a step that
-runs beside another one sees what that one wrote, and the rule reports a change
-that the step did not make. A promise costs the speed of a wave, and a rule
-that reports what it does not observe costs more.
+A wave that holds a promise and a step that may write runs one step at a time,
+and `parallel` does not raise it. Invariant 5 reads a snapshot of the whole
+workspace, so a step that runs beside a writer sees what that one wrote, and the
+rule reports a change that the step did not make. A promise costs the speed of a
+wave, and a rule that reports what it does not observe costs more.
+
+A wave where every step promises `nothing` holds no writer, so it keeps the
+width of the flow. A change there breaks the promise of every step in the wave,
+which names too many steps and never too few, and in the ordinary case where
+nothing moved it names none.
 
 A wave settles one cycle. Two would fight for the same steps, so the run goes
 back to the earliest target of the steps that voted, and the record of a vote

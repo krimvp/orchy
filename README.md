@@ -79,7 +79,10 @@ A prompt asks. Orchy enforces.
    step that declares `changes: nothing`, `changes: { paths: [docs] }`, or
    `changes: { except: [src] }` fails when anything else moved. The record says
    what the step did to each path: added, changed, deleted, renamed, restored,
-   or moved. This catches what `bash` does behind rule 1.
+   or moved. This catches what `bash` does behind rule 1. A promise bounds what
+   a step may change: it does not require the step to change anything, and the
+   record covers the workspace, so a step that writes outside it moved nothing
+   that Orchy can see.
 
 `validate()` refuses a promise that no workspace can check, a tool that the
 harness of the flow does not supply, a model name that the harness cannot read,
@@ -101,12 +104,15 @@ no step reads never passes in silence.
 - **A condition** on a step, so a step runs only when an earlier value says so.
   A match holds a value, or one of five operators: `is`, `not`, `empty`, `lt`,
   `gt`.
-- **A retry** is a cycle to the step itself, on the word `failed`.
+- **A retry** is a cycle to the step itself, on the word `failed`. A fanout
+  takes one too, and each member retries its own work.
 - **A flow inside a flow** reuses a whole flow as one step, and carries a cycle
   of its own.
 - **A wave** runs every step whose needs have passed at the same time, eight at
-  once unless the flow says otherwise. A wave that holds a promise runs one step
-  at a time, because a snapshot of the workspace reads what every step wrote.
+  once unless the flow says otherwise. A wave that can change the workspace runs
+  one step at a time, because a snapshot of the workspace reads what every step
+  wrote. A wave where every step promises `nothing` has no writer, so it runs
+  whole.
 - **A gate** stops the run and waits for a person. The run persists, the
   process ends, and `orchy resume` continues it. So a flow works in CI. A gate
   carries a cycle, so a person rejects the work and sends the run back.

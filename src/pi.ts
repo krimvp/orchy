@@ -9,10 +9,12 @@ import {
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import { type Metrics, SCHEMA_VERSION, type Step, type Trajectory, totalMetrics } from "./atif.ts";
-import { type Harness, MODELS, SUPPLIES, type ToolName, notesOf } from "./harness.ts";
+import { type AgentRequest, type Harness, MODELS, SUPPLIES, type ToolName, notesOf } from "./harness.ts";
 import { tail } from "./tail.ts";
 
 const SUBMIT = "submit_result";
+
+const REMIND = `You ended without calling ${SUBMIT}, so the work you just did was not recorded. Call it once now, with that result.`;
 
 export const pi: Harness = {
   async run(request, watch) {
@@ -77,13 +79,17 @@ export const pi: Harness = {
 
     try {
       await session.prompt(request.prompt);
+      // A model that answers in prose has done the work and skipped the last
+      // step of it, which is the common way a step fails here. One reminder
+      // recovers the value. A second never has, so the step fails after it.
+      if (value === undefined) await session.prompt(REMIND);
     } finally {
       stop?.();
       session.dispose();
     }
 
-    if (value === undefined) throw new Error(`the step ended without a call to ${SUBMIT}`);
     const file = sessionManager.getSessionFile();
+    if (value === undefined) throw new Error(refused(request, file));
     return { value, trajectory: file, cost: costOf(file) };
   },
 
@@ -141,6 +147,10 @@ function messages(path: string): Array<Record<string, unknown>> | undefined {
  * What the session spent, or nothing when no message carried a price. A cost of
  * zero and a cost that no provider reported are different things, and a budget
  * that reads the second as zero is a budget that is not enforced. See ADR 0019.
+ *
+ * A provider with no price table reports a total of zero on every message, and
+ * that is the second thing wearing the face of the first: a step that answered
+ * spent something. So a session that reports zero throughout reports no cost.
  */
 export function costOf(path: string | undefined): number | undefined {
   if (!path) return undefined;
@@ -149,7 +159,31 @@ export function costOf(path: string | undefined): number | undefined {
     const cost = (entry.message as PiMessage | undefined)?.usage?.cost?.total;
     if (typeof cost === "number") total = (total ?? 0) + cost;
   }
-  return total;
+  return total === 0 ? undefined : total;
+}
+
+/**
+ * Why the step failed, in the words a person needs: which step, what the model
+ * did instead, and what to do about it. The step id and the model come from the
+ * request, because the session file names neither.
+ */
+function refused(request: AgentRequest, path: string | undefined): string {
+  const named = request.model ? `The model "${request.model}"` : "The model";
+  const said = path ? lastText(path) : "";
+  const instead = said ? ` ${named} answered in prose instead: "${said}".` : "";
+  return `step "${request.step}" ended without a call to ${SUBMIT}, and again when reminded.${instead} Give the step a cycle on "failed", or name a model that calls a tool.`;
+}
+
+/** The last thing the model said, short enough to sit inside an error. */
+function lastText(path: string): string {
+  const found = messages(path) ?? [];
+  for (let at = found.length - 1; at >= 0; at--) {
+    const message = found[at]?.message as PiMessage | undefined;
+    if (message?.role !== "assistant") continue;
+    const text = textOf(message).trim().replace(/\s+/g, " ");
+    if (text) return text.length > 200 ? `${text.slice(0, 200)}…` : text;
+  }
+  return "";
 }
 
 /** The session file appears after the session starts, so this may find nothing yet. */
@@ -191,16 +225,19 @@ interface PiMessage {
   usage?: { input?: number; output?: number; cacheRead?: number; cost?: { total?: number } };
 }
 
+/** What a message says in words. A message is a string, or the parts of one. */
+function textOf(message: PiMessage): string {
+  if (typeof message.content === "string") return message.content;
+  return (message.content ?? [])
+    .filter((part) => part.type === "text")
+    .map((part) => part.text ?? "")
+    .join("\n");
+}
+
 function toStep(message: PiMessage | undefined, id: number, timestamp: string): Step | undefined {
   if (!message?.role) return undefined;
   const content = Array.isArray(message.content) ? message.content : [];
-  const text =
-    typeof message.content === "string"
-      ? message.content
-      : content
-          .filter((part) => part.type === "text")
-          .map((part) => part.text ?? "")
-          .join("\n");
+  const text = textOf(message);
 
   if (message.role === "user") {
     return { step_id: id, timestamp, source: "user", message: text };
