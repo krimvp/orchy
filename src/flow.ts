@@ -287,11 +287,25 @@ export function changesOf(flow: Flow, step: Step): Changes | undefined {
  */
 export function resolvePaths(flow: Flow, directory: string): Flow {
   const at = (path: string) => (isAbsolute(path) ? path : resolve(directory, path));
+  // A member overrides the prompt of its step, and that path came out of the
+  // same file. One that stayed relative was read from the working directory
+  // instead, so the flow only ran from its own directory.
+  const members = (step: Step) => {
+    const found = membersOf(step);
+    if (!found) return undefined;
+    return {
+      fanout: found.map((one) => ({
+        ...one,
+        ...(one.prompt === undefined ? {} : { prompt: at(one.prompt) }),
+        ...(one.module === undefined ? {} : { module: at(one.module) }),
+      })),
+    };
+  };
   return {
     ...flow,
     steps: flow.steps.map((step) => {
-      if (step.kind === "agent") return { ...step, prompt: at(step.prompt) };
-      if (step.kind === "call") return { ...step, module: at(step.module) };
+      if (step.kind === "agent") return { ...step, prompt: at(step.prompt), ...members(step) };
+      if (step.kind === "call") return { ...step, module: at(step.module), ...members(step) };
       return step;
     }),
   };
@@ -349,7 +363,12 @@ export function expandFanout(flow: Flow): Flow {
       // refuses anything else, so nothing is dropped here in silence.
       const holds = MEMBER_HOLDS[step.kind as "agent" | "call"].slice(1);
       const overrides = pick(member, holds as Array<keyof Member>);
-      steps.push({ ...base, ...overrides, id } as unknown as Step);
+      const one = { ...base, ...overrides, id } as unknown as Step;
+      // A retry belongs to the member that failed. `validate()` refuses every
+      // other cycle on a fanout, so this is the only one that reaches here.
+      const cycle = cycleOf(one);
+      if (cycle?.to === step.id) (one as AgentStep).cycle = { ...cycle, to: id };
+      steps.push(one);
     }
     map.set(step.id, names);
   }
@@ -727,8 +746,14 @@ export function validate(flow: Flow): string[] {
       }
     }
     problems.push(...computedProblems(flow, step));
-    if (cycleOf(step)) {
-      problems.push(`step "${step.id}" both fans out and cycles, so which member cycles is unclear`);
+    // A cycle to the step itself is a retry, and each member retries its own
+    // work, so the member it means is never in doubt. A cycle that leaves the
+    // step is, because a fanout has no one value to send back.
+    const cycle = cycleOf(step);
+    if (cycle && cycle.to !== step.id) {
+      problems.push(
+        `step "${step.id}" fans out and cycles to "${cycle.to}", so which member cycles is unclear. A cycle to "${step.id}" itself is a retry, and each member takes its own.`,
+      );
     }
   }
   if (problems.length > 0) return problems;
