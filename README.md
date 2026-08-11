@@ -162,8 +162,16 @@ orchy run flow.yaml                        # or flow.ts
 orchy run flow.yaml --with '{"issue":412}' # the values the flow takes
 orchy run flow.yaml --harness claude       # for a flow that names none
 orchy resume <run id> '{"approved":true}'  # answer a gate
+orchy resume <run id>                      # continue a run that ended
+orchy resume <run id> --from <step>        # go back to a step, and run again
 orchy daemon                               # a queue, an API, and a page
 ```
+
+A resume with no value continues a run that ended: a failed run goes back to
+the step that failed, and a stopped run continues where it stood. `--from`
+names the step to go back to, and every step after it runs again. The steps
+that passed keep their work, and the record of a step that runs again goes to
+history first, so its cost still counts.
 
 `--with` takes one JSON object. Orchy checks it against what the flow takes
 before the first step spends a token, and it refuses a value that the flow does
@@ -186,10 +194,17 @@ orchy daemon         # http://127.0.0.1:4000
 ```
 
 The daemon holds a queue, starts each run as a child process, and serves a
-page. On the page you register a flow file, start a run, watch each step as it
-runs, read what a step says while it works, answer a gate in a form built from
-its contract, read the value, the cost, and the changed files of every step,
-open the trajectory of every run of every step, and edit a flow as a drawing.
+page. On the page you make a flow or register a flow file, start a run, watch
+each step as it runs, read what a step says while it works, answer a gate in a
+form built from its contract, read the value, the cost, and the changed files
+of every step, open the trajectory of every run of every step, and edit a flow
+as a drawing.
+
+A flow also runs by itself. A schedule fires it on a pace, at most every 15
+minutes, and a hook starts it from a POST whose body is the values the flow
+takes. Both start a run through the same checked door as the button, so each
+refuses the same broken flow the same way. The tab title says whose move it is,
+and an opt-in notification says when a run waits for you or ends.
 
 - **A run in a child process.** A run that hangs or dies takes nothing with it.
   Four runs start at the same time. See [ADR
@@ -345,16 +360,19 @@ promise, two failures in one wave, and a budget that stops a run. See
 step reports while it works, the gate form, the step view, the trajectory view,
 and the editor. A test drives each one through the API, and a flow of
 deterministic steps stands in for a model. A test also proves that the daemon
-passes the values of a run to the child, and that it refuses a foreign `Origin`,
-a foreign `Host`, and a flow file outside its root.
+passes the values of a run to the child, that a schedule fires a run by itself
+and holds its pace, that a hook starts a run and a wrong token starts nothing,
+that a failed run resumes from the step that failed and keeps the work that
+passed, and that it refuses a foreign `Origin`, a foreign `Host`, and a flow
+file outside its root.
 
 **Checked, and never run:** the `none` workspace, and the `docs-audit`,
 `release-notes`, `decision`, and `dependency-audit` examples. A test reads every
 example and holds it to `validate()`. It starts no run of one.
 
-**Not built:** a scheduler, an OpenTelemetry exporter, a third harness, a
-sandbox, a timeout for a step, a workspace for one step, a workspace for each
-run, and any user or password on the daemon. Invariant 1 names the sandbox gap
+**Not built:** an OpenTelemetry exporter, a third harness, a sandbox, a
+timeout for a step, a workspace for one step, a workspace for each run, and
+any user or password on the daemon. Invariant 1 names the sandbox gap
 rather than hiding it, and [ADR
 0018](./docs/adr/0018-a-tool-list-is-not-a-sandbox.md) records the probes that
 closed the question. A note arrives when the harness writes a line, so a step

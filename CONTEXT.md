@@ -152,6 +152,16 @@ What the daemon gives back when it accepts a run. A ticket becomes a run when
 the child process reports its run id.
 _Avoid_: Job, request, handle
 
+**Schedule**:
+The pace at which one flow runs by itself. The daemon fires a due schedule
+through the same door a person uses, and never stacks a run behind a slow one.
+_Avoid_: Cron, timer, scheduler, interval
+
+**Hook**:
+The token URL that starts one flow from a POST. The body of the POST is the
+values the flow takes, and the token is the whole door.
+_Avoid_: Webhook endpoint, trigger, callback
+
 **Index**:
 The database that the daemon builds from the runs on disk. It answers a list and
 a search. It holds the newest runs, and the events of a run that falls behind

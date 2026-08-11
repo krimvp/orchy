@@ -481,8 +481,6 @@ Orchy does not ship these until a real flow needs them.
   `ponytail`. See [docs/shape.md](./shape.md).
 - A remote sandbox workspace. A bounded tool is refused and not deferred. See
   [ADR 0018](./adr/0018-a-tool-list-is-not-a-sandbox.md).
-- A scheduler. A person starts every run, from the command line, from the page,
-  or from the API. Nothing starts one on a clock or on an event.
 - A user, a password, and a daemon that listens beyond this machine. The daemon
   refuses a foreign `Origin` and a foreign `Host`, which bounds a browser and
   not a program. See [ADR

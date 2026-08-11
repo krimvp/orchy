@@ -465,6 +465,23 @@ orchy resume <run id> '{"approved":true}'
 Orchy checks the value against the contract of the gate, so a wrong value is
 refused before the run continues.
 
+## Continue a run that ended
+
+A resume with no value continues a run that ended. A failed run goes back to
+the step that failed, and a stopped run continues where it stood. `--from`
+names the step to go back to, and every step after it runs again.
+
+```bash
+orchy resume <run id>                # a failed or a stopped run
+orchy resume <run id> --from draft   # go back to one step, and run again
+```
+
+The steps that passed keep their work. The record of a step that runs again
+goes to history first, so its cost still counts against the budget. A step
+reads its prompt from disk when it runs, so a person edits the prompt, goes
+back to the step, and pays for one step instead of one run. See [ADR
+0023](./adr/0023-a-resume-goes-back-to-a-step.md).
+
 A gate holds a cycle, so the answer of the person sends the run back.
 
 ```yaml
@@ -543,6 +560,15 @@ On the page:
 8. Press **Edit** on a flow to draw it. The editor writes the same YAML file.
    It refuses to write a flow that `validate()` rejects, and it will not write a
    flow in TypeScript.
+9. Press **New flow** to make one: one file, one step, and its prompt, open in
+   the editor.
+10. Press **Schedule** to run the flow by itself, on a pace of at most every 15
+    minutes, or make a hook there: a POST to its URL starts the run, with the
+    body as the values the flow takes. See [ADR
+    0022](./adr/0022-a-flow-runs-by-itself.md).
+11. A run that ended offers the way back: a failed run resumes from the step
+    that failed, and each step of an ended run runs again from there. The steps
+    that passed keep their work.
 
 The daemon listens on `127.0.0.1` only, and it refuses a page that is not its
 own. A request with a foreign `Origin` reaches nothing, and so does a request
