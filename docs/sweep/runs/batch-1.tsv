@@ -1,0 +1,51 @@
+f01-one-step	none (no agent step)	none	orchy run f01-one-step.yaml	done	yes	one call step, 400ms of sleep; wall 2.3s, of which ~1.9s is process start
+f01-one-step	none (no agent step)	none	orchy run f01-one-step.yaml	done	yes	one call step, 400ms of sleep; wall 2.3s, of which ~1.9s is process start
+f01-one-step	none (no agent step)	none	orchy run f01-one-step.yaml	done	yes	one call step, 400ms of sleep; wall 2.3s, of which ~1.9s is process start
+f02-two-wave	none (no agent step)	none	orchy run f02-two-wave.yaml	done	yes	both steps started within 0.3ms and the wave took 602ms, not 1200ms: a wave, not a queue
+f02-two-wave	none (no agent step)	none	orchy run f02-two-wave.yaml	done	yes	both steps started within 0.3ms and the wave took 602ms, not 1200ms: a wave, not a queue
+f02-two-wave	none (no agent step)	none	orchy run f02-two-wave.yaml	done	yes	both steps started within 0.3ms and the wave took 602ms, not 1200ms: a wave, not a queue
+f03-chain-three	none (no agent step)	none	orchy run f03-chain-three.yaml	done	yes	strict order one,two,three; 907ms for 3x300ms, ~2ms between steps
+f03-chain-three	none (no agent step)	none	orchy run f03-chain-three.yaml	done	yes	strict order one,two,three; 907ms for 3x300ms, ~2ms between steps
+f03-chain-three	none (no agent step)	none	orchy run f03-chain-three.yaml	done	yes	strict order one,two,three; 907ms for 3x300ms, ~2ms between steps
+f04-diamond	none (no agent step)	none	orchy run f04-diamond.yaml	done	yes	left and right started 0.2ms apart and join waited for both; 1006ms total
+f04-diamond	none (no agent step)	none	orchy run f04-diamond.yaml	done	yes	left and right started 0.2ms apart and join waited for both; 1006ms total
+f04-diamond	none (no agent step)	none	orchy run f04-diamond.yaml	done	yes	left and right started 0.2ms apart and join waited for both; 1006ms total
+f05-six-wave	none (no agent step)	none	orchy run f05-six-wave.yaml	done	yes	six steps at once, all started inside 1.1ms, wall 605ms for 6x600ms of work
+f05-six-wave	none (no agent step)	none	orchy run f05-six-wave.yaml	done	yes	six steps at once, all started inside 1.1ms, wall 605ms for 6x600ms of work
+f05-six-wave	none (no agent step)	none	orchy run f05-six-wave.yaml	done	yes	six steps at once, all started inside 1.1ms, wall 605ms for 6x600ms of work
+f06-chain-twenty	none (no agent step)	none	orchy run f06-chain-twenty.yaml	done	yes	20 steps in order, never two at once; 2076-2153ms for 2000ms of sleep
+f06-chain-twenty	none (no agent step)	none	orchy run f06-chain-twenty.yaml	done	yes	20 steps in order, never two at once; 2076-2153ms for 2000ms of sleep
+f06-chain-twenty	none (no agent step)	none	orchy run f06-chain-twenty.yaml	done	yes	20 steps in order, never two at once; 2076-2153ms for 2000ms of sleep
+f07-two-branches	none (no agent step)	none	orchy run f07-two-branches.yaml (p1->p2, q1->q2)	done	yes	the two branches ran side by side; run ends with the slow branch
+f07-two-branches	none (no agent step)	none	orchy run f07-two-branches.yaml (p1->p2, q1->q2)	done	yes	the two branches ran side by side; run ends with the slow branch
+f07-two-branches	none (no agent step)	none	orchy run f07-two-branches.yaml (p1->p2, q1->q2)	done	yes	the two branches ran side by side; run ends with the slow branch
+f07-two-branches	none (no agent step)	none	orchy run f07-two-branches.yaml (p1->p2 900ms, q1->q2->q3)	done	no	q3 was ready at 406ms and started at 1107ms, behind an unrelated branch - finding 1
+f07-two-branches	none (no agent step)	none	orchy run f07-two-branches.yaml (p1->p2 900ms, q1->q2->q3)	done	no	q3 was ready at 406ms and started at 1107ms, behind an unrelated branch - finding 1
+f07-two-branches	none (no agent step)	none	orchy run f07-two-branches.yaml (p1->p2 900ms, q1->q2->q3)	done	no	q3 was ready at 406ms and started at 1107ms, behind an unrelated branch - finding 1
+f08-parallel-one	none (no agent step)	none	orchy run f08-parallel-one.yaml	done	yes	parallel: 1 gave exactly one step at a time, in file order, 1209-1213ms for 4x300ms
+f08-parallel-one	none (no agent step)	none	orchy run f08-parallel-one.yaml	done	yes	parallel: 1 gave exactly one step at a time, in file order, 1209-1213ms for 4x300ms
+f08-parallel-one	none (no agent step)	none	orchy run f08-parallel-one.yaml	done	yes	parallel: 1 gave exactly one step at a time, in file order, 1209-1213ms for 4x300ms
+f09-parallel-eight	none (no agent step)	none	orchy run f09-parallel-eight.yaml	done	yes	12 steps, never more than 8 at once; t9 started as t1 ended, so the pool refills
+f09-parallel-eight	none (no agent step)	none	orchy run f09-parallel-eight.yaml	done	yes	12 steps, never more than 8 at once; t9 started as t1 ended, so the pool refills
+f09-parallel-eight	none (no agent step)	none	orchy run f09-parallel-eight.yaml	done	yes	12 steps, never more than 8 at once; t9 started as t1 ended, so the pool refills
+f10-join-uneven	none (no agent step)	none	orchy run f10-join-uneven.yaml	done	yes	after waited for the slow middle (900ms) and its inputs held quick and slow only
+f10-join-uneven	none (no agent step)	none	orchy run f10-join-uneven.yaml	done	yes	after waited for the slow middle (900ms) and its inputs held quick and slow only
+f10-join-uneven	none (no agent step)	none	orchy run f10-join-uneven.yaml	done	yes	after waited for the slow middle (900ms) and its inputs held quick and slow only
+f06-chain-twenty	none (no agent step)	none	POST /api/flows/1/runs on the daemon at 4111	done	yes	the daemon child ran the same chain in the same order
+f09-parallel-eight	none (no agent step)	none	POST /api/flows/2/runs on the daemon at 4111	done	yes	the daemon child also capped at 8: t9 started 638ms after t1
+p-abc	none (no agent step)	none	orchy run bad/p-abc.yaml (parallel: abc)	refused	yes	refused before any run directory: 'Write a whole number of one or more'
+p-zero	none (no agent step)	none	orchy run bad/p-zero.yaml (parallel: 0)	refused	yes	same message; the infinite spin docs/usability.md reports is closed
+p-frac	none (no agent step)	none	orchy run bad/p-frac.yaml (parallel: 2.5)	refused	yes	a fraction is refused too
+p-100	none (no agent step)	none	orchy run bad/p-100.yaml (parallel: 100, one step)	done	yes	a width above the step count is harmless
+dup	none (no agent step)	none	orchy run bad/dup.yaml (two steps share an id)	refused	yes	'two steps use the id "a"'
+ghost	none (no agent step)	none	orchy run bad/ghost.yaml (needs a step that is not there)	refused	yes	'step "a" needs "nowhere", which does not exist'
+loop	none (no agent step)	none	orchy run bad/loop.yaml (a needs b, b needs a)	refused	yes	'the steps a -> b -> a make a loop'
+selfneed	none (no agent step)	none	orchy run bad/selfneed.yaml (needs itself)	refused	yes	two lines: needs itself, and makes a loop
+nosteps	none (no agent step)	none	orchy run bad/nosteps.yaml (steps: [])	refused	yes	'the flow has no steps'
+reversed	none (no agent step)	none	orchy run bad/reversed.yaml (the last step written first)	done	yes	file order does not matter; the run sorted it
+dupneeds	none (no agent step)	none	orchy run bad/dupneeds.yaml (needs: [a, a])	done	yes	a repeated need is harmless and nothing says a word
+oddids	none (no agent step)	none	orchy run bad/oddids.yaml (ids 'a b', 'x/y', '')	refused	yes	the empty id is refused: 'a call step has no id'
+wave-with-a-throw	none (no agent step)	none	orchy run bad/wave-throw.yaml (6 in a wave, one throws)	failed	yes	the other five finished and kept their values; the run named the failing step
+two-wave-swapped	none (no agent step)	none	orchy run bad/two-wave-swapped.yaml (same graph, ends written in the other order)	done	no	the run value changed from a to b with no change to the graph - finding 2
+two-exits-returns	none (no agent step)	none	orchy run bad/two-exits-returns.yaml (two ends and a flow-level returns)	refused	yes	refused plainly; only a flow with no 'returns' picks one end in silence
+default-width-twelve	none (no agent step)	none	orchy run bad/default12.yaml (12 steps, no parallel field)	done	yes	the default width is 8, as the documents say

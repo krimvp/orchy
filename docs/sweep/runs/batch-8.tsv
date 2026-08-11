@@ -1,0 +1,44 @@
+git-workspace	claude	—	a git workspace, two call steps, one writes docs/written.md	done	yes	the record named the one file that moved
+git-workspace	claude	—	second run, same flow	done	yes	same record; .orchy/ never appeared in it
+nothing-kept	claude	—	changes: nothing on a step that writes nothing	failed	yes	my own shell redirect wrote into the repo root and invariant 5 correctly blamed the step; re-run clean below
+nothing-kept	claude	—	re-run with my scaffolding moved out of the tree	done	yes	promise kept, changed absent
+nothing-broken	claude	—	changes: nothing on a step that writes docs/written.md	failed	yes	promises to change nothing, but it added docs/written.md
+nothing-broken	claude	—	first attempt, my scaffolding still in the tree	failed	yes	failed for the right reason plus one of mine
+nothing-broken	claude	—	same flow again, docs/written.md already there with the same bytes	done	no	the step wrote the file and the promise passed; see the net-diff finding
+paths-kept	claude	—	changes: { paths: [docs] }, step writes docs/written.md	done	yes	allowed and recorded
+paths-kept	claude	—	second run	done	yes	
+paths-broken	claude	—	changes: { paths: [docs] }, step writes src/sneaky.ts	failed	yes	promises to change only docs, but it added src/sneaky.ts
+paths-broken	claude	—	second run	failed	yes	
+paths-broken	claude	—	third run, as an exit-code probe	failed	yes	exit 1, same as an invalid flow file
+except	claude	—	flow-level changes: { except: [src] }; step 1 writes docs, step 2 writes src	failed	yes	docs allowed, src refused, both halves in one run
+except	claude	—	second run	failed	yes	the failed step's panel on the page shows no Promise row
+agent-writes	claude	haiku	agent step, tools [read, write], changes: nothing, told to create docs/agent-made.md	failed	yes	the model wrote the file and invariant 5 caught it; cost $0.0150 kept on the failed step
+agent-writes	claude	haiku	same flow, but docs/agent-made.md already there with the same content	done	no	identical flow and promise, opposite verdict; cost $0.0169
+no-workspace	claude	—	no workspace field at all, step writes src/sneaky.ts	done	no	run says done and the record is byte-identical to a checked run that moved nothing
+no-workspace	claude	—	second run	done	no	
+workspace-none	claude	—	workspace: { kind: none }, step writes src/sneaky.ts	done	no	same as above; nothing in the run says the workspace was not watched
+workspace-none	claude	—	second run	done	no	
+none-promises	claude	—	workspace: { kind: none } with changes: nothing on the step	refused	yes	validate refuses before the run: promises what it changes, but the flow has no workspace to check it
+none-promises	claude	—	second run	refused	yes	
+record-truth	claude	—	delete a tracked file, write outside the workspace, create and remove a file	done	no	only the delete is recorded; the outside write and the transient file leave no trace
+record-truth	claude	—	second run	done	no	
+dirty-tree	claude	—	changes: nothing on a step that restores src/thing.ts, tree dirty first	failed	yes	promises to change nothing, but it restored src/thing.ts
+dirty-tree	claude	—	the same flow and module from a clean tree	done	no	same write, opposite verdict; the promise is judged on the tree, not the step
+net-zero	claude	—	changes: nothing on a step that overwrites src/thing.ts then writes the old text back	done	no	a tracked source file was overwritten under a promise of nothing
+net-zero	claude	—	second run	done	no	
+vacuous-except	claude	—	changes: { except: [srcc] } (typo), step writes src/sneaky.ts	done	no	the record lists added src/sneaky.ts and the promise still passes
+vacuous-except	claude	—	second run	done	no	
+dot-slash	claude	—	changes: { except: [./src] }, step writes src/sneaky.ts	done	no	./src matches nothing; validate accepts it though it refuses src/**
+dot-slash	claude	—	second run	done	no	
+commit-moves-head	claude	—	changes: { paths: [docs] } on a step that writes and commits	failed	yes	promises to change only docs, but it moved HEAD, exactly as ADR 0013 says
+commit-moves-head	claude	—	second run, nothing left to commit	failed	yes	step failed on git's own error: Command failed: git commit -q -m a step committed
+bad-workspace	claude	—	workspace: { kind: git, path: ./nowhere }	error	no	no state written, no failed status; the run sits at running/stopped with no error anywhere
+bad-workspace	claude	—	second run	error	no	
+bad-workspace	claude	—	third run, as an exit-code probe	error	no	this one is still status: running on disk
+rename	claude	—	git mv docs/notes.md src/notes.md under changes: { paths: [docs] }	failed	yes	error names both halves; the page shows only renamed docs/notes.md
+rename	claude	—	second run	failed	yes	this run never appeared in the daemon's list, and its page said started Invalid Date
+gate-promise	claude	—	changes: nothing on a gate step	refused	yes	step "ask" holds "changes", which a gate step cannot act on
+gate-promise	claude	—	second run	refused	yes	
+inner-inherits	claude	—	flow-level changes: nothing, one flow step whose inner flow writes src/sneaky.ts	failed	yes	the outer promise reaches the inner step: step "inner/writes" promises to change nothing
+inner-inherits	claude	—	second run	failed	yes	
+(no flow)	claude	—	orchy run flows/no-such-file.yaml	error	no	exit 1, the same code as a run that failed, though --help promises 2 for a wrong command

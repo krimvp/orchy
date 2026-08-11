@@ -1,0 +1,27 @@
+budget-zero	claude	haiku	orchy run 01-budget-zero.yaml (budget: 0)	refused	yes	validate: a budget is a number of dollars above zero; nothing spent, no run recorded
+budget-zero	claude	haiku	same flow a second time	refused	yes	same message, exit 1 (help says 2 is the wrong-command code)
+budget-crossed-first	claude	haiku	orchy run 02-budget-crossed-first.yaml (budget 0.005, two agent steps)	failed	yes	step one ran ($0.0101), run failed before step two and named the money
+budget-crossed-first	claude	no-such-model	orchy run 02-D.yaml (same flow, combination D)	failed	yes	fails inside the step with the model name, cost 0, budget never reached
+budget-crossed-first	claude	haiku	POST /api/flows/1/runs on my daemon at 4116	failed	yes	daemon enforces the same; index cost 0.01003 = sum of step costs
+budget-crossed-first	claude	haiku	orchy resume 906b3599 (a budget-failed run)	failed	yes	re-fails at once with the same message, spends nothing
+budget-crossed-first	claude	haiku	orchy resume 906b3599 --from one	failed	yes	--from cannot re-run the paid step past the budget
+budget-crossed-first	claude	haiku	orchy run 02-str.yaml (budget: "0.50" as a string)	refused	yes	validate names the value and says a budget is a number of dollars above zero
+budget-crossed-first	claude	haiku	orchy run 02-neg.yaml (budget: -1)	refused	yes	same refusal for a negative budget
+budget-ample	claude	haiku	orchy run 03-budget-ample.yaml (budget 5, two agent steps)	done	yes	spent $0.0220, no interference
+budget-ample	claude	haiku	second run of the same flow	done	yes	spent $0.0211
+budget-cycle	claude	haiku	orchy run 04-budget-cycle.yaml (budget 0.005, cycle limit 2 on a paid step)	failed	yes	budget stopped the cycle before its limit; the thrown-away attempt in history kept its cost
+budget-cycle-D	claude	no-such-model	orchy run 04-D.yaml (cycle when: failed, budget 0.005)	failed	no	the budget message replaced the real model error; see finding 3
+budget-failed-step	claude	haiku	orchy run 04-fail-cost.yaml (contract no value can meet, cycle when: failed)	failed	no	~$0.02 spent and recorded as no cost; budget blamed the harness; see finding 1
+budget-fanout	claude	haiku	orchy run 05-budget-fanout.yaml (budget 0.005, three paid members)	failed	yes	all three ran: spent $0.0308 of $0.005 before the next step was refused
+budget-fanout	claude	haiku	second run of the same flow	failed	yes	$0.0314 of $0.005, same six-fold overshoot
+budget-fanout	claude	haiku	third start, killed by my own 2-minute shell timeout	stopped	yes	SIGTERM wrote status stopped, cost 0, no step had finished
+no-budget	claude	(none, combination A)	orchy run 06-no-budget.yaml	done	yes	ran on claude-sonnet-5, $0.0164, cost recorded with no budget in play
+no-budget	claude	haiku	orchy run 06-B.yaml (same flow, model named)	done	yes	$0.0107
+budget-mid-wave	claude	haiku	orchy run 07-budget-mid-wave.yaml (two paid steps in one wave, budget 0.005)	failed	yes	both steps of the wave finished ($0.0203), the third was refused
+budget-mid-wave	claude	haiku	second run of the same flow	failed	yes	$0.0206 of $0.005
+budget-free	-	-	orchy run 08-budget-free.yaml (budget 1 over a call step and a gate)	refused	yes	validate: the flow has a budget and no step of it spends
+budget-free	-	-	same flow a second time	refused	yes	same message
+budget-fraction	claude	haiku	orchy run 09-budget-fraction.yaml (budget 0.0001, one agent step)	done	no	spent $0.0102, 102x the budget, and the run reports done; see finding 2
+budget-fraction	claude	haiku	second run of the same flow	done	no	$0.0103 of $0.0001, done again, page shows no warning
+budget-subflow	claude	haiku	orchy run 10-budget-subflow.yaml (outer budget 0.005 over an inner flow)	failed	yes	the inner paid step counted ($0.0103) and the outer step after it was refused
+budget-subflow	claude	haiku	orchy run 10-budget-subflow-innerbudget.yaml (inner flow holds a budget)	refused	yes	expandFlows refuses: a budget belongs to the run

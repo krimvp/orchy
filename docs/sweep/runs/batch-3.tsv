@@ -1,0 +1,90 @@
+f01-list-in-file	none	-	run: three members written in the flow	done	yes	work/alpha|beta|gamma, each with its own record
+f01-list-in-file	none	-	run again, same flow	done	yes	identical values and ids
+f01-list-in-file	none	-	run a third time	done	yes	identical
+f01-list-in-file	none	-	run a fourth time, reading the events only	done	no	the run value is work/alpha alone, with three ends
+f02-computed	none	-	run: fanout over {step: find, key: packages}	done	yes	audit/core, audit/cli, audit/ui; item becomes the member with
+f02-computed	none	-	run again	done	yes	identical
+f02-computed	none	-	run a third time	done	yes	identical
+f02-computed	none	-	start through the daemon on 4113	done	yes	page draws find -> three members
+f02-computed	none	-	resume <id> --from audit/cli	done	yes	re-ran exactly one member
+f02-computed	none	-	resume <id> --from audit	error	no	holds no step audit; never says it became members
+f02-computed	none	-	resume <id> --from find	done	yes	re-ran the source and every member
+f03-empty	none	-	run --with {count:0}	done	yes	audit skipped with the reason, report skipped, aside ran
+f03-empty	none	-	run --with {count:0} again	done	yes	identical
+f03-empty	none	-	run --with {count:0} a third time	done	yes	identical
+f03-empty	none	-	run --with {count:2}	done	yes	two members, report sees both
+f03-empty	none	-	start through the daemon with count 0	done	no	page banner says Every step passed with 2 skipped
+f04-one-member	none	-	run: computed fanout at the end of a flow that returns	refused	yes	validate refuses a computed fanout at the end
+f04-one-member	none	-	the same, again	refused	yes	identical message
+f04-one-member	none	-	the same, a third time	refused	yes	identical message
+f04-one-member	none	-	run with a gather step after the fanout	done	yes	only/solo, one member, flow value from sum
+f04-one-member	none	-	run again	done	yes	identical
+f04-one-member	none	-	run a third time	done	yes	identical
+f05-twelve	none	-	run: twelve members written in the flow	done	yes	eight start at 0.0s, four at 0.3s: parallel 8 honoured
+f05-twelve	none	-	run again	done	yes	same 8+4 split
+f05-twelve	none	-	run a third time	done	yes	same 8+4 split
+f06-member-fails	none	-	run: the middle member throws	failed	yes	siblings finish and keep values, run fails naming work/bad
+f06-member-fails	none	-	run again	failed	yes	identical
+f06-member-fails	none	-	run a third time	failed	no	the step after the fanout gets no record and no event
+f06-member-fails	none	-	resume <id> with no value	failed	yes	re-ran only work/bad
+f07-member-retries	none	-	run: cycle to itself, limit 2, escalate	waiting	yes	own count per member; only the failing member re-ran
+f07-member-retries	none	-	run again	waiting	yes	identical, cycles work/once->work/once 1, work/always->work/always 2
+f07-member-retries	none	-	run a third time	waiting	yes	identical
+f07-member-retries	none	-	resume <id> with a value for work/always	done	yes	answeredByPerson on that member only
+f07-member-retries	none	-	start through the daemon on 4113	waiting	yes	page shows 3 dropped attempts and a form from the contract
+f07-two-fail	none	-	run: two members past the limit	failed	yes	no escalation, the run fails naming both (ADR 0021)
+f07-two-fail	none	-	run again	failed	yes	identical
+f07-two-fail	none	-	run a third time	failed	yes	identical
+f08-fanout-with-condition	none	-	run --with {ok:true}	done	yes	both fanouts run, tail sees all four members
+f08-fanout-with-condition	none	-	run --with {ok:true} again	done	yes	identical
+f08-fanout-with-condition	none	-	run --with {ok:true} a third time	done	yes	identical
+f08-fanout-with-condition	none	-	run --with {ok:false}	done	yes	computed fanout skipped whole, file members skipped one by one
+f08-fanout-with-condition	none	-	run --with {ok:false} again	done	yes	identical
+f08-fanout-with-condition	none	-	run --with {ok:false} a third time	done	yes	identical
+f09-members-feed-later	none	-	run: three members return three shapes	done	yes	gather sees them keyed by member id, shapes untouched
+f09-members-feed-later	none	-	run again	done	yes	identical order and shapes
+f09-members-feed-later	none	-	run a third time	done	yes	identical
+f10-outer-calls-fanout	none	-	run: an inner flow holding two fanouts	done	yes	part/work/x, part/fixed/p; no id collision
+f10-outer-calls-fanout	none	-	run again	done	yes	identical
+f10-outer-calls-fanout	none	-	run a third time	done	no	the computed members lost the inner flow's with; tag came out undefined
+probe-names	none	-	computed item name a/b	done	no	member id work/a/b, indistinguishable from a sub-flow step
+probe-names	none	-	computed item name .. and .	done	no	accepted, ids work/.. and work/.
+probe-names	none	-	computed item name two words and two spaces	done	no	a whitespace-only name becomes the step work/  
+probe-names	none	-	computed item name as a number	failed	yes	the source breaks its own contract first
+probe-names	none	-	computed items as plain strings	failed	yes	contract catches it at the source
+probe-names	none	-	computed item null	failed	yes	contract catches it at the source
+probe-names	none	-	two items with one name	failed	yes	two items use the name same. Each item needs a name of its own
+probe-names	none	-	an item with an empty name	failed	yes	holds no name. An item names the member it becomes
+probe-names	none	-	an item named like another step	done	yes	work/tail and tail coexist
+probe-names	none	-	an item carrying nested data	done	yes	the whole item becomes the member's with
+probe-names	none	-	item names in emoji and right-to-left text	done	yes	ids render intact
+probe-names	none	-	an item name of 300 characters	done	yes	accepted, id printed in full
+probe-names	none	-	the source returns an object where a list belongs	failed	yes	caught by the source contract
+probe-names	none	-	the source omits the key	failed	yes	caught by the source contract
+probe-with	none	-	a step holding with, fanned out both ways	done	no	member with replaces step with; tag and keep vanish
+probe-with	none	-	the same, again	done	no	identical
+probe-with	none	-	the same, a third time	done	no	identical
+probe-with-takes	none	-	the computed fanout step also declares takes	failed	no	fails mid-run, advice points at a with the step already has
+probe-with-takes	none	-	the same, again	failed	no	identical
+probe-with-file-takes	none	-	a file-written fanout in the same shape	refused	yes	validate catches it first and names the member
+probe3-inner-takes	none	-	an inner flow whose two fanouts both declare takes	failed	no	file members keep the outer with, computed members lose it
+probe3-inner-takes	none	-	the same, again	failed	no	identical
+probe3-inner-takes	none	-	the same, a third time	failed	no	identical
+probe-restale	none	-	resume --from the source after the list changed	done	no	re-ran the old members a and b; c d e never audited
+probe-restale-cycle	none	-	a cycle back to the source, list changes between laps	done	no	find returned c d e, the run worked on a and b again
+probe-restale-cycle	none	-	the same, again	done	no	identical
+probe-restale-cycle	none	-	the same, a third time	done	no	identical
+probe5-bad-gate	none	-	fanout on a gate step	refused	no	one mistake reported as two problems
+probe5-empty-list	none	-	fanout: [] in the file	refused	yes	step work fans out to nothing
+probe5-not-needed	none	-	computed source not in needs	refused	yes	Add find to needs
+probe5-no-key	none	-	computed key the source does not return	refused	yes	which find does not return
+probe5-source-fans	none	-	computed source that fans out itself	refused	yes	so it has no one value
+probe5-third-field	none	-	a third field inside {step, key}	refused	yes	which is not a field of a fanout
+probe5-cycle-away	none	-	a cycle from a fanout to another step	refused	yes	the ADR 0021 message, verbatim
+probe5-member-when	none	-	a member holding when	refused	no	says a call step cannot act on when, which is false
+probe6-scale	none	-	200 computed members	done	yes	202 steps, 171 KB state, about 5 s
+probe6-scale	none	-	200 computed members again	done	yes	identical
+probe6-scale	none	-	200 computed members a third time	done	yes	identical
+probe-agent-with	claude	haiku	an agent fanout whose prompt reads a value the step holds	failed	no	{{ tag }} unsupplied; failed before the model, cost 0
+probe-agent-with	claude	haiku	the same, again	failed	no	identical, cost 0
+probe-agent-with	claude	haiku	the same, a third time	failed	no	identical, cost 0

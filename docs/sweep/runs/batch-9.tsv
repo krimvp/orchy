@@ -1,0 +1,57 @@
+takes-contract	-	-	orchy run --with '{"issue":7}', takes satisfied	done	yes	the step read the run's value and the contract held
+takes-contract	-	-	--with '{"issue":"7"}', a wrong type	refused	yes	refused before any step: 'at "/issue": must be number'
+takes-contract	-	-	no --with at all	refused	yes	'takes values, and this run supplies none'
+takes-contract	-	-	--with an extra name	refused	yes	'does not take extra ... Add the name to takes'
+shapes-held	-	-	a nested object, an array of objects and an enum, all met	done	yes	every shape checked and passed
+shapes-broken	-	-	an enum outside its list	failed	yes	names the path, never the allowed values
+shapes-broken	-	-	an enum inside an array item	failed	yes	'at "/findings/0/severity"'
+shapes-broken	-	-	an array item missing a required field	failed	yes	'at "/findings/0": must have required property'
+shapes-broken	-	-	an empty array under minItems: 1	failed	yes	'must NOT have fewer than 1 items'
+shapes-broken	-	-	a nested object missing a required field	failed	yes	'at "/owner/contact"'
+shapes-broken	-	-	a nested object replaced by a string	failed	yes	'at "/owner/contact": must be object'
+shapes-broken	-	-	three breaks at once	failed	no	only the first is reported; allErrors is off
+schema-objekt	-	-	returns: { type: objekt }	refused	yes	caught at load, Ajv's words, names the step
+schema-string	-	-	returns: a plain string	refused	yes	'which is not JSON Schema'
+schema-array	-	-	returns: a list	refused	yes	'which is not JSON Schema'
+schema-true	-	-	returns: true	refused	no	a boolean IS JSON Schema; the message is untrue
+schema-empty	-	-	returns: {}	done	no	passed the check and enforced nothing
+schema-required-string	-	-	required: ok (not a list)	refused	yes	'data/required must be array'
+schema-properties-list	-	-	properties: [ok]	refused	yes	'data/properties must be object'
+schema-typo-keyword	-	-	requires/propertys instead of required/properties	done	no	the module returned {} and the contract checked nothing
+schema-required-undeclared	-	-	required names a property properties never declares	failed	no	only the run finds out; a when on the same name is caught at load
+schema-flow-takes-bad	-	-	takes: { type: objekt } on the flow	refused	yes	caught at load
+keyword-typo	-	-	typo'd keywords, module returns {}	done	no	strict:false hides every unknown keyword
+keyword-typo-2	-	-	type: strng inside properties	refused	yes	the meta-schema catches a bad type value
+minimum-on-a-string	-	-	minimum: 10 on a string (meant minLength)	done	no	"hi" passed; the keyword cannot apply and nothing says so
+no-required	-	-	a schema with no required, module returns {}	done	yes	correct JSON Schema: nothing is required
+no-required	-	-	the same schema, module returns null	failed	yes	'at "/": must be object'
+extra-keys	-	-	a value and a with carrying names nobody declared	done	no	accepted everywhere except the flow's takes
+extra-keys-when	-	-	a when naming a key the step does not declare	refused	yes	caught at load, and the value really does hold it
+wrong-type	-	-	"3" for an integer	failed	yes	no coercion
+wrong-type	-	-	3.5 for an integer	failed	yes	'must be integer'
+wrong-type	-	-	"true" for a boolean	failed	yes	'must be boolean'
+wrong-type	-	-	null for an integer	failed	yes	'must be integer'
+wrong-type	-	-	[3] for an integer	failed	yes	'must be integer'
+wrong-type	-	-	"the first of never" under format: date	done	no	format is ignored and nothing warns
+wrong-type	-	-	undefined for a required field	failed	yes	'must have required property'
+megabyte	-	-	a 1 MB string through a contract, a state file and a second step	done	yes	6.5s, 1,050,380-byte state, the next step got all of it
+megabyte	-	-	the same flow through the daemon, then the run page	done	yes	the child, the API and the page all survived it
+unicode	-	-	emoji, RTL, Hebrew, Japanese, ZWSP through a contract	waiting	yes	unchanged on disk
+unicode	-	-	a gate answered with a wrong type	refused	yes	'at "/approved": must be boolean'
+unicode	-	-	a gate answered with an Arabic extra key	done	no	the undeclared key is kept on the record
+gate-contract	-	-	POST /api/runs/:id/resume, a wrong enum	refused	no	200 + a ticket, run still waiting, no trace on the run
+gate-contract	-	-	POST resume, an empty array under minItems	refused	no	same: the reason only reaches GET /api/queue
+gate-contract	-	-	POST resume, a nested enum outside its list	refused	no	same
+gate-contract	-	-	the page's own form, filled in as far as it lets you	refused	no	sent owner:{}, the page showed nothing at all
+gate-contract	-	-	the page's Write JSON box, a whole value	done	yes	the only way through; the run finished at once
+gate-typeless	-	-	a gate of {enum}, {type:[number,null]} and {} on the page	waiting	no	three needed fields, no controls, 'Fill in choice, count, note first'
+takes-over-inputs	-	-	takes naming a value a needed step returns	refused	no	'nothing supplies it' — and the advice does not apply
+takes-optional-only	-	-	the same takes with no required	done	no	loads and checks nothing; the step was handed {}
+takes-wrong-type-at-run-time	-	-	flow takes a string, step takes a number	failed	yes	caught, but only when the step ran
+takes-conflict-found-late	-	-	the same conflict with a step in front of it	failed	no	the first step ran first; both schemas were in the file
+flow-returns	-	-	the flow's returns broken by the last step	failed	yes	checked at the end, reason on the run
+flow-returns-typo	-	-	the flow's returns with typo'd keywords	done	no	the same silence as a step's contract
+impossible-contract	claude	haiku	minimum: 10 with maximum: 5, one-line prompt	failed	no	13 turns, ~$0.053, recorded as $0 and 'ended with no value for its contract'
+impossible-contract-no-model	claude	no-such-model	the same contract on a model that does not exist	failed	yes	the model failure arrives first; nothing spent, clear message
+empty-contract	claude	haiku	returns: {} on an agent step	failed	no	'API Error: 400 tools.0.custom.input_schema.type: Field required'
+loose-contract	claude	haiku	format: email beside pattern, prompt asks for 'banana'	done	no	pattern enforced, format ignored: the run passed with banana as an email

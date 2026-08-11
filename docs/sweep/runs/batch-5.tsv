@@ -1,0 +1,61 @@
+c1-retry-self	n/a	n/a	ran it; the step throws twice then passes, cycle to itself on failed, limit 3	done	yes	two retries, then attempt 3 passed; each retry heard its own error
+c1-retry-self	n/a	n/a	ran it a second time	done	yes	same order: flaky#1 flaky#2 flaky#3 after#1
+c1-retry-self	n/a	n/a	ran it a third time	done	yes	deterministic
+c1-retry-self-never	n/a	n/a	same flow, the step never passes, policy escalate	waiting	no	4 attempts under limit 3, and the question says "failed 3 times"
+c2-value-cycle	n/a	n/a	review cycles to code on {approved:false}, limit 5, approves on round 3	done	yes	cycles review->code: 2; code heard the review value on the way back
+c2-value-cycle	n/a	n/a	ran it a second time	done	yes	same
+c2-value-cycle	n/a	n/a	ran it a third time	done	yes	same
+c3-limit-one	n/a	n/a	limit 1, review never approves, policy escalate	waiting	yes	one cycle, two review attempts, exit 3, question names the limit
+c3-limit-one	n/a	n/a	ran it a second time	waiting	yes	same
+c3-limit-one	n/a	n/a	ran it a third time	waiting	yes	same
+c4-limit3-escalate	n/a	n/a	limit 3, policy escalate, review never approves	waiting	yes	3 cycles, 8 attempts, 7 records in history
+c4-limit3-escalate	n/a	n/a	ran it a second time	waiting	yes	same
+c4-limit3-escalate	n/a	n/a	ran it a third time	waiting	yes	same
+c4-limit3-escalate	n/a	n/a	started a fourth run through the daemon on port 4115	waiting	yes	the page shows the question, the dropped attempts, and a form from the contract
+c4-limit3-escalate	n/a	n/a	orchy resume <id> '{"approved":true}' on the escalated step	done	yes	the value of the person ends the run, and fires no further cycle
+c4-limit3-escalate	n/a	n/a	orchy resume <id> '{"approved":false}' on the escalated step	done	yes	answeredByPerson stops the cycle firing again
+c4-limit3-escalate	n/a	n/a	orchy resume <id> '{"approved":"yes"}'	refused	yes	breaks the contract at "/approved": must be boolean
+c4-limit3-escalate	n/a	n/a	orchy resume <id> --from code after the limit was spent	done	no	one more round only; state.cycles is never reset
+c5-limit3-accept	n/a	n/a	limit 3, policy accept, review never approves	done	no	exit 0 and "— done"; nothing says the disagreement was accepted
+c5-limit3-accept	n/a	n/a	ran it a second time	done	no	same
+c5-limit3-accept	n/a	n/a	ran it a third time	done	no	same
+c5-limit3-accept	n/a	n/a	ran it a fourth time and read the whole event stream	done	no	no event carries the accepted disagreement
+c6-untouched-branch	n/a	n/a	a cycle with a branch (seed, far) that needs nothing the cycle touches	done	yes	code and review ran 3 times; seed, far and join ran once
+c6-untouched-branch	n/a	n/a	ran it a second time	done	yes	same
+c6-untouched-branch	n/a	n/a	ran it a third time	done	yes	same
+c6-untouched-branch	n/a	n/a	started a fourth run through the daemon	done	yes	same on the page
+c7-two-cycles	n/a	n/a	two reviewers in one wave, both to a, limits 1 and 2, both accept	done	yes	b cycled once, c twice; the starvation in docs/usability.md is fixed
+c7-two-cycles	n/a	n/a	ran it a second time	done	yes	same
+c7-two-cycles	n/a	n/a	ran it a third time	done	yes	same
+c8-cycle-to-fanout	n/a	n/a	check cycles to a step a fanout expanded into three members	done	no	the target became work/three; work/one and work/two never ran again
+c8-cycle-to-fanout	n/a	n/a	ran it a second time	done	no	same
+c8-cycle-to-fanout	n/a	n/a	ran it a third time	done	no	same
+c8-cycle-to-fanout	n/a	n/a	ran it a fourth time and read the events	done	no	the event says "check goes back to work/three"; the file says to: work
+c8-cycle-to-fanout	n/a	n/a	started a fifth run through the daemon	done	no	the drawing puts the cycle on work/three only
+c8b-member-retry	n/a	n/a	three fanout members, each with cycle to itself on failed, limit 1, each fails once	done	yes	ADR 0021 holds: each member kept its own count
+c8b-member-retry	n/a	n/a	ran it a second time	done	yes	same
+c8b-member-retry	n/a	n/a	ran it a third time	done	yes	same
+c9-gate-cycle	n/a	n/a	a gate with cycle to code, limit 2, policy accept; answered false, false, true at the CLI	done	yes	code ran three times; cycles sign->code: 2
+c9-gate-cycle	n/a	n/a	the same flow, answered false four times	done	no	the third rejection ended the run "done" with value {approved:false} and no word
+c9-gate-cycle	n/a	n/a	the same flow through POST /api/runs/:id/resume on port 4115, false, false, true	done	yes	the daemon and the CLI behave the same
+c9-gate-cycle	n/a	n/a	started a fifth run through the daemon and answered once	waiting	yes	the run row keeps the same question for ~2s while the queue restarts the child
+c10-cycle-to-ruled-out	n/a	n/a	check cycles to a step a condition ruled out	done	no	the cycle spent a count, re-made the same skipped record, and nothing ran again
+c10-cycle-to-ruled-out	n/a	n/a	ran it a second time	done	no	same
+c10-cycle-to-ruled-out	n/a	n/a	ran it a third time	done	no	same
+c10d-cycle-off-branch	n/a	n/a	the same with the condition taken off, so the target really runs again	done	no	maybe ran twice; check never saw the new value and never voted again
+c10d-cycle-off-branch	n/a	n/a	ran it a second time	done	no	same
+c10d-cycle-off-branch	n/a	n/a	ran it a third time	done	no	same
+cB-paid-cycle	claude	haiku	one agent step that a call step cycles back to once, budget 5	done	yes	the dropped attempt kept cost 0.011697; trajectory total 0.023387
+cB2-paid-cycle-budget	claude	haiku	the same with budget 0.015, so the second attempt passes it	failed	yes	"it spent $0.0245 of $0.015" counts the dropped attempt
+cC-self-value-loop	n/a	n/a	a cycle to the step itself on a value match, limit 3	done	yes	a bounded loop: 4 attempts, then it stopped
+cC-self-value-loop	n/a	n/a	ran it a second time	done	yes	same
+cC-self-value-loop	n/a	n/a	ran it a third time	done	yes	same
+cD-members-past-limit	n/a	n/a	three fanout members that always fail, retry limit 1	failed	yes	the run fails and names all three, as ADR 0021 says
+cD-members-past-limit	n/a	n/a	ran it a second time	failed	yes	same
+cD-members-past-limit	n/a	n/a	ran it a third time	failed	yes	same
+cE-cycle-past-computed-fanout	n/a	n/a	a cycle back to the step a computed fanout reads; the list grows each round	done	no	the members froze at two; the last two names were never judged
+cE-cycle-past-computed-fanout	n/a	n/a	ran it a second time	done	no	same
+cE-cycle-past-computed-fanout	n/a	n/a	ran it a third time	done	no	same
+cE2-stale-member-value	n/a	n/a	the same, with a fixed list whose payload changes each round	done	no	both members read round 1 on all three rounds
+cE2-stale-member-value	n/a	n/a	ran it a second time	done	no	same
+cE2-stale-member-value	n/a	n/a	ran it a third time	done	no	same

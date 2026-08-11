@@ -1,0 +1,56 @@
+g01-gate-first	pi (unused)	-	orchy run, gate is the first step	waiting	yes	stops before any step, prints the question and the resume hint, exits 3
+g01-gate-first	pi (unused)	-	orchy resume <id> '{"go":true}'	done	yes	call step after the gate reads {"approve":{"go":true}}
+g01-gate-first	pi (unused)	-	orchy resume <id> '{"go":true}' again, on the finished run	refused	yes	"the run … is done, so it takes no value", exit 1
+g01-gate-first	pi (unused)	-	orchy resume <id> --from approve, back to the gate	waiting	yes	gate re-asked, earlier answer kept in history
+g01-gate-first	pi (unused)	-	orchy run then resume, second whole pass	done	yes	-
+g01-gate-first	pi (unused)	-	orchy run then resume, third whole pass	done	yes	-
+g01-gate-first	claude	-	POST /api/flows/1/runs, then POST /api/runs/:id/stop while waiting	stopped	yes	{"stopped":true,"abandoned":true}
+g01-gate-first	claude	-	answer that stopped run over the API and at the CLI	refused	yes	both say "the run … is stopped, so it takes no value"
+g01-gate-first	claude	-	orchy resume <id> (no value) on the stopped run, then answer on the page	refused	no	page says waiting and offers the form, daemon row says stopped and refuses the answer
+g02-gate-middle	pi (unused)	-	orchy run, gate in the middle	waiting	yes	the call step before it ran first, then the run stopped
+g02-gate-middle	pi (unused)	-	resume '{"go":"yes"}' then '{}' then '{"go":true,"extra":1}'	refused	yes	two exact contract messages, then the extra key passed (no additionalProperties)
+g02-gate-middle	pi (unused)	-	orchy run then resume, second whole pass	done	yes	-
+g02-gate-middle	pi (unused)	-	orchy run then resume, third whole pass	done	yes	-
+g02-gate-middle	claude	-	POST /api/flows/2/runs then POST /api/runs/:id/resume	done	yes	the answer job queues; the run settled about 10s later
+g02-gate-middle	claude	-	same over the API, watched on the page	done	yes	page shows "What before answered" with the earlier step's value
+g03-two-gates	pi (unused)	-	orchy run, two gates ready in one wave	waiting	no	only the first question is shown; nothing says a second one waits
+g03-two-gates	pi (unused)	-	answer both gates one after the other	done	yes	the joining step gets both values
+g03-two-gates	pi (unused)	-	two people answer: bob answers question one, alice's "no" arrives next	done	no	alice's no was recorded against question two; resume cannot name the gate
+g03-two-gates	pi (unused)	-	orchy run, answer both again	done	yes	-
+g03-two-gates	claude	-	POST /api/flows/3/runs, answer gate one over the API, gate two at the CLI	done	yes	the two surfaces answer the same run without disagreeing
+g04-contract	pi (unused)	-	orchy run, gate holding string, number, boolean, array and an optional field	waiting	yes	-
+g04-contract	pi (unused)	-	answer with every field filled, note included	done	yes	value stored whole
+g04-contract	pi (unused)	-	answer with score 99 (maximum 10)	refused	yes	'the value of "verdict" breaks the contract at "/score": must be <= 10'
+g04-contract	pi (unused)	-	answer with findings [1,2]	refused	yes	'…at "/findings/0": must be string'
+g04-contract	pi (unused)	-	answer with the optional field left out and an empty array	done	yes	-
+g04-contract	claude	-	POST /api/flows/4/runs, answered on the page with score 99	waiting	no	HTTP 200, form silently re-rendered, reason only on the runs list as "did not start"
+g04-contract	claude	-	same run: malformed JSON through "Write JSON"	waiting	no	uncaught SyntaxError in the browser, nothing shown on the page
+g04-contract	claude	-	same run: two valid answers posted at the same instant	done	yes	one applied, the other refused with "the run … is already on its way"
+g05-api-gate	claude	-	POST /api/flows/5/runs, answered by POST /api/runs/:id/resume	done	yes	answeredByPerson recorded, the next step ran
+g05-api-gate	pi (unused)	-	same flow run and answered at the command line	done	yes	same value, same record shape as the API path
+g05-api-gate	pi (unused)	-	third pass at the command line	done	yes	-
+g06-cli-gate	pi (unused)	-	orchy run while the daemon was up in the same directory	waiting	no	invisible in GET /api/runs and on the runs list
+g06-cli-gate	claude	-	answer that CLI run on the page	refused	no	form offered, then "this daemon holds no run …", and "started: Invalid Date"
+g06-cli-gate	claude	-	POST /api/flows/6/runs, answered over the API	done	yes	-
+g06-cli-gate	pi (unused)	-	orchy run and answer at the command line	done	yes	-
+g07-refused	claude	-	POST /api/flows/7/runs, answered with {"approved":"sure"} over the API	waiting	no	200 + ticket; the run never moves; the reason lands in the queue only
+g07-refused	pi (unused)	-	orchy run, then true, "yes", null, {approved:true}, an extra key	refused	yes	five precise messages; bad JSON exits 2, contract breaks exit 1
+g07-refused	pi (unused)	-	orchy resume with no value on a waiting run	refused	yes	"waits for a value. Answer it, or name a step to go back to."
+g07-refused	pi (unused)	-	orchy run and answer correctly	done	yes	-
+g08-gate-when	pi (unused)	-	orchy run --with '{"severity":"high"}', gate carries when	waiting	yes	the rest of the wave ran first, then the gate asked
+g08-gate-when	pi (unused)	-	orchy run --with '{"severity":"low"}'	done	yes	'⊘ escalate does not run / "sort" does not say {"severity":"high"}'
+g08-gate-when	pi (unused)	-	high again, gate answered {"taken":false}	done	yes	-
+g09-gate-takes	pi (unused)	-	orchy run --with '{"ticket":412,"owner":"ana"}'	waiting	no	the question printed "Ticket {{ ticket }} belongs to {{ owner }}"
+g09-gate-takes	pi (unused)	-	orchy run --with '{"ticket":77,"owner":"bo"}'	waiting	no	identical unfilled question, so the two waiting runs cannot be told apart
+g09-gate-takes	claude	-	POST /api/flows/9/runs with the same values, read on the page	waiting	no	page shows the braces too; the runs list does show "ticket 412 · owner ana"
+g10-long-question	pi (unused)	-	orchy run with a 500-character question, then answer	done	yes	the question survives YAML, the event, the state file and the page whole
+g10-long-question	pi (unused)	-	second pass, answered {"approved":false}	done	yes	-
+g10-long-question	pi (unused)	-	third pass	done	yes	-
+g11-gate-only	pi (unused)	-	orchy run, a flow that is one gate	waiting	yes	-
+g11-gate-only	pi (unused)	-	answer it	done	yes	the person's value becomes the value of the flow, checked against flow returns
+g11-gate-only	pi (unused)	-	second and third pass	done	yes	-
+g11-gate-only	pi (unused)	-	orchy run --events	waiting	yes	one waiting event with step and question, no contract, exit 3
+bad-gate	pi (unused)	-	orchy run on a gate with no question and no returns	error	yes	validate names both: 'step "ask" has no "question", and a gate step needs one'
+g12-string-gate	pi (unused)	-	orchy run with returns {type: string}, answered '"ship"'	done	yes	validate accepts it, the command line answers it fine
+g12-string-gate	claude	-	same flow on the page: the form has no fields, clicked Answer and continue	waiting	no	posts {}, 200, nothing happens; queue says 'must be string'
+g12-string-gate	pi (unused)	-	third pass at the command line, answered '"wait"'	done	yes	-

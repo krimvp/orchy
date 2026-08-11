@@ -1,0 +1,51 @@
+f1-one-level	none	-	orchy run f1-one-level.yaml (call, flow, call)	done	yes	inner steps become sub/work; the outer step reads them
+f1-one-level	none	-	same flow, second CLI run	done	yes	same order, same value
+f1-one-level	claude	-	registered, POST /api/flows/1/runs	done	yes	one run id, one page, steps sub/work
+f2-two-levels	none	-	orchy run f2-two-levels.yaml (flow calls a flow)	done	yes	ids nest: sub/deep/work then sub/wrap
+f2-two-levels	none	-	second CLI run	done	yes	same
+f2-two-levels	claude	-	POST /api/flows/5/runs	done	yes	the page draws it flat, no grouping
+f3-inner-takes	none	-	inner takes {n}, step supplies with:{n:21}	done	yes	sub/double answered {n:42}
+f3-inner-takes	none	-	second CLI run	done	yes	same
+f3b-no-with	none	-	same flow with the with line deleted	refused	yes	load refuses: step sub supplies none
+f3b-no-with	claude	-	registered, page said valid, pressed run	refused	no	400 at start though the editor lamp said valid
+f3c-bad-with	none	-	with:{n:"21"} against takes n:number	refused	yes	names the path /n and the type
+f3d-extra-with	none	-	with:{n:21,extra:true}	refused	yes	names the extra value and the fix
+f4-inner-fails	none	-	inner step throws	failed	yes	step "sub/boom" failed, exit 1
+f4-inner-fails	none	-	second CLI run	failed	yes	same
+f5-inner-gate	none	-	gate inside the inner flow, CLI	waiting	yes	stops at sub/ask, exit 3, prints the resume line
+f5-inner-gate	none	-	orchy resume <id> '{"approved":true}'	done	yes	the outer step read {sub/ask:{approved:true}}
+f5-inner-gate	claude	-	POST /api/flows/2/runs	waiting	yes	waitingFor sub/ask, question shown
+f5-inner-gate	claude	-	POST /api/runs/<id>/resume {approved:false}	done	yes	answered from the API, run finished
+f6-missing-inner	none	-	flow step names inner/not-here.yaml	refused	yes	message names no step and no caller
+f6-missing-inner	none	-	second CLI run	refused	yes	same
+f7-self	none	-	flow step names its own file, bounded: timeout 45 + heap 192MB	error	no	19s of CPU then FATAL heap OOM; nothing bounds the loader
+f7b-ping/f7c-pong	none	-	two files that name each other, same bound	error	no	33s then the same OOM
+f7-self	claude	-	registered (page said valid), POST /api/flows/9/runs	error	no	POST never answered, health went dead, daemon OOMed and died
+f8-harness-split	claude+pi	haiku + openai/gpt-5	outer agent on claude/haiku, inner flow on pi	failed	yes	hello done $0.0135, sub/think failed: No API key found for openai
+f8-harness-split	claude+pi	haiku + openai/gpt-5	second run	failed	yes	hello done $0.0124, same pi failure
+f9-inner-returns	none	-	inner returns {n}, outer step reads it	done	yes	the value crosses as inputs keyed sub/double
+f9-inner-returns	none	-	second CLI run	done	yes	same
+f9b-inner-liar	none	-	inner flow whose returns its exit step breaks	done	no	the inner returns schema is dropped; alone the same flow fails
+f9b-inner-liar	none	-	second CLI run	done	no	same
+inner-liar	none	-	the same inner flow run on its own	failed	yes	the value of work breaks what the flow returns
+f10-inner-fanout	none	-	fanout of three inside the inner flow	done	yes	sub/each/alpha|beta|gamma ran at once, sub/join joined
+f10-inner-fanout	none	-	second CLI run	done	yes	same
+f10-inner-fanout	claude	-	POST /api/flows/4/runs	done	yes	page draws five flat nodes
+probe-budget	none	-	inner flow declares budget: 1	refused	yes	a budget belongs to the run
+probe-two-exits	none	-	inner flow ends in two steps	refused	yes	ends in 2 steps, needs exactly one
+probe-git-ws	none	-	inner flow names a git workspace, outer names none	refused	yes	one run works in one workspace
+probe-tools-inner-pi	claude+pi	haiku + openai/gpt-5	inner pi step asks for the tool web	refused	yes	refused before any spend
+probe-tools-outer-pi	pi	openai/gpt-5	inner step inherits pi and asks for web	refused	yes	refused before any spend
+probe-outer-takes	none	-	outer takes {tag}, run --with, inner call step reads values	done	yes	values of the run cross the boundary
+probe-outer-returns	none	-	outer returns checked against the inner exit step	failed	yes	the outer contract is enforced
+probe-forward	none	-	outer takes {n}, flow step supplies no with, run --with n:5	refused	no	a run value cannot reach a sub-flow that takes values
+probe-forward-braces	none	-	with:{n:"{{ n }}"}	refused	no	interpolation is prompt-only, message does not say so
+probe-forward-dummy	none	-	with:{n:0} while the run supplies n:5	done	no	answered {n:0}: the constant silently beat the run value
+probe-when-on-flowstep	none	-	when on the flow step	done	no	validate never sees a flow step; the condition was dropped
+probe-when-false	none	-	when on the flow step that can never hold	done	no	the sub-flow ran anyway
+probe-when-after-flow	none	-	when keyed by the flow step id on the next step	refused	no	says it does not need sub, and needs:[sub] is right there
+probe-when-inner-id	none	-	when keyed by sub/work instead	done	yes	only the inner private id works
+probe-junk-flowstep	none	-	model, tools, changes, question on a flow step	done	no	all four accepted and dropped; validate() catches them unexpanded
+probe-junk-flowstep	claude	-	registered: page listed 4 problems, Run not disabled	done	no	the daemon started an invalid flow from its own page
+f-cycle-into-sub	none	-	gate cycles to the flow step, answered {approved:false}	waiting	no	went back to sub/b only; sub/a never ran again
+f-retry-sub	none	-	cycle {to: sub, when: failed} on the flow step	failed	no	the retry landed on sub/b, so a failure in sub/a never retried

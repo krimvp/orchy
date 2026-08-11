@@ -1,0 +1,38 @@
+a-default	claude	(none)	orchy run a-default.yaml	done	yes	the default is claude-sonnet-5; $0.0385
+a-default	claude	(none)	POST /api/flows/1/runs	done	yes	same, $0.0187, cheaper on a warm cache
+b-haiku	claude	haiku	orchy run b-haiku.yaml	done	yes	$0.0113, value {"word":"ok"}
+b-haiku	claude	haiku	POST /api/flows/2/runs	done	yes	$0.0101; step panel still says "the default"
+c-sonnet	claude	sonnet	orchy run c-sonnet.yaml	done	yes	$0.0227, the one sonnet run
+d-nomodel	claude	no-such-model	orchy run d-nomodel.yaml	failed	yes	refused by the claude command in 3s, cost absent
+d-nomodel	claude	no-such-model	POST /api/flows/4/runs	failed	yes	same message, run row failed, cost 0
+e-wronggrammar	claude	anthropic/claude-haiku	orchy run e-wronggrammar.yaml	refused	yes	validate() before the run: write a plain model name
+e-wronggrammar	claude	anthropic/claude-haiku	POST /api/flows/5/runs	refused	yes	400, no run row, same words
+f-pi-ok	pi	openai/gpt-5	orchy run f-pi-ok.yaml	failed	yes	pi reached the SDK and died on the key; raw message, no step named
+f-pi-ok	pi	openai/gpt-5	POST /api/flows/6/runs	failed	yes	same four lines in state.json and on the page
+g-pi-bad	pi	gpt-5	orchy run g-pi-bad.yaml	refused	yes	validate(): write the provider and the model
+g-pi-bad	pi	gpt-5	POST /api/flows/7/runs	refused	yes	400, no run row
+h-two-harnesses	claude+pi	haiku + openai/gpt-5	orchy run h-two-harnesses.yaml	failed	yes	first paid $0.0100, then pi failed; money spent before the refusal
+h-two-harnesses	claude+pi	haiku + openai/gpt-5	POST /api/flows/8/runs	failed	yes	$0.0123 kept on the failed run; page offers resume from second
+i-override	claude on a pi flow	haiku over openai/gpt-5	orchy run i-override.yaml	done	yes	the step wins; $0.0112
+i-override	claude on a pi flow	haiku over openai/gpt-5	POST /api/flows/9/runs	done	yes	$0.0115
+j-all-tools	claude	haiku	orchy run j-all-tools.yaml (all 8 tools)	done	yes	read write edit bash grep find ls web all accepted; $0.0260
+j-all-tools	claude	haiku	POST /api/flows/10/runs	done	yes	$0.0081
+k-pi-web	pi	openai/gpt-5	orchy run k-pi-web.yaml (tools: [read, web])	refused	yes	validate(): the harness "pi" has none. Before the run.
+k-pi-web	pi	openai/gpt-5	POST /api/flows/11/runs	refused	yes	400, no run row
+l-no-such-tool	claude	haiku	orchy run l-no-such-tool.yaml (tools: [read, telepathy])	refused	yes	the tool "telepathy", which does not exist. Before the run.
+l-no-such-tool	claude	haiku	POST /api/flows/12/runs	refused	yes	400, no run row
+m-partial-override	claude on a pi flow	(flow model openai/gpt-5)	orchy run m-partial-override.yaml	refused	yes	a step that overrides only the harness is caught by validate()
+m-partial-override	claude on a pi flow	(flow model openai/gpt-5)	POST /api/flows/13/runs	refused	yes	same
+n-step-pi-web	pi step on a claude flow	openai/gpt-5	orchy run n-step-pi-web.yaml (tools: [web])	refused	yes	the tool check reads the step harness, not the flow one
+n-step-pi-web	pi step on a claude flow	openai/gpt-5	POST /api/flows/14/runs	refused	yes	same
+o-no-tools	claude	haiku	orchy run o-no-tools.yaml, prompt asks it to read a file, tools: []	done	yes	answered no-tools; invariant 1 holds with an empty list; $0.0124
+p-read-tool	claude	haiku	orchy run p-read-tool.yaml, same prompt, tools: [read]	done	yes	read the file and answered banana; $0.0143
+q-no-harness	(none, so pi)	haiku	orchy run q-no-harness.yaml (tools: [web])	failed	no	validate() silent; "pi has no tool for web" only at run time, naming no step
+q-no-harness	claude via --harness	haiku	orchy run q-no-harness.yaml --harness claude	done	no	the same file is valid or not depending on a flag validate() never sees; $0.0120
+q-no-harness	(none, registered pi)	haiku	POST /api/flows/15/runs	failed	no	the index column decided the harness
+q-no-harness	(none, registered claude)	haiku	POST /api/flows/15/runs after re-register	done	no	same file, $0.0120, opposite outcome
+r-no-harness-model	(none, so pi)	haiku	orchy run r-no-harness-model.yaml	failed	no	"pi wants a model named provider/model" at run time, not at the check
+s-bad-harness	gpt-cli	haiku	orchy run s-bad-harness.yaml	error	no	validate() says nothing about an unknown harness; the runner refuses and names no alternative
+s-bad-harness	gpt-cli	haiku	POST /api/flows/16/runs	error	no	the daemon queued it, the child died, the page shows a "did not start" card
+t-empty-model	claude	":"	orchy run t-empty-model.yaml	failed	yes	the grammar is not the catalogue: ":" passes the check, the claude command refuses it, cost 0
+u-spacey-model	claude	claude haiku	orchy run u-spacey-model.yaml	refused	yes	a space is refused by validate()

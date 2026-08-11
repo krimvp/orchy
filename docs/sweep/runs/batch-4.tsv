@@ -1,0 +1,93 @@
+cond-is	none (call steps only)	none	orchy run cond-is.yaml --with '{"severity": "high", "payload": {"a": 1}}'	done	yes	ran sort, is_high, plain_high, is_object; skipped is_null
+cond-is	none (call steps only)	none	orchy run cond-is.yaml --with '{"severity": "high", "payload": {"a": 1}}'	done	yes	ran sort, is_high, plain_high, is_object; skipped is_null
+cond-is	none (call steps only)	none	orchy run cond-is.yaml --with '{"severity": "low", "payload": {"a": 2}}'	done	yes	ran sort; skipped is_high, plain_high, is_object, is_null
+cond-is	none (call steps only)	none	orchy run cond-is.yaml --with '{"severity": null, "payload": {"a": 1, "b": 2}}'	done	yes	ran sort, is_null; skipped is_high, plain_high, is_object
+cond-is	none (call steps only)	none	orchy run cond-is.yaml --with '{"severity": 1, "payload": [1]}'	done	yes	ran sort; skipped is_high, plain_high, is_object, is_null
+cond-not	none (call steps only)	none	orchy run cond-not.yaml --with '{"severity": "high", "payload": {"a": 2}}'	done	yes	every step ran: sort, not_low, not_missing, not_null, not_object
+cond-not	none (call steps only)	none	orchy run cond-not.yaml --with '{"severity": "low", "payload": {"a": 1}}'	done	yes	ran sort, not_missing, not_null; skipped not_low, not_object
+cond-not	none (call steps only)	none	orchy run cond-not.yaml --with '{"severity": null, "maybe": "x"}'	done	yes	ran sort, not_low, not_object; skipped not_missing, not_null
+cond-empty	none (call steps only)	none	orchy run cond-empty.yaml --with '{"findings": ["a"], "note": "x", "bag": {"a": 1}, "flag": false}'	done	yes	ran sort, has_findings, flag_not_empty, absent_empty; skipped no_findings, note_empty, bag_empty
+cond-empty	none (call steps only)	none	orchy run cond-empty.yaml --with '{"findings": [], "note": "", "bag": {}, "flag": true}'	done	yes	ran sort, no_findings, note_empty, bag_empty, flag_not_empty, absent_empty; skipped has_findings
+cond-empty	none (call steps only)	none	orchy run cond-empty.yaml --with '{"findings": 0, "note": null, "bag": "", "flag": []}'	done	yes	ran sort, has_findings, note_empty, bag_empty, absent_empty; skipped no_findings, flag_not_empty
+cond-empty	none (call steps only)	none	orchy run cond-empty.yaml --with '{"findings": {"0": "a"}, "note": " ", "bag": [0], "flag": 0}'	done	yes	ran sort, has_findings, flag_not_empty, absent_empty; skipped no_findings, note_empty, bag_empty
+cond-lt	none (call steps only)	none	orchy run cond-lt.yaml --with '{"score": 1, "name": "seven"}'	done	yes	ran sort, under_seven, under_three; skipped name_under_seven, under_zero
+cond-lt	none (call steps only)	none	orchy run cond-lt.yaml --with '{"score": 7, "name": 3}'	done	yes	ran sort, name_under_seven; skipped under_seven, under_three, under_zero
+cond-lt	none (call steps only)	none	orchy run cond-lt.yaml --with '{"score": 3, "name": null}'	done	yes	ran sort, under_seven; skipped under_three, name_under_seven, under_zero
+cond-lt	none (call steps only)	none	orchy run cond-lt.yaml --with '{"score": "2", "name": true}'	done	yes	ran sort; skipped under_seven, under_three, name_under_seven, under_zero
+cond-lt	none (call steps only)	none	orchy run cond-lt.yaml --with '{"score": -5, "name": [1]}'	done	yes	ran sort, under_seven, under_three, under_zero; skipped name_under_seven
+cond-gt	none (call steps only)	none	orchy run cond-gt.yaml --with '{"score": 9, "name": "8"}'	done	yes	ran sort, over_seven, over_three, over_minus_one; skipped name_over_seven
+cond-gt	none (call steps only)	none	orchy run cond-gt.yaml --with '{"score": 3, "name": 8}'	done	yes	ran sort, name_over_seven, over_minus_one; skipped over_seven, over_three
+cond-gt	none (call steps only)	none	orchy run cond-gt.yaml --with '{"score": 0, "name": {"a": 1}}'	done	yes	ran sort, over_minus_one; skipped over_seven, over_three, name_over_seven
+cond-gt	none (call steps only)	none	orchy run cond-gt.yaml --with '{"score": true, "name": [9]}'	done	yes	ran sort; skipped over_seven, over_three, name_over_seven, over_minus_one
+cond-missing-key	none (call steps only)	none	orchy run cond-missing-key.yaml --with '{"severity": "high"}'	done	yes	ran sort, loose, ghost_empty; skipped on_optional, on_ghost
+cond-missing-key	none (call steps only)	none	orchy run cond-missing-key.yaml --with '{"severity": "high", "optional": "yes", "ghost": "yes"}'	done	yes	ran sort, loose, on_optional, on_ghost; skipped ghost_empty
+cond-missing-key	none (call steps only)	none	orchy run cond-missing-key.yaml --with '{"severity": "low", "ghost": ""}'	done	yes	ran sort, loose, ghost_empty; skipped on_optional, on_ghost
+cond-nested	none (call steps only)	none	orchy run cond-nested.yaml --with '{"result": {"severity": "high", "count": 2}}'	done	yes	ran sort, loose, whole_object; skipped part_of_object, dotted_path
+cond-nested	none (call steps only)	none	orchy run cond-nested.yaml --with '{"result": {"severity": "high"}}'	done	yes	ran sort, loose, part_of_object; skipped whole_object, dotted_path
+cond-nested	none (call steps only)	none	orchy run cond-nested.yaml --with '{"result": {"severity": "low", "count": 2}}'	done	yes	ran sort, loose; skipped whole_object, part_of_object, dotted_path
+cond-is	none (call steps only)	none	orchy run cond-is.yaml --with '{"severity": "high"}'	done	yes	ran sort, is_high, plain_high; skipped is_object, is_null
+cond-ruled-out	none (call steps only)	none	orchy run cond-ruled-out.yaml --with '{"severity": "high"}'	done	yes	every step ran: sort, page, notify, record
+cond-ruled-out	none (call steps only)	none	orchy run cond-ruled-out.yaml --with '{"severity": "low"}'	done	yes	ran sort; skipped page, notify, record
+cond-ruled-out-returns	none (call steps only)	none	orchy run cond-ruled-out-returns.yaml --with '{"severity": "high"}'	done	yes	every step ran: sort, page, notify, record
+cond-ruled-out-returns	none (call steps only)	none	orchy run cond-ruled-out-returns.yaml --with '{"severity": "low"}'	failed	no	a skipped exit step failed the run: the flow "cond-ruled-out-returns" returns the value of "record", and the run has no value 
+cond-ruled-out-returns	none (call steps only)	none	orchy run cond-ruled-out-returns.yaml --with '{"severity": "low"}'	failed	no	a skipped exit step failed the run: the flow "cond-ruled-out-returns" returns the value of "record", and the run has no value 
+cond-ruled-out	none (call steps only)	none	orchy run cond-ruled-out.yaml --with '{"severity": "low"}'	done	yes	ran sort; skipped page, notify, record
+cond-chain	none (call steps only)	none	orchy run cond-chain.yaml --with '{"ok": true, "count": 5}'	done	yes	every step ran: sort, measure, page, record
+cond-chain	none (call steps only)	none	orchy run cond-chain.yaml --with '{"ok": true, "count": 1}'	done	yes	ran sort, measure; skipped page, record
+cond-chain	none (call steps only)	none	orchy run cond-chain.yaml --with '{"ok": false, "count": 9}'	done	yes	ran sort; skipped measure, page, record
+cond-chain	none (call steps only)	none	orchy run cond-chain.yaml --with '{"ok": true, "count": "5"}'	done	yes	ran sort, measure; skipped page, record
+cond-after-cycle	none (call steps only)	none	orchy run cond-after-cycle.yaml   (tick.state reset first)	done	yes	ran tick, only_after; skipped only_first
+cond-after-cycle	none (call steps only)	none	orchy run cond-after-cycle.yaml   (tick.state reset first)	done	yes	ran tick, only_after; skipped only_first
+cond-after-cycle	none (call steps only)	none	orchy run cond-after-cycle.yaml   (tick.state reset first)	done	yes	ran tick, only_after; skipped only_first
+cond-ruled-out	none (call steps only)	none	orchy run cond-ruled-out.yaml --with '{"severity": "low"}'	done	yes	ran sort; skipped page, notify, record
+cond-scalar-value	none (call steps only)	none	orchy run cond-scalar-value.yaml --with '{"severity": "high"}'	done	no	sort returned the string "high" and the condition still read as false
+cond-scalar-value	none (call steps only)	none	orchy run cond-scalar-value.yaml --with '{"severity": "low"}'	done	no	sort returned the string "high" and the condition still read as false
+when-on-flow-step	none (call steps only)	none	orchy run when-on-flow-step.yaml	failed	no	every step ran: 
+cond-on-flow-step	none (call steps only)	none	orchy run cond-on-flow-step.yaml --with '{"severity": "high"}'	done	no	the `when` on the kind: flow step did nothing: sub/work ran on every value
+cond-on-flow-step	none (call steps only)	none	orchy run cond-on-flow-step.yaml --with '{"severity": "low"}'	done	no	the `when` on the kind: flow step did nothing: sub/work ran on every value
+cond-on-flow-step	none (call steps only)	none	orchy run cond-on-flow-step.yaml --with '{"severity": "low"}'	done	no	the `when` on the kind: flow step did nothing: sub/work ran on every value
+cond-join	none (call steps only)	none	orchy run cond-join.yaml --with '{"severity": "high"}'	done	yes	every step ran: sort, page, label, record
+cond-join	none (call steps only)	none	orchy run cond-join.yaml --with '{"severity": "low"}'	done	yes	ran sort, label; skipped page, record
+cond-join	none (call steps only)	none	orchy run cond-join.yaml --with '{"severity": "low"}'	done	yes	ran sort, label; skipped page, record
+cond-scalar-value	none (call steps only)	none	orchy run cond-scalar-value.yaml --with '{"severity": "high"}'	done	no	sort returned the string "high" and the condition still read as false
+when-on-flow-step	none (call steps only)	none	orchy run when-on-flow-step.yaml	failed	no	every step ran: 
+when-on-flow-step	none (call steps only)	none	orchy run when-on-flow-step.yaml	failed	no	every step ran: 
+nested-operator	none (call steps only)	none	orchy run bad/nested-operator.yaml	refused	yes	refused: an operator over an operator, named and refused
+nested-operator	none (call steps only)	none	orchy run bad/nested-operator.yaml	refused	yes	refused: an operator over an operator, named and refused
+nested-operator	none (call steps only)	none	orchy run bad/nested-operator.yaml	refused	yes	refused: an operator over an operator, named and refused
+unknown-operator	none (call steps only)	none	orchy run bad/unknown-operator.yaml	refused	yes	refused: {equals: high} is not one operator, and it listed the five
+unknown-operator	none (call steps only)	none	orchy run bad/unknown-operator.yaml	refused	yes	refused: {equals: high} is not one operator, and it listed the five
+unknown-operator	none (call steps only)	none	orchy run bad/unknown-operator.yaml	refused	yes	refused: {equals: high} is not one operator, and it listed the five
+two-operators	none (call steps only)	none	orchy run bad/two-operators.yaml	refused	yes	refused: {lt: 7, gt: 2} is not one operator
+two-operators	none (call steps only)	none	orchy run bad/two-operators.yaml	refused	yes	refused: {lt: 7, gt: 2} is not one operator
+two-operators	none (call steps only)	none	orchy run bad/two-operators.yaml	refused	yes	refused: {lt: 7, gt: 2} is not one operator
+empty-on-boolean	none (call steps only)	none	orchy run bad/empty-on-boolean.yaml	refused	yes	refused: `empty` over a declared boolean
+empty-on-boolean	none (call steps only)	none	orchy run bad/empty-on-boolean.yaml	refused	yes	refused: `empty` over a declared boolean
+empty-on-boolean	none (call steps only)	none	orchy run bad/empty-on-boolean.yaml	refused	yes	refused: `empty` over a declared boolean
+empty-over-a-number	none (call steps only)	none	orchy run bad/empty-over-a-number.yaml	refused	yes	refused: `empty` over a declared number
+empty-over-a-number	none (call steps only)	none	orchy run bad/empty-over-a-number.yaml	refused	yes	refused: `empty` over a declared number
+empty-over-a-number	none (call steps only)	none	orchy run bad/empty-over-a-number.yaml	refused	yes	refused: `empty` over a declared number
+lt-a-string	none (call steps only)	none	orchy run bad/lt-a-string.yaml	refused	yes	refused: lt reads a number, not "seven"
+lt-a-string	none (call steps only)	none	orchy run bad/lt-a-string.yaml	refused	yes	refused: lt reads a number, not "seven"
+lt-a-string	none (call steps only)	none	orchy run bad/lt-a-string.yaml	refused	yes	refused: lt reads a number, not "seven"
+lt-over-a-string	none (call steps only)	none	orchy run bad/lt-over-a-string.yaml	refused	yes	refused: lt over a declared string
+lt-over-a-string	none (call steps only)	none	orchy run bad/lt-over-a-string.yaml	refused	yes	refused: lt over a declared string
+lt-over-a-string	none (call steps only)	none	orchy run bad/lt-over-a-string.yaml	refused	yes	refused: lt over a declared string
+key-not-returned	none (call steps only)	none	orchy run bad/key-not-returned.yaml	refused	yes	refused: the key is not in the contract of the step it reads
+key-not-returned	none (call steps only)	none	orchy run bad/key-not-returned.yaml	refused	yes	refused: the key is not in the contract of the step it reads
+key-not-returned	none (call steps only)	none	orchy run bad/key-not-returned.yaml	refused	yes	refused: the key is not in the contract of the step it reads
+dotted-path	none (call steps only)	none	orchy run bad/dotted-path.yaml	refused	yes	refused: "severity.inner", which "sort" does not return
+dotted-path	none (call steps only)	none	orchy run bad/dotted-path.yaml	refused	yes	refused: "severity.inner", which "sort" does not return
+dotted-path	none (call steps only)	none	orchy run bad/dotted-path.yaml	refused	yes	refused: "severity.inner", which "sort" does not return
+operator-over-mixed-type	none (call steps only)	none	orchy run bad/operator-over-mixed-type.yaml	refused	yes	refused, but the message reads "mixed holds a string,number"
+operator-over-mixed-type	none (call steps only)	none	orchy run bad/operator-over-mixed-type.yaml	refused	yes	refused, but the message reads "mixed holds a string,number"
+operator-over-mixed-type	none (call steps only)	none	orchy run bad/operator-over-mixed-type.yaml	refused	yes	refused, but the message reads "mixed holds a string,number"
+not-a-need	none (call steps only)	none	orchy run bad/not-a-need.yaml	refused	yes	refused: the condition names a step the step does not need
+not-a-need	none (call steps only)	none	orchy run bad/not-a-need.yaml	refused	yes	refused: the condition names a step the step does not need
+not-a-need	none (call steps only)	none	orchy run bad/not-a-need.yaml	refused	yes	refused: the condition names a step the step does not need
+empty-condition	none (call steps only)	none	orchy run bad/empty-condition.yaml	refused	yes	refused: an empty condition always runs
+empty-condition	none (call steps only)	none	orchy run bad/empty-condition.yaml	refused	yes	refused: an empty condition always runs
+empty-condition	none (call steps only)	none	orchy run bad/empty-condition.yaml	refused	yes	refused: an empty condition always runs
+cond-ruled-out	none (call steps only)	none	orchy resume b39241e0-e53d-46f2-8909-82a6169e7a4d --from page	done	yes	a resume from a skipped step re-read the condition and skipped it again
+cond-on-flow-step	none (call steps only)	none	orchy run cond-on-flow-step.yaml --with '{"severity":"low"}'	done	no	4th run, same result: sub/work ran with the condition false
+cond-scalar-value	none (call steps only)	none	orchy run cond-scalar-value.yaml --with '{"severity":"high"}'	done	no	4th run, same result: page skipped though sort said "high"
