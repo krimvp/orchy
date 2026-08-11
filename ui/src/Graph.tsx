@@ -1,7 +1,15 @@
-import type { CSSProperties } from "react";
+import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { type Cycle, type Step, computedOf, membersOf } from "./api";
+import { ArrowIcon, KindIcon, LoopIcon } from "./icons";
 
 export type Mark = "done" | "failed" | "skipped" | "running" | "waiting" | "idle";
+
+/** An edge of the drawing, named by what it is in the flow. */
+export interface Edge {
+  kind: "need" | "cycle";
+  from: string;
+  to: string;
+}
 
 const W = 184;
 const H = 58;
@@ -142,17 +150,52 @@ function crossings(points: Point[], bars: Array<{ key: string; x: number; top: n
   return found;
 }
 
+/** What a person drags: a new edge, from a step, not yet dropped. */
+interface Pull {
+  kind: "need" | "cycle";
+  from: string;
+  start: Point;
+  at: Point;
+}
+
 export function Graph({
   steps,
   marks = {},
   selected,
   onSelect,
+  editable = false,
+  picked,
+  onConnect,
+  onCycle,
+  onPickEdge,
 }: {
   steps: Step[];
   marks?: Record<string, Mark>;
   selected?: string;
   onSelect?: (id: string) => void;
+  /** Draws the ports and takes the drags. A run draws still. */
+  editable?: boolean;
+  /** The edge a person picked, drawn as chosen. */
+  picked?: Edge;
+  onConnect?: (from: string, to: string) => void;
+  onCycle?: (from: string, to: string) => void;
+  onPickEdge?: (edge: Edge) => void;
 }) {
+  const held = useRef<SVGSVGElement>(null);
+  const [pull, setPull] = useState<Pull>();
+  const [over, setOver] = useState<string>();
+
+  // A drag that leaves the drawing ends nowhere, so the wire goes.
+  useEffect(() => {
+    if (!pull) return;
+    const drop = () => {
+      setPull(undefined);
+      setOver(undefined);
+    };
+    addEventListener("mouseup", drop);
+    return () => removeEventListener("mouseup", drop);
+  }, [pull]);
+
   if (steps.length === 0) return <p className="empty">This flow has no steps yet.</p>;
 
   const base = place(steps);
@@ -352,8 +395,17 @@ export function Graph({
   // Every edge is built before any is drawn, so each one knows where it crosses
   // another and can step over it.
   const wires = [
-    ...forward.map((edge) => ({ key: edge.key, cycle: false, points: wireOf(edge), label: undefined })),
-    ...loops.map((edge) => ({ key: edge.key, cycle: true, ...loopOf(edge) })),
+    ...forward.map((edge) => ({
+      key: edge.key,
+      edge: { kind: "need", from: edge.from.step.id, to: edge.to.step.id } as Edge,
+      points: wireOf(edge),
+      label: undefined as { x: number; y: number; text: string } | undefined,
+    })),
+    ...loops.map((edge) => ({
+      key: edge.key,
+      edge: { kind: "cycle", from: edge.from.step.id, to: edge.to.step.id } as Edge,
+      ...loopOf(edge),
+    })),
   ];
   const bars = wires.flatMap((one) =>
     runs(one.points)
@@ -366,8 +418,52 @@ export function Graph({
       })),
   );
 
+  const same = (a: Edge, b?: Edge) => b && a.kind === b.kind && a.from === b.from && a.to === b.to;
+
+  /** The point of the cursor, in the space the drawing uses. */
+  const spot = (event: React.MouseEvent): Point => {
+    const box = held.current?.getBoundingClientRect();
+    return box ? [event.clientX - box.left, event.clientY - box.top] : [0, 0];
+  };
+
+  const begin = (kind: "need" | "cycle", node: Placed) => (event: React.MouseEvent) => {
+    if (!editable) return;
+    event.stopPropagation();
+    event.preventDefault();
+    const start: Point =
+      kind === "need" ? [node.x + W, node.y + H / 2] : [node.x + W / 2, node.y + H];
+    setPull({ kind, from: node.step.id, start, at: spot(event) });
+  };
+
+  const drop = (target: string) => () => {
+    if (!pull) return;
+    if (pull.kind === "need" && target !== pull.from) {
+      const holder = steps.find((one) => one.id === target);
+      if (holder && !holder.needs.includes(pull.from)) onConnect?.(pull.from, target);
+    }
+    if (pull.kind === "cycle") onCycle?.(pull.from, target);
+    setPull(undefined);
+    setOver(undefined);
+  };
+
+  /** A drop that makes sense, so the drawing lights only what a drag can reach. */
+  const takes = (target: string): boolean => {
+    if (!pull) return false;
+    if (pull.kind === "cycle") return true;
+    if (target === pull.from) return false;
+    const holder = steps.find((one) => one.id === target);
+    return Boolean(holder && !holder.needs.includes(pull.from));
+  };
+
   return (
-    <svg className="graph" viewBox={`0 0 ${width} ${height}`} width={width} height={height}>
+    <svg
+      ref={held}
+      className={`graph ${editable ? "editable" : ""} ${pull ? "pulling" : ""}`}
+      viewBox={`0 0 ${width} ${height}`}
+      width={width}
+      height={height}
+      onMouseMove={pull ? (event) => setPull({ ...pull, at: spot(event) }) : undefined}
+    >
       <defs>
         <marker id="tip" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto">
           <path d="M 0 0 L 8 4 L 0 8 z" className="tip" />
@@ -381,11 +477,26 @@ export function Graph({
       {wires.map((one) => (
         <g key={one.key}>
           <path
-            className={one.cycle ? "edge cycle" : "edge"}
+            className={[
+              "edge",
+              one.edge.kind === "cycle" ? "cycle" : "",
+              same(one.edge, picked) ? "picked" : "",
+            ].join(" ")}
             pathLength={1}
             d={orthogonal(one.points, crossings(one.points, bars, one.key))}
-            markerEnd={one.cycle ? "url(#tip-cycle)" : "url(#tip)"}
+            markerEnd={one.edge.kind === "cycle" ? "url(#tip-cycle)" : "url(#tip)"}
           />
+          {/* A wide and unseen twin of the line, so a click needs no aim. */}
+          {editable && onPickEdge && (
+            <path
+              className="edge hit"
+              d={orthogonal(one.points)}
+              onClick={(event) => {
+                event.stopPropagation();
+                onPickEdge(one.edge);
+              }}
+            />
+          )}
           {one.label && (
             <text className="limit" x={one.label.x} y={one.label.y}>
               {one.label.text}
@@ -394,13 +505,30 @@ export function Graph({
         </g>
       ))}
 
+      {/* The wire on the way, from the port it left to the cursor. */}
+      {pull && (
+        <path
+          className={`wire-preview ${pull.kind === "cycle" ? "cycle" : ""}`}
+          d={`M ${pull.start[0]} ${pull.start[1]} L ${pull.at[0]} ${pull.at[1]}`}
+        />
+      )}
+
       {nodes.map((node, index) => (
         <g
           key={node.step.id}
-          className={`node ${marks[node.step.id] ?? "idle"} ${selected === node.step.id ? "chosen" : ""}`}
+          className={[
+            "node",
+            marks[node.step.id] ?? "idle",
+            selected === node.step.id ? "chosen" : "",
+            pull && over === node.step.id && takes(node.step.id) ? "target" : "",
+            pull && !takes(node.step.id) ? "deaf" : "",
+          ].join(" ")}
           style={{ "--i": index } as CSSProperties}
           transform={`translate(${node.x} ${node.y})`}
           onClick={() => onSelect?.(node.step.id)}
+          onMouseUp={drop(node.step.id)}
+          onMouseEnter={pull ? () => setOver(node.step.id) : undefined}
+          onMouseLeave={pull ? () => setOver(undefined) : undefined}
         >
           <g className="lift">
             {/* A fanout is one step in the file and many in the run, so it stands as a stack. */}
@@ -410,12 +538,31 @@ export function Graph({
               <rect className="halo" x="-4" y="-4" width={W + 8} height={H + 8} rx="16" />
             )}
             <title>{node.step.id}</title>
-            <text className="name" x="15" y="25">
-              {short(node.step.id)}
+            <KindIcon kind={node.step.kind} className="node-icon" x={13} y={21} size={16} />
+            <text className="name" x="36" y="25">
+              {short(node.step.id, 20)}
             </text>
-            <text className="kind" x="15" y="43">
+            <text className="kind" x="36" y="43">
               {label(node.step)}
             </text>
+            {/* The ports: the right one starts a link, the lower one starts a loop. */}
+            {editable && (
+              <>
+                {/* A port a person can hit: the ring shows, the wide twin takes the press. */}
+                <g className="port-hold out" onMouseDown={begin("need", node)}>
+                  <circle className="port-hit" cx={W} cy={H / 2} r="14" />
+                  <circle className="port" cx={W} cy={H / 2} r="7.5" />
+                  <ArrowIcon className="port-glyph" x={W - 5} y={H / 2 - 5} size={10} weight={2.4} />
+                  <title>Drag to a step that should wait for this one</title>
+                </g>
+                <g className="port-hold loop" onMouseDown={begin("cycle", node)}>
+                  <circle className="port-hit" cx={W / 2} cy={H} r="14" />
+                  <circle className="port" cx={W / 2} cy={H} r="7.5" />
+                  <LoopIcon className="port-glyph" x={W / 2 - 5} y={H - 5} size={10} weight={2.4} />
+                  <title>Drag to the step this one should send the run back to — or to itself, to retry</title>
+                </g>
+              </>
+            )}
           </g>
         </g>
       ))}

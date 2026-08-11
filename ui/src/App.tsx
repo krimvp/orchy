@@ -23,7 +23,6 @@ export function App() {
 
   return (
     <>
-      <div className="aurora" />
       <nav>
         <a className="brand" href="#/">
           Orchy

@@ -14,7 +14,8 @@ import {
   operatorOf,
   useLoad,
 } from "./api";
-import { Graph } from "./Graph";
+import { type Edge, Graph } from "./Graph";
+import { FileIcon, KindIcon, LoopIcon } from "./icons";
 import { Contract } from "./Run";
 import { Loading } from "./Runs";
 
@@ -56,6 +57,11 @@ export function Editor({ id }: { id: number }) {
   const loaded = useLoad(() => api.flow(id), [id]);
   const [flow, setFlow] = useState<Flow>();
   const [chosen, setChosen] = useState<string>();
+  const [picked, setPicked] = useState<Edge>();
+  /** The step whose loop stands open in the drawer on the right. */
+  const [loopOf, setLoopOf] = useState<string>();
+  /** The file that stands open in the drawer on the right. */
+  const [fileOf, setFileOf] = useState<{ path: string; label: string }>();
   const [problems, setProblems] = useState<string[]>([]);
   const [note, setNote] = useState<string>();
   const [fault, setFault] = useState<string>();
@@ -85,6 +91,7 @@ export function Editor({ id }: { id: number }) {
 
   const editable = loaded.value.editable;
   const step = flow.steps.find((one) => one.id === chosen);
+  const loopStep = flow.steps.find((one) => one.id === loopOf);
 
   const change = (stepId: string, patch: Partial<Step>) =>
     setFlow({
@@ -94,6 +101,7 @@ export function Editor({ id }: { id: number }) {
 
   const rename = (from: string, to: string) => {
     setChosen(to);
+    if (loopOf === from) setLoopOf(to);
     setFlow({
       ...flow,
       steps: flow.steps.map((one) => ({
@@ -104,26 +112,92 @@ export function Editor({ id }: { id: number }) {
     });
   };
 
-  const add = () => {
-    const name = free(flow, "step");
-    setFlow({
-      ...flow,
-      steps: [
-        ...flow.steps,
-        { id: name, kind: "agent", needs: [], prompt: "prompts/step.md", tools: ["read"], returns: OBJECT },
-      ],
-    });
+  const add = (kind: Step["kind"]) => {
+    const name = free(flow, kind);
+    const seed = { id: name, kind, needs: [] } as unknown as Step;
+    setFlow({ ...flow, steps: [...flow.steps, clean({ ...seed, ...retype(seed, kind) })] });
     setChosen(name);
   };
 
   const remove = (stepId: string) => {
     setChosen(undefined);
+    setPicked(undefined);
+    if (loopOf === stepId) setLoopOf(undefined);
     setFlow({
       ...flow,
       steps: flow.steps
         .filter((one) => one.id !== stepId)
         .map((one) => ({ ...one, needs: one.needs.filter((need) => need !== stepId) })),
     });
+  };
+
+  /** The drag drew an arrow from one step to another, so the later one waits. */
+  const connect = (from: string, to: string) => {
+    const holder = flow.steps.find((one) => one.id === to);
+    if (holder && !holder.needs.includes(from)) change(to, { needs: [...holder.needs, from] });
+  };
+
+  /** The drag drew a loop, and the drawer opens on it, ready to shape. */
+  const loop = (from: string, to: string) => {
+    const holder = flow.steps.find((one) => one.id === from);
+    change(
+      from,
+      from === to
+        ? { cycle: { to: from, when: "failed", limit: 2, policy: "escalate" } }
+        : {
+            cycle: {
+              to,
+              when: holder ? guess(holder) : {},
+              limit: 3,
+              policy: holder?.kind === "gate" ? "accept" : "escalate",
+            },
+          },
+    );
+    setChosen(from);
+    setPicked(undefined);
+    setFileOf(undefined);
+    setLoopOf(from);
+  };
+
+  /** Opens the loop of a step on the right, and gives it one to open when it has none. */
+  const openLoop = (id: string) => {
+    const holder = flow.steps.find((one) => one.id === id);
+    if (!holder) return;
+    if (!holder.cycle) {
+      // A loop goes back, so it aims at the nearest step before this one. A
+      // step with nothing before it retries itself instead.
+      const backs = before(flow, id);
+      const to = backs[backs.length - 1];
+      const gate = holder.kind === "gate";
+      change(id, {
+        cycle: to
+          ? { to, when: guess(holder), limit: 3, policy: gate ? "accept" : "escalate" }
+          : { to: id, when: "failed", limit: 2, policy: "escalate" },
+      });
+    }
+    setChosen(id);
+    setPicked(undefined);
+    setFileOf(undefined);
+    setLoopOf(id);
+  };
+
+  /** Opens a file the flow names. The path in the file is relative to the flow. */
+  const openFile = (relativePath: string | undefined, label: string) => {
+    if (!relativePath || !loaded.value) return;
+    setLoopOf(undefined);
+    setPicked(undefined);
+    setFileOf({ path: besides(loaded.value.row.path, relativePath), label });
+  };
+
+  const unlink = (edge: Edge) => {
+    if (edge.kind === "need") {
+      const holder = flow.steps.find((one) => one.id === edge.to);
+      if (holder) change(edge.to, { needs: holder.needs.filter((need) => need !== edge.from) });
+    } else {
+      change(edge.from, { cycle: undefined });
+      if (loopOf === edge.from) setLoopOf(undefined);
+    }
+    setPicked(undefined);
   };
 
   // The flow says what it takes, so the page asks for those values and no others.
@@ -150,14 +224,34 @@ export function Editor({ id }: { id: number }) {
         {loaded.value.row.path}
       </p>
 
-      <div className="bar-actions" style={{ "--i": 2 } as CSSProperties}>
+      {/* The toolbox: what the flow does, and what a person adds to it. */}
+      <div className="bar-actions toolbox" style={{ "--i": 2 } as CSSProperties}>
         <button className="go" disabled={!editable || problems.length > 0} onClick={() => void save()}>
           Save
         </button>
         <button onClick={() => (flow.takes ? setStarting(true) : void start())}>Run</button>
-        <button className="quiet" onClick={add}>
-          Add a step
-        </button>
+        {editable && (
+          <>
+            <span className="rule" />
+            <span className="dim small">Add</span>
+            {KINDS.map((kind) => (
+              <button key={kind} className="tool" title={`Add a ${kind} step`} onClick={() => add(kind)}>
+                <KindIcon kind={kind} />
+                {kind}
+              </button>
+            ))}
+            <span className="rule" />
+            <button
+              className="tool"
+              disabled={!step}
+              title={step ? `Draw a loop on ${step.id}` : "Choose a step in the drawing first"}
+              onClick={() => step && openLoop(step.id)}
+            >
+              <LoopIcon />
+              loop
+            </button>
+          </>
+        )}
         <span style={{ marginLeft: "auto" }}>
           {problems.length === 0 ? (
             <span className="pill done">valid</span>
@@ -192,7 +286,38 @@ export function Editor({ id }: { id: number }) {
       )}
 
       <div className="canvas" style={{ "--i": 3 } as CSSProperties}>
-        <Graph steps={flow.steps} selected={chosen} onSelect={setChosen} />
+        <Graph
+          steps={flow.steps}
+          selected={chosen}
+          onSelect={(one) => {
+            setChosen(one);
+            setPicked(undefined);
+          }}
+          editable={editable}
+          picked={picked ?? held(flow, loopOf)}
+          onConnect={connect}
+          onCycle={loop}
+          onPickEdge={(edge) => (edge.kind === "cycle" ? openLoop(edge.from) : setPicked(edge))}
+        />
+        {picked && (
+          <div className="edge-bar">
+            <span>
+              <b>{picked.to}</b> waits for <b>{picked.from}</b>.
+            </span>
+            <button className="danger" onClick={() => unlink(picked)}>
+              Remove this link
+            </button>
+            <button className="quiet" onClick={() => setPicked(undefined)}>
+              Close
+            </button>
+          </div>
+        )}
+        {editable && !picked && (
+          <p className="hint small">
+            Drag a step's right dot onto another to link them, and the lower dot to draw a loop — onto itself, to
+            retry. Click a loop to open it, and a link to cut it.
+          </p>
+        )}
       </div>
 
       <div className="split">
@@ -294,7 +419,7 @@ export function Editor({ id }: { id: number }) {
           {!step && (
             <div className="panel">
               <p className="empty" style={{ margin: 0 }}>
-                Choose a step in the drawing, or add one.
+                Choose a step in the drawing, or add one above it.
               </p>
             </div>
           )}
@@ -309,12 +434,67 @@ export function Editor({ id }: { id: number }) {
               onChange={(patch) => change(step.id, patch)}
               onRename={(to) => rename(step.id, to)}
               onRemove={() => remove(step.id)}
+              onLoop={() => openLoop(step.id)}
+              onOpenFile={openFile}
             />
           )}
         </div>
       </div>
+
+      {loopStep?.cycle && (
+        <LoopDrawer
+          flow={flow}
+          step={loopStep}
+          operators={health.value?.operators ?? []}
+          onChange={(patch) => change(loopStep.id, patch)}
+          onRemove={() => {
+            change(loopStep.id, { cycle: undefined });
+            setLoopOf(undefined);
+          }}
+          onClose={() => setLoopOf(undefined)}
+        />
+      )}
+
+      {fileOf && <FileDrawer path={fileOf.path} label={fileOf.label} onClose={() => setFileOf(undefined)} />}
     </section>
   );
+}
+
+/** The path of a file a flow names, which is relative to the flow file. */
+function besides(flowPath: string, relativePath: string): string {
+  return flowPath.replace(/[^/\\]+$/, "") + relativePath.replace(/^\.\//, "");
+}
+
+/** The loop that stands open in the drawer, as the edge the drawing marks. */
+function held(flow: Flow, loopOf?: string): Edge | undefined {
+  const step = flow.steps.find((one) => one.id === loopOf);
+  return step?.cycle ? { kind: "cycle", from: step.id, to: step.cycle.to } : undefined;
+}
+
+/** The steps before this one: everything it waits for, however far back. */
+function before(flow: Flow, id: string): string[] {
+  const seen = new Set<string>();
+  const walk = (one: string) => {
+    for (const need of flow.steps.find((step) => step.id === one)?.needs ?? []) {
+      if (!seen.has(need)) {
+        seen.add(need);
+        walk(need);
+      }
+    }
+  };
+  walk(id);
+  return flow.steps.filter((one) => seen.has(one.id)).map((one) => one.id);
+}
+
+/**
+ * The condition a new loop most often wants: the first yes-or-no field of the
+ * contract, false. A reviewer approves or it does not, so this guess lands
+ * more often than an empty match that always fires.
+ */
+function guess(step: Step): Cycle["when"] {
+  const properties = step.returns?.properties as Record<string, Schema> | undefined;
+  const key = properties && Object.entries(properties).find(([, field]) => field.type === "boolean")?.[0];
+  return key ? { [key]: false } : {};
 }
 
 function StepFields({
@@ -326,6 +506,8 @@ function StepFields({
   onChange,
   onRename,
   onRemove,
+  onLoop,
+  onOpenFile,
 }: {
   flow: Flow;
   step: Step;
@@ -335,6 +517,8 @@ function StepFields({
   onChange: (patch: Partial<Step>) => void;
   onRename: (to: string) => void;
   onRemove: () => void;
+  onLoop: () => void;
+  onOpenFile: (relativePath: string | undefined, label: string) => void;
 }) {
   const others = flow.steps.filter((one) => one.id !== step.id);
   return (
@@ -354,7 +538,7 @@ function StepFields({
       </div>
 
       <div className="field">
-        <span>Needs</span>
+        <span>Runs after</span>
         <div className="ticks">
           {others.length === 0 && <em className="empty">no other step</em>}
           {others.map((one) => (
@@ -376,10 +560,15 @@ function StepFields({
 
       {step.kind === "agent" && (
         <>
-          <label className="field">
+          <div className="field">
             <span>Prompt</span>
-            <input value={step.prompt ?? ""} onChange={(e) => onChange({ prompt: e.target.value })} />
-          </label>
+            <div className="with-open">
+              <input value={step.prompt ?? ""} onChange={(e) => onChange({ prompt: e.target.value })} />
+              <button className="quiet" title="Open the prompt" onClick={() => onOpenFile(step.prompt, "prompt")}>
+                <FileIcon />
+              </button>
+            </div>
+          </div>
           <label className="field">
             <span>Harness</span>
             <select value={step.harness ?? ""} onChange={(e) => onChange({ harness: e.target.value || undefined })}>
@@ -422,10 +611,15 @@ function StepFields({
       )}
 
       {step.kind === "call" && (
-        <label className="field">
+        <div className="field">
           <span>Module</span>
-          <input value={step.module ?? ""} onChange={(e) => onChange({ module: e.target.value })} />
-        </label>
+          <div className="with-open">
+            <input value={step.module ?? ""} onChange={(e) => onChange({ module: e.target.value })} />
+            <button className="quiet" title="Open the module" onClick={() => onOpenFile(step.module, "module")}>
+              <FileIcon />
+            </button>
+          </div>
+        </div>
       )}
 
       {step.kind === "gate" && (
@@ -436,10 +630,15 @@ function StepFields({
       )}
 
       {step.kind === "flow" && (
-        <label className="field">
+        <div className="field">
           <span>Flow file</span>
-          <input value={step.flow ?? ""} onChange={(e) => onChange({ flow: e.target.value })} />
-        </label>
+          <div className="with-open">
+            <input value={step.flow ?? ""} onChange={(e) => onChange({ flow: e.target.value })} />
+            <button className="quiet" title="Open the inner flow" onClick={() => onOpenFile(step.flow, "inner flow")}>
+              <FileIcon />
+            </button>
+          </div>
+        </div>
       )}
 
       {(step.kind === "agent" || step.kind === "call") && (
@@ -458,10 +657,11 @@ function StepFields({
       )}
 
       {step.kind !== "flow" && (
-        <div className="field set">
-          <span>Returns, as JSON Schema</span>
-          <Json value={step.returns ?? OBJECT} onChange={(value) => onChange({ returns: value as Schema })} rows={9} />
-        </div>
+        <SchemaFields
+          title="Returns a value under this contract"
+          schema={step.returns}
+          onChange={(returns) => onChange({ returns })}
+        />
       )}
 
       {step.kind !== "flow" && step.needs.length > 0 && (
@@ -480,10 +680,28 @@ function StepFields({
         </div>
       )}
 
-      {/* A gate cycles as well, because a person sends the run back. */}
-      {step.kind !== "flow" && <CycleFields step={step} flow={flow} operators={operators} onChange={onChange} />}
+      {/* The loop reads as its sentence here, and the drawer on the right shapes it. */}
+      <div className="field set">
+        <span>Loop</span>
+        {step.cycle ? (
+          <>
+            <p className="sentence">{tale(step, step.cycle)}</p>
+            <div className="row" style={{ margin: "10px 0 0" }}>
+              <button className="quiet" onClick={onLoop}>
+                Edit the loop
+              </button>
+            </div>
+          </>
+        ) : (
+          <button className="quiet" onClick={onLoop}>
+            Add a loop
+          </button>
+        )}
+      </div>
 
-      {(step.kind === "agent" || step.kind === "call") && <FanoutFields step={step} onChange={onChange} />}
+      {(step.kind === "agent" || step.kind === "call") && (
+        <FanoutFields step={step} onChange={onChange} onOpenFile={onOpenFile} />
+      )}
 
       <button className="danger" onClick={onRemove} style={{ marginTop: 18 }}>
         Delete this step
@@ -540,9 +758,49 @@ function ChangesFields({
   );
 }
 
+/** What one field of a contract can be, in the words a person would use. */
+type FieldKind = "text" | "number" | "boolean" | "list" | "custom";
+
+const SHAPES: Record<Exclude<FieldKind, "custom">, Schema> = {
+  text: { type: "string" },
+  number: { type: "number" },
+  boolean: { type: "boolean" },
+  list: { type: "array", items: { type: "string" } },
+};
+
+const KIND_WORDS: Array<{ value: FieldKind; label: string }> = [
+  { value: "text", label: "text" },
+  { value: "number", label: "a number" },
+  { value: "boolean", label: "yes or no" },
+  { value: "list", label: "a list of text" },
+];
+
+function fieldKind(field: Schema): FieldKind {
+  for (const [kind, shape] of Object.entries(SHAPES)) {
+    if (JSON.stringify(field) === JSON.stringify(shape)) return kind as FieldKind;
+  }
+  if (JSON.stringify(field) === JSON.stringify({ type: "integer" })) return "number";
+  return "custom";
+}
+
 /**
- * A contract is JSON Schema, so the editor writes the schema itself. A builder
- * for a schema is a second language beside the one that a file already holds.
+ * The rows of a plain object schema, or nothing when the schema holds a shape
+ * the rows cannot say. The rows never drop what they cannot draw: a field with
+ * an enum or a nested object stays as it is, and only JSON edits it.
+ */
+function plainRows(schema: Schema): { fields: Array<[string, Schema]>; required: string[] } | undefined {
+  if (schema.type !== "object") return undefined;
+  if (!Object.keys(schema).every((key) => ["type", "required", "properties"].includes(key))) return undefined;
+  const properties = schema.properties ?? {};
+  const required = schema.required ?? [];
+  if (typeof properties !== "object" || Array.isArray(properties) || !Array.isArray(required)) return undefined;
+  return { fields: Object.entries(properties as Record<string, Schema>), required: required as string[] };
+}
+
+/**
+ * A contract as a list of fields: a name, what it is, and whether it must come
+ * back. This is the whole schema for most contracts, and JSON stays one click
+ * away for the rest.
  */
 function SchemaFields({
   title,
@@ -553,6 +811,16 @@ function SchemaFields({
   schema?: Schema;
   onChange: (schema?: Schema) => void;
 }) {
+  const [asJson, setAsJson] = useState(false);
+  const rows = schema && plainRows(schema);
+
+  const write = (fields: Array<[string, Schema]>, required: string[]) =>
+    onChange({
+      type: "object",
+      required: required.filter((key) => fields.some(([name]) => name === key)),
+      properties: Object.fromEntries(fields),
+    });
+
   return (
     <div className="field set">
       <label className="tick">
@@ -563,108 +831,314 @@ function SchemaFields({
         />
         <span>{title}</span>
       </label>
-      {schema && (
+      {schema && (!rows || asJson) && (
         <div style={{ marginTop: 14 }}>
           <Json value={schema} onChange={(value) => onChange(value as Schema)} rows={7} />
+          {rows ? (
+            <button className="quiet" onClick={() => setAsJson(false)}>
+              Draw the fields
+            </button>
+          ) : (
+            <span className="note small">
+              This contract holds a shape the rows cannot say, so the editor keeps it as JSON Schema.
+            </span>
+          )}
+        </div>
+      )}
+      {schema && rows && !asJson && (
+        <div style={{ marginTop: 14 }}>
+          {rows.fields.map(([name, field], index) => {
+            const kind = fieldKind(field);
+            const at = (nextName: string, nextField: Schema) =>
+              write(
+                rows.fields.map((one, place) => (place === index ? [nextName, nextField] : one)),
+                rows.required.map((key) => (key === name ? nextName : key)),
+              );
+            return (
+              <div key={index} className="member">
+                <input
+                  placeholder="name"
+                  value={name}
+                  onChange={(e) => at(e.target.value, field)}
+                />
+                {kind === "custom" ? (
+                  <span className="mono small held" title={JSON.stringify(field)}>
+                    as written
+                  </span>
+                ) : (
+                  <select
+                    value={kind}
+                    onChange={(e) => at(name, SHAPES[e.target.value as Exclude<FieldKind, "custom">])}
+                  >
+                    {KIND_WORDS.map((one) => (
+                      <option key={one.value} value={one.value}>
+                        {one.label}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <label className="tick" title="The value must hold this field">
+                  <input
+                    type="checkbox"
+                    checked={rows.required.includes(name)}
+                    onChange={(e) =>
+                      write(
+                        rows.fields,
+                        e.target.checked ? [...rows.required, name] : rows.required.filter((key) => key !== name),
+                      )
+                    }
+                  />
+                  <span>needed</span>
+                </label>
+                <button
+                  className="quiet"
+                  onClick={() =>
+                    write(
+                      rows.fields.filter((_one, place) => place !== index),
+                      rows.required,
+                    )
+                  }
+                >
+                  Remove
+                </button>
+              </div>
+            );
+          })}
+          <button
+            className="quiet"
+            onClick={() => write([...rows.fields, [freeKey(rows.fields), { type: "string" }]], rows.required)}
+          >
+            Add a field
+          </button>
+          <button className="quiet" onClick={() => setAsJson(true)}>
+            Write it as JSON
+          </button>
         </div>
       )}
     </div>
   );
 }
 
-function CycleFields({
-  step,
+/**
+ * The loop of a step, in a drawer on the right. The sentence stands first and
+ * says what the loop will do; the fields below it write the sentence. The
+ * drawer opens from a loop in the drawing, from a drag that draws one, and
+ * from the step panel.
+ */
+function LoopDrawer({
   flow,
+  step,
   operators,
   onChange,
+  onRemove,
+  onClose,
 }: {
-  step: Step;
   flow: Flow;
+  step: Step;
   operators: Operator[];
   onChange: (patch: Partial<Step>) => void;
+  onRemove: () => void;
+  onClose: () => void;
 }) {
-  const others = flow.steps.filter((one) => one.id !== step.id);
+  // A loop goes back, so the choice is the steps before this one — and the
+  // step itself, which reads as a retry. A target outside that set still
+  // shows, so the drawer never hides what the file says.
+  const backs = before(flow, step.id);
   const cycle = step.cycle;
+  const gate = step.kind === "gate";
+
+  useEffect(() => {
+    const key = (event: KeyboardEvent) => event.key === "Escape" && onClose();
+    addEventListener("keydown", key);
+    return () => removeEventListener("keydown", key);
+  }, [onClose]);
+
+  if (!cycle) return null;
+  const targets = [...backs, ...(backs.includes(cycle.to) || cycle.to === step.id ? [] : [cycle.to])];
+
   return (
-    <div className="field set">
-      <label className="tick">
-        <input
-          type="checkbox"
-          checked={Boolean(cycle)}
-          onChange={(e) =>
-            onChange({
-              cycle: e.target.checked ? { to: others[0]?.id ?? "", when: {}, limit: 3, policy: "escalate" } : undefined,
-            })
-          }
-        />
-        <span>Goes back to an earlier step</span>
-      </label>
-      {cycle && (
-        <div style={{ marginTop: 14 }}>
-          <div className="field">
-            <span>Goes back</span>
-            <Segmented
-              value={cycle.when === "failed" ? "failed" : "value"}
-              options={[
-                { value: "value", label: "when the value holds" },
-                { value: "failed", label: "when the step fails" },
-              ]}
-              onChange={(kind) =>
-                onChange({
-                  cycle:
-                    kind === "failed"
-                      ? { ...cycle, when: "failed", to: step.id }
-                      : { ...cycle, when: {}, to: others[0]?.id ?? "" },
-                })
-              }
-            />
-          </div>
-          {cycle.when !== "failed" && (
-            <label className="field">
-              <span>Back to</span>
-              <select value={cycle.to} onChange={(e) => onChange({ cycle: { ...cycle, to: e.target.value } })}>
-                {others.map((one) => (
-                  <option key={one.id}>{one.id}</option>
-                ))}
-              </select>
-            </label>
-          )}
-          <label className="field">
-            <span>Limit</span>
-            <input
-              type="number"
-              min={1}
-              value={cycle.limit}
-              onChange={(e) => onChange({ cycle: { ...cycle, limit: Number(e.target.value) } })}
-            />
-          </label>
-          <div className="field">
-            <span>At the limit</span>
-            <Segmented
-              value={cycle.policy}
-              options={[
-                { value: "escalate" as Cycle["policy"], label: "ask a person" },
-                { value: "accept" as Cycle["policy"], label: "accept it" },
-              ]}
-              onChange={(policy) => onChange({ cycle: { ...cycle, policy } })}
-            />
-          </div>
-          {cycle.when !== "failed" && (
-            <div className="field" style={{ marginBottom: 0 }}>
-              <span>When the value of this step holds</span>
-              {/* A cycle reads the value of the step it sits on. See ADR 0016. */}
-              <MatchFields
-                match={cycle.when}
-                keys={keysOf(step)}
-                operators={operators}
-                onChange={(when) => onChange({ cycle: { ...cycle, when } })}
-              />
-            </div>
+    <aside className="drawer">
+      <header>
+        <h3>The loop of {step.id}</h3>
+        <button className="quiet" onClick={onClose}>
+          Close
+        </button>
+      </header>
+
+      <p className="sentence">{tale(step, cycle)}</p>
+
+      {/* A gate cannot fail, so its loop reads the answer and nothing else. */}
+      {!gate && (
+        <div className="field">
+          <span>The loop fires</span>
+          <Segmented
+            value={cycle.when === "failed" ? "failed" : "value"}
+            options={[
+              { value: "value", label: "when the answer matches" },
+              { value: "failed", label: "when this step fails" },
+            ]}
+            onChange={(kind) =>
+              onChange({
+                cycle:
+                  kind === "failed"
+                    ? { ...cycle, when: "failed", to: step.id, policy: "escalate" }
+                    : { ...cycle, when: guess(step), to: backs[backs.length - 1] ?? step.id },
+              })
+            }
+          />
+          {cycle.when === "failed" && (
+            <span className="note small">
+              A step that fails retries itself and hears its own error, so it does not repeat the mistake.
+            </span>
           )}
         </div>
       )}
-    </div>
+      {cycle.when !== "failed" && (
+        <>
+          <label className="field">
+            <span>The run goes back to</span>
+            <select value={cycle.to} onChange={(e) => onChange({ cycle: { ...cycle, to: e.target.value } })}>
+              {targets.map((one) => (
+                <option key={one}>{one}</option>
+              ))}
+              <option value={step.id}>{step.id} — itself, a retry</option>
+            </select>
+          </label>
+          <div className="field">
+            <span>When the answer of this step matches</span>
+            {/* A cycle reads the value of the step it sits on. See ADR 0016. */}
+            <MatchFields
+              match={cycle.when}
+              keys={keysOf(step)}
+              operators={operators}
+              onChange={(when) => onChange({ cycle: { ...cycle, when } })}
+            />
+          </div>
+        </>
+      )}
+      <label className="field">
+        <span>At most, before the run settles it</span>
+        <input
+          type="number"
+          min={1}
+          value={cycle.limit}
+          onChange={(e) => onChange({ cycle: { ...cycle, limit: Number(e.target.value) } })}
+        />
+      </label>
+      <div className="field">
+        <span>At the limit</span>
+        <Segmented
+          value={cycle.policy}
+          options={
+            gate
+              ? // A gate refuses escalate: an escalation asks a person for a
+                // value that a person just gave.
+                [{ value: "accept" as Cycle["policy"], label: "the run accepts the answer" }]
+              : cycle.when === "failed"
+                ? [
+                    { value: "escalate" as Cycle["policy"], label: "a person takes over" },
+                    // A failure carries no value, so there is nothing to accept.
+                    { value: "accept" as Cycle["policy"], label: "the run fails" },
+                  ]
+                : [
+                    { value: "escalate" as Cycle["policy"], label: "a person takes over" },
+                    { value: "accept" as Cycle["policy"], label: "the run accepts the answer" },
+                  ]
+          }
+          onChange={(policy) => onChange({ cycle: { ...cycle, policy } })}
+        />
+      </div>
+
+      <div className="row" style={{ marginBottom: 0 }}>
+        <button className="danger" onClick={onRemove}>
+          Remove the loop
+        </button>
+      </div>
+    </aside>
   );
+}
+
+/**
+ * A file the flow names, open on the right. The person reads it, writes it,
+ * and saves it, without leaving the flow. A path with no file yet is a file
+ * this drawer creates, so a new step gets its prompt in the same motion.
+ */
+function FileDrawer({ path, label, onClose }: { path: string; label: string; onClose: () => void }) {
+  const loaded = useLoad(() => api.file(path), [path]);
+  const [text, setText] = useState<string>();
+  const [note, setNote] = useState<string>();
+  const [fault, setFault] = useState<string>();
+
+  useEffect(() => {
+    if (loaded.value) setText(loaded.value.content);
+  }, [loaded.value]);
+
+  useEffect(() => {
+    const key = (event: KeyboardEvent) => event.key === "Escape" && onClose();
+    addEventListener("keydown", key);
+    return () => removeEventListener("keydown", key);
+  }, [onClose]);
+
+  const save = () =>
+    api
+      .writeFile(path, text ?? "")
+      .then(() => (setFault(undefined), setNote("Saved to the file.")))
+      .catch((problem: Error) => (setNote(undefined), setFault(problem.message)));
+
+  return (
+    <aside className="drawer file">
+      <header>
+        <h3>The {label}</h3>
+        <button className="quiet" onClick={onClose}>
+          Close
+        </button>
+      </header>
+      <p className="note mono small" style={{ margin: "0 0 12px" }}>
+        {path}
+      </p>
+      {loaded.error && <p className="bad">{loaded.error}</p>}
+      {loaded.value && !loaded.value.exists && (
+        <p className="note small" style={{ margin: "0 0 10px" }}>
+          There is no file here yet. Save writes it, with the directories on the way.
+        </p>
+      )}
+      {!loaded.value && !loaded.error && <div className="skeleton" />}
+      {text !== undefined && (
+        <>
+          <textarea
+            className="file-text"
+            value={text}
+            spellCheck={false}
+            onChange={(e) => {
+              setText(e.target.value);
+              setNote(undefined);
+            }}
+          />
+          <div className="row" style={{ marginBottom: 0 }}>
+            <button className="go" onClick={() => void save()}>
+              Save the file
+            </button>
+            {note && <span className="good small">{note}</span>}
+            {fault && <span className="bad small">{fault}</span>}
+          </div>
+        </>
+      )}
+    </aside>
+  );
+}
+
+/** The loop, read back as the one sentence it will act out. */
+function tale(step: Step, cycle: Cycle): string {
+  const times = (count: number) => `${count} ${count === 1 ? "time" : "times"}`;
+  if (cycle.when === "failed") {
+    const end = cycle.policy === "escalate" ? "a person is asked for the value" : "the run fails";
+    return `When ${step.id} fails, it tries again and hears its error, at most ${times(cycle.limit)}. If it still fails, ${end}.`;
+  }
+  const to = cycle.to === step.id ? "runs again" : `goes back to ${cycle.to}`;
+  const match = Object.keys(cycle.when).length === 0 ? "always" : `matches ${JSON.stringify(cycle.when)}`;
+  const end =
+    cycle.policy === "escalate" ? "a person is asked for the value" : "the run accepts the answer and moves on";
+  return `When the answer of ${step.id} ${match === "always" ? "arrives" : match}, the run ${to}, at most ${times(cycle.limit)}. At the limit, ${end}.`;
 }
 
 /**
@@ -760,7 +1234,12 @@ function MatchFields({
 }) {
   const [asJson, setAsJson] = useState(false);
   const held = record(match);
-  const rows = held && Object.entries(held).map(([key, value]) => ({ key, held: operatorOf(value, operators) }));
+  const rows =
+    held &&
+    Object.entries(held).map(([key, value]) => ({
+      key,
+      held: operatorOf(value, operators) ?? plainIs(value, operators),
+    }));
   const drawn = Boolean(rows?.every((row) => row.held && fits(row.held[0], row.held[1])));
 
   // The daemon names the operators, so a page that waits for it draws no row.
@@ -888,6 +1367,16 @@ function JsonLine({ value, onChange }: { value: unknown; onChange: (value: unkno
   );
 }
 
+/**
+ * A bare value in a match tests equality, so the row draws it as `is`. The
+ * row that edits it writes the operator out, which says the same thing.
+ */
+function plainIs(wanted: unknown, operators: Operator[]): [Operator, unknown] | undefined {
+  if (typeof wanted === "object" && wanted !== null) return undefined;
+  const is = operators.find((one) => one.name === "is");
+  return is && [is, wanted];
+}
+
 /** The keys a step declares, or nothing when it declares none and any key holds. */
 function keysOf(step?: Step): string[] | undefined {
   const properties = step?.returns?.properties as Record<string, unknown> | undefined;
@@ -912,7 +1401,15 @@ function takes(operator: Operator, argument: unknown): unknown {
   return argument ?? "";
 }
 
-function FanoutFields({ step, onChange }: { step: Step; onChange: (patch: Partial<Step>) => void }) {
+function FanoutFields({
+  step,
+  onChange,
+  onOpenFile,
+}: {
+  step: Step;
+  onChange: (patch: Partial<Step>) => void;
+  onOpenFile: (relativePath: string | undefined, label: string) => void;
+}) {
   const members = membersOf(step);
   const computed = computedOf(step);
   const set = (index: number, patch: Partial<Member>) =>
@@ -970,6 +1467,20 @@ function FanoutFields({ step, onChange }: { step: Step; onChange: (patch: Partia
                 value={member.with ? JSON.stringify(member.with) : ""}
                 onChange={(e) => set(index, { with: read(e.target.value) })}
               />
+              {/* A member that names its own file opens it. The rest read the step's. */}
+              {(step.kind === "call" ? member.module : member.prompt) && (
+                <button
+                  className="quiet"
+                  title={`Open ${step.kind === "call" ? member.module : member.prompt}`}
+                  onClick={() =>
+                    step.kind === "call"
+                      ? onOpenFile(member.module, `module of ${member.name}`)
+                      : onOpenFile(member.prompt, `prompt of ${member.name}`)
+                  }
+                >
+                  <FileIcon />
+                </button>
+              )}
               <button
                 className="quiet"
                 onClick={() => onChange({ fanout: members.filter((_one, at) => at !== index) })}
@@ -1113,6 +1624,14 @@ function free(flow: Flow, stem: string): string {
   let name = stem;
   let count = 1;
   while (flow.steps.some((one) => one.id === name)) name = `${stem}-${++count}`;
+  return name;
+}
+
+/** A name that no field of the contract holds yet. */
+function freeKey(fields: Array<[string, Schema]>): string {
+  let name = "field";
+  let count = 1;
+  while (fields.some(([one]) => one === name)) name = `field-${++count}`;
   return name;
 }
 

@@ -1,57 +1,53 @@
 /*
- * One system: a token for every colour, one accent, and two curves for motion.
- * A component names a token. No component names a colour.
+ * One system: a token for every colour, one accent, quick motion that only
+ * ever says state. A component names a token. No component names a colour.
+ *
+ * The register is a tool: the surface is quiet, elevation is declared once
+ * (a hairline, not a shadow), and the accent goes to actions, selection, and
+ * state. Nothing on this page decorates.
  */
 :root {
-  --bg: #f2f2f4;
-  --bg-tint-a: rgba(10, 132, 255, 0.1);
-  --bg-tint-b: rgba(48, 209, 88, 0.08);
-  --surface: rgba(255, 255, 255, 0.72);
-  --surface-solid: #ffffff;
-  --raised: rgba(0, 0, 0, 0.035);
-  --hairline: rgba(0, 0, 0, 0.09);
-  --text: #1d1d1f;
-  --text-2: rgba(29, 29, 31, 0.6);
-  --text-3: rgba(29, 29, 31, 0.38);
-  --accent: #0071e3;
-  --green: #2aa745;
-  --red: #e5342a;
-  --orange: #c77700;
-  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.05);
-  --shadow-2: 0 2px 6px rgba(0, 0, 0, 0.05), 0 12px 32px rgba(0, 0, 0, 0.07);
-  --shadow-3: 0 8px 20px rgba(0, 0, 0, 0.09), 0 24px 60px rgba(0, 0, 0, 0.1);
+  --bg: #f7f7f8;
+  /* The second neutral, for the bar and the toolbars, a step off the page. */
+  --bg-2: #eff0f2;
+  --surface: #ffffff;
+  --raised: rgba(18, 20, 23, 0.045);
+  --hairline: rgba(18, 20, 23, 0.11);
+  --text: #17181a;
+  --text-2: rgba(23, 24, 26, 0.62);
+  --text-3: rgba(23, 24, 26, 0.42);
+  --accent: #0a6bd8;
+  --green: #1e8e46;
+  --red: #d63a31;
+  --orange: #b26b00;
+  /* A shadow carries an offset and a soft blur, and only a layer that floats
+   * above the page wears one. A resting panel wears the hairline instead. */
+  --shadow: 0 2px 4px rgba(15, 17, 20, 0.05), 0 8px 24px rgba(15, 17, 20, 0.08);
 
-  --r-sm: 8px;
-  --r-md: 12px;
-  --r-lg: 18px;
-  --r-xl: 24px;
+  --r-sm: 6px;
+  --r-md: 9px;
+  --r-lg: 12px;
 
-  /* The first curve settles a move. The second one gives a press its bounce. */
-  --ease: cubic-bezier(0.32, 0.72, 0, 1);
-  --spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+  --ease: cubic-bezier(0.2, 0, 0, 1);
 
   color-scheme: light;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0a0b0d;
-    --bg-tint-a: rgba(10, 132, 255, 0.16);
-    --bg-tint-b: rgba(94, 92, 230, 0.14);
-    --surface: rgba(255, 255, 255, 0.05);
-    --surface-solid: #17191e;
-    --raised: rgba(255, 255, 255, 0.06);
-    --hairline: rgba(255, 255, 255, 0.1);
-    --text: #f3f4f6;
-    --text-2: rgba(243, 244, 246, 0.62);
-    --text-3: rgba(243, 244, 246, 0.36);
-    --accent: #0a84ff;
-    --green: #30d158;
-    --red: #ff453a;
-    --orange: #ff9f0a;
-    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3);
-    --shadow-2: 0 2px 8px rgba(0, 0, 0, 0.36), 0 14px 36px rgba(0, 0, 0, 0.4);
-    --shadow-3: 0 10px 30px rgba(0, 0, 0, 0.5), 0 30px 70px rgba(0, 0, 0, 0.5);
+    --bg: #131417;
+    --bg-2: #0d0e10;
+    --surface: #1a1c20;
+    --raised: rgba(255, 255, 255, 0.055);
+    --hairline: rgba(255, 255, 255, 0.11);
+    --text: #ecedef;
+    --text-2: rgba(236, 237, 239, 0.64);
+    --text-3: rgba(236, 237, 239, 0.4);
+    --accent: #5296f0;
+    --green: #43c268;
+    --red: #f26b5e;
+    --orange: #d99a2b;
+    --shadow: 0 2px 4px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
 
     color-scheme: dark;
   }
@@ -69,31 +65,22 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
-  font-size: 15px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
   line-height: 1.5;
   letter-spacing: -0.01em;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
 
-/* Two soft lights behind the page. They move slowly, and they never distract. */
-.aurora {
-  position: fixed;
-  inset: -30vh -20vw;
-  z-index: -1;
-  pointer-events: none;
-  background:
-    radial-gradient(38vw 38vw at 18% 12%, var(--bg-tint-a), transparent 60%),
-    radial-gradient(32vw 32vw at 88% 8%, var(--bg-tint-b), transparent 60%);
-  filter: blur(20px);
-  animation: drift 24s var(--ease) infinite alternate;
+/* The parts the browser draws still carry the palette. */
+::selection {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
 }
 
-@keyframes drift {
-  to {
-    transform: translate3d(-3%, 2%, 0) scale(1.08);
-  }
+input,
+textarea {
+  caret-color: var(--accent);
 }
 
 /* -- the bar -- */
@@ -106,15 +93,13 @@ nav {
   align-items: center;
   gap: 20px;
   padding: 10px 22px;
-  background: var(--surface);
-  backdrop-filter: saturate(180%) blur(24px);
-  -webkit-backdrop-filter: saturate(180%) blur(24px);
+  background: var(--bg-2);
   border-bottom: 1px solid var(--hairline);
 }
 
 nav .brand {
-  font-size: 17px;
-  font-weight: 600;
+  font-size: 15px;
+  font-weight: 650;
   letter-spacing: -0.02em;
   color: var(--text);
   text-decoration: none;
@@ -123,19 +108,19 @@ nav .brand {
 nav .tabs {
   display: flex;
   gap: 2px;
-  padding: 3px;
-  border-radius: 999px;
+  padding: 2px;
+  border-radius: var(--r-sm);
   background: var(--raised);
 }
 
 nav .tabs a {
-  padding: 5px 16px;
-  border-radius: 999px;
+  padding: 4px 14px;
+  border-radius: 5px;
   font-size: 13px;
   font-weight: 500;
   color: var(--text-2);
   text-decoration: none;
-  transition: color 0.25s var(--ease), background 0.25s var(--ease);
+  transition: color 0.15s var(--ease), background 0.15s var(--ease);
 }
 
 nav .tabs a:hover {
@@ -144,8 +129,8 @@ nav .tabs a:hover {
 
 nav .tabs a.here {
   color: var(--text);
-  background: var(--surface-solid);
-  box-shadow: var(--shadow-1);
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.07);
 }
 
 nav .root {
@@ -161,31 +146,17 @@ nav .root {
 main {
   max-width: 1180px;
   margin: 0 auto;
-  padding: 40px 22px 96px;
-  animation: enter 0.5s var(--ease) both;
-}
-
-@keyframes enter {
-  from {
-    opacity: 0;
-    transform: translate3d(0, 10px, 0);
-  }
-}
-
-/* Each child of a section arrives a moment after the one before it. */
-.stagger > * {
-  animation: enter 0.55s var(--ease) both;
-  animation-delay: calc(var(--i, 0) * 45ms);
+  padding: 32px 22px 96px;
 }
 
 /* -- words -- */
 
 h1 {
-  margin: 0 0 6px;
-  font-size: 32px;
+  margin: 0 0 4px;
+  font-size: 23px;
   font-weight: 650;
-  letter-spacing: -0.03em;
-  line-height: 1.15;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -193,19 +164,19 @@ h1 {
 }
 
 h2 {
-  margin: 34px 0 12px;
-  font-size: 13px;
+  margin: 30px 0 10px;
+  font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.07em;
+  letter-spacing: 0.06em;
   color: var(--text-3);
 }
 
 h3 {
-  margin: 0 0 12px;
-  font-size: 17px;
+  margin: 0 0 10px;
+  font-size: 15px;
   font-weight: 600;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.01em;
 }
 
 a {
@@ -260,10 +231,7 @@ ul.list li {
 .group {
   border-radius: var(--r-lg);
   background: var(--surface);
-  backdrop-filter: saturate(180%) blur(20px);
-  -webkit-backdrop-filter: saturate(180%) blur(20px);
   border: 1px solid var(--hairline);
-  box-shadow: var(--shadow-2);
   overflow: hidden;
 }
 
@@ -284,7 +252,7 @@ ul.list li {
 }
 
 .head {
-  height: 36px;
+  height: 34px;
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
@@ -294,11 +262,11 @@ ul.list li {
 }
 
 .line {
-  height: 58px;
+  height: 52px;
   border-bottom: 1px solid var(--hairline);
   color: var(--text);
   text-decoration: none;
-  transition: background 0.2s var(--ease);
+  transition: background 0.15s var(--ease);
 }
 
 .line:last-child {
@@ -312,7 +280,7 @@ ul.list li {
 
 .line .name {
   font-weight: 550;
-  letter-spacing: -0.015em;
+  letter-spacing: -0.01em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -328,19 +296,19 @@ ul.list li {
 
 .line .go {
   color: var(--text-3);
-  transition: transform 0.25s var(--spring), color 0.2s var(--ease);
+  transition: transform 0.15s var(--ease), color 0.15s var(--ease);
 }
 
 .line:hover .go {
   color: var(--text-2);
-  transform: translateX(3px);
+  transform: translateX(2px);
 }
 
 .flow-line {
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 14px 18px;
+  padding: 12px 18px;
   border-bottom: 1px solid var(--hairline);
 }
 
@@ -359,20 +327,19 @@ ul.list li {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 3px 11px 3px 9px;
+  padding: 2px 10px 2px 8px;
   border-radius: 999px;
   font-size: 12px;
   font-weight: 550;
   letter-spacing: -0.005em;
   background: var(--raised);
   color: var(--text-2);
-  transition: color 0.3s var(--ease), background 0.3s var(--ease);
 }
 
 .pill::before {
   content: "";
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: currentColor;
   flex: none;
@@ -380,26 +347,26 @@ ul.list li {
 
 .pill.done {
   color: var(--green);
-  background: color-mix(in srgb, var(--green) 14%, transparent);
+  background: color-mix(in srgb, var(--green) 12%, transparent);
 }
 .pill.failed {
   color: var(--red);
-  background: color-mix(in srgb, var(--red) 14%, transparent);
+  background: color-mix(in srgb, var(--red) 12%, transparent);
 }
 .pill.running {
   color: var(--orange);
-  background: color-mix(in srgb, var(--orange) 14%, transparent);
+  background: color-mix(in srgb, var(--orange) 12%, transparent);
 }
 .pill.waiting {
   color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 /* A step that never ran carries no colour of its own. */
 .pill.skipped {
   color: var(--text-3);
 }
 
-/* A run on the way says so without a word. */
+/* A run on the way says so without a word. This motion is state, not garnish. */
 .pill.running::before,
 .pill.waiting::before {
   animation: throb 1.6s var(--ease) infinite;
@@ -414,24 +381,32 @@ ul.list li {
 
 .big.pill {
   font-size: 13px;
-  padding: 5px 14px 5px 11px;
+  padding: 4px 12px 4px 10px;
 }
 
-/* -- the tiles that carry the numbers of a run -- */
+/* -- the numbers of a run, told as one quiet line and not as trophies -- */
 
 .tiles {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(124px, 1fr));
-  gap: 10px;
-  margin: 22px 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  margin: 18px 0;
+  padding: 10px 0;
+  border-top: 1px solid var(--hairline);
+  border-bottom: 1px solid var(--hairline);
 }
 
 .tile {
-  padding: 14px 16px;
-  border-radius: var(--r-md);
-  background: var(--surface);
-  border: 1px solid var(--hairline);
-  box-shadow: var(--shadow-1);
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 18px;
+  border-left: 1px solid var(--hairline);
+}
+
+.tile:first-child {
+  border-left: 0;
+  padding-left: 0;
 }
 
 .tile dt {
@@ -443,24 +418,21 @@ ul.list li {
 }
 
 .tile dd {
-  margin: 4px 0 0;
-  font-size: 20px;
+  margin: 0;
+  font-size: 14px;
   font-weight: 600;
-  letter-spacing: -0.03em;
+  letter-spacing: -0.01em;
   font-variant-numeric: tabular-nums;
 }
 
 /* -- the drawing of a flow -- */
 
 .canvas {
-  margin: 18px 0;
-  padding: 20px;
+  margin: 16px 0;
+  padding: 18px;
   border-radius: var(--r-lg);
   background: var(--surface);
-  backdrop-filter: saturate(180%) blur(20px);
-  -webkit-backdrop-filter: saturate(180%) blur(20px);
   border: 1px solid var(--hairline);
-  box-shadow: var(--shadow-2);
   overflow-x: auto;
 }
 
@@ -470,45 +442,35 @@ ul.list li {
 }
 
 .graph .box {
-  fill: var(--surface-solid);
+  fill: var(--bg);
   stroke: var(--hairline);
   stroke-width: 1;
-  transition: stroke 0.45s var(--ease), fill 0.45s var(--ease);
+  transition: stroke 0.2s var(--ease), fill 0.2s var(--ease);
 }
 
 .graph .box.behind {
-  fill: var(--bg);
-  opacity: 0.9;
+  fill: var(--raised);
 }
 
 .graph .node {
   cursor: pointer;
-  animation: pop 0.5s var(--spring) both;
-  animation-delay: calc(var(--i, 0) * 60ms);
 }
 
 .graph .node .lift {
-  transition: transform 0.3s var(--spring);
+  transition: transform 0.15s var(--ease);
   transform-box: fill-box;
   transform-origin: center;
 }
 
 .graph .node:hover .lift {
-  transform: translateY(-2px) scale(1.02);
-}
-
-@keyframes pop {
-  from {
-    opacity: 0;
-    transform: translateY(8px) scale(0.96);
-  }
+  transform: translateY(-1px);
 }
 
 .graph .name {
   fill: var(--text);
-  font-size: 13.5px;
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: -0.015em;
+  letter-spacing: -0.01em;
 }
 
 .graph .kind {
@@ -544,7 +506,7 @@ ul.list li {
   stroke-width: 2;
 }
 
-/* A ring that grows and fades, so a step that runs reads at a glance. */
+/* A ring that grows and fades: the one step that runs right now. */
 .graph .halo {
   fill: none;
   stroke: var(--orange);
@@ -569,29 +531,12 @@ ul.list li {
   fill: none;
   stroke: var(--text-3);
   stroke-width: 1.5;
-  stroke-dashoffset: 1;
-  stroke-dasharray: 1;
-  animation: draw 0.7s var(--ease) 0.15s forwards;
 }
 
-@keyframes draw {
-  to {
-    stroke-dashoffset: 0;
-  }
-}
-
-/* A cycle keeps moving, because it is the edge that sends the work back. */
+/* A loop is drawn in its own voice, and it holds still. */
 .graph .edge.cycle {
   stroke: var(--orange);
-  stroke-dasharray: 0.02 0.014;
-  stroke-dashoffset: 0;
-  animation: march 22s linear infinite;
-}
-
-@keyframes march {
-  to {
-    stroke-dashoffset: -1;
-  }
+  stroke-dasharray: 0.014 0.01;
 }
 
 .graph .tip {
@@ -605,7 +550,7 @@ ul.list li {
 /* The label sits on its own line, so it paints its background out first. */
 .graph .limit {
   fill: var(--orange);
-  stroke: var(--surface-solid);
+  stroke: var(--surface);
   stroke-width: 5;
   paint-order: stroke fill;
   font-size: 11px;
@@ -622,6 +567,12 @@ ul.list li {
   align-items: start;
 }
 
+/* A grid child grows past its column for the widest line it holds, unless it
+ * may shrink. Every value is JSON at times, so every column must shrink. */
+.split > div {
+  min-width: 0;
+}
+
 @media (max-width: 900px) {
   .split {
     grid-template-columns: 1fr;
@@ -629,20 +580,15 @@ ul.list li {
 }
 
 .panel {
-  padding: 20px;
+  padding: 18px;
   border-radius: var(--r-lg);
   background: var(--surface);
-  backdrop-filter: saturate(180%) blur(20px);
-  -webkit-backdrop-filter: saturate(180%) blur(20px);
   border: 1px solid var(--hairline);
-  box-shadow: var(--shadow-2);
-  animation: enter 0.45s var(--ease) both;
 }
 
 .panel.gate {
   margin: 22px 0;
-  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
-  box-shadow: var(--shadow-3), 0 0 0 4px color-mix(in srgb, var(--accent) 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
 .panel.gate h2 {
@@ -653,7 +599,7 @@ ul.list li {
 .panel dl {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 7px 18px;
+  gap: 6px 18px;
   margin: 0 0 14px;
 }
 
@@ -665,19 +611,27 @@ ul.list li {
 .panel dd {
   margin: 0;
   font-size: 13px;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 pre {
   margin: 10px 0;
-  padding: 13px 15px;
+  padding: 12px 14px;
   border-radius: var(--r-md);
   background: var(--raised);
   border: 1px solid var(--hairline);
   overflow: auto;
+  max-width: 100%;
   max-height: 340px;
   font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
   font-size: 12px;
   line-height: 1.55;
+  font-variant-numeric: tabular-nums;
+}
+
+pre.clamp {
+  max-height: 220px;
 }
 
 details summary {
@@ -738,20 +692,40 @@ label.tick > span {
   display: flex;
   gap: 7px;
   margin-bottom: 7px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.member > input,
+.member > select {
+  flex: 1;
+  min-width: 90px;
+  width: auto;
+}
+
+.member > label.tick,
+.member > button,
+.member > .held {
+  flex: none;
+}
+
+.member .held {
+  color: var(--text-3);
+  white-space: nowrap;
 }
 
 input,
 select,
 textarea {
   width: 100%;
-  padding: 8px 12px;
+  padding: 7px 11px;
   border: 1px solid var(--hairline);
   border-radius: var(--r-sm);
-  background: var(--surface-solid);
+  background: var(--surface);
   color: var(--text);
   font: inherit;
   letter-spacing: -0.01em;
-  transition: border-color 0.2s var(--ease), box-shadow 0.2s var(--ease);
+  transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
 }
 
 input:focus,
@@ -760,7 +734,7 @@ textarea:focus,
 button:focus-visible {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 3.5px color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 textarea {
@@ -797,21 +771,21 @@ select {
 }
 
 .segmented button {
-  padding: 5px 14px;
+  padding: 4px 12px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 5px;
   background: none;
   box-shadow: none;
   color: var(--text-2);
   font-size: 13px;
   font-weight: 500;
-  transition: background 0.25s var(--ease), color 0.25s var(--ease), box-shadow 0.25s var(--ease);
+  transition: background 0.15s var(--ease), color 0.15s var(--ease);
 }
 
 .segmented button.on {
-  background: var(--surface-solid);
+  background: var(--surface);
   color: var(--text);
-  box-shadow: var(--shadow-1);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.07);
 }
 
 /* -- buttons -- */
@@ -822,32 +796,31 @@ a.button {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 8px 16px;
+  padding: 7px 14px;
   border: 1px solid var(--hairline);
   border-radius: var(--r-sm);
-  background: var(--surface-solid);
+  background: var(--surface);
   color: var(--text);
   font: inherit;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
   letter-spacing: -0.01em;
   white-space: nowrap;
   cursor: pointer;
   text-decoration: none;
-  box-shadow: var(--shadow-1);
-  transition: transform 0.22s var(--spring), background 0.2s var(--ease), box-shadow 0.2s var(--ease),
-    opacity 0.2s var(--ease);
+  transition: background 0.15s var(--ease), border-color 0.15s var(--ease), opacity 0.15s var(--ease),
+    transform 0.1s var(--ease);
 }
 
 button:hover,
 a.button:hover {
-  box-shadow: var(--shadow-2);
+  background: var(--raised);
   text-decoration: none;
 }
 
 button:active,
 a.button:active {
-  transform: scale(0.96);
+  transform: scale(0.98);
 }
 
 button.go {
@@ -856,25 +829,30 @@ button.go {
   color: #fff;
 }
 
+button.go:hover {
+  background: color-mix(in srgb, var(--accent) 88%, #000);
+}
+
 button.danger {
   border-color: transparent;
-  background: color-mix(in srgb, var(--red) 14%, transparent);
+  background: color-mix(in srgb, var(--red) 12%, transparent);
   color: var(--red);
-  box-shadow: none;
+}
+
+button.danger:hover {
+  background: color-mix(in srgb, var(--red) 20%, transparent);
 }
 
 button.quiet {
-  padding: 5px 10px;
+  padding: 4px 10px;
   font-size: 13px;
   background: none;
   border-color: transparent;
-  box-shadow: none;
   color: var(--text-2);
 }
 
 button.quiet:hover {
   background: var(--raised);
-  box-shadow: none;
   color: var(--text);
 }
 
@@ -882,9 +860,13 @@ button.link {
   padding: 0;
   border: 0;
   background: none;
-  box-shadow: none;
   color: var(--accent);
   font-size: inherit;
+}
+
+button.link:hover {
+  background: none;
+  text-decoration: underline;
 }
 
 button:disabled {
@@ -901,9 +883,37 @@ button:disabled {
   margin: 14px 0;
 }
 
+/* The toolbox: a divider between what runs the flow and what builds it. */
+.toolbox .rule {
+  flex: none;
+  width: 1px;
+  height: 18px;
+  margin: 0 4px;
+  background: var(--hairline);
+}
+
+button.tool {
+  padding: 5px 10px;
+  gap: 7px;
+  font-size: 13px;
+  background: none;
+  border-color: transparent;
+  color: var(--text-2);
+}
+
+button.tool:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+
+button.tool svg {
+  flex: none;
+}
+
+/* The one layer that floats above the page, so the one that wears a shadow. */
 .bar-actions {
   position: sticky;
-  top: 62px;
+  top: 54px;
   z-index: 5;
   display: flex;
   gap: 9px;
@@ -912,11 +922,9 @@ button:disabled {
   margin: 16px 0;
   padding: 10px 14px;
   border-radius: var(--r-md);
-  background: var(--surface);
-  backdrop-filter: saturate(180%) blur(24px);
-  -webkit-backdrop-filter: saturate(180%) blur(24px);
+  background: var(--bg-2);
   border: 1px solid var(--hairline);
-  box-shadow: var(--shadow-1);
+  box-shadow: var(--shadow);
 }
 
 /* -- the log of events -- */
@@ -930,17 +938,15 @@ button:disabled {
   border-radius: var(--r-lg);
   background: var(--surface);
   border: 1px solid var(--hairline);
-  box-shadow: var(--shadow-2);
 }
 
 .log li {
   display: flex;
   gap: 12px;
   align-items: baseline;
-  padding: 9px 16px;
+  padding: 8px 16px;
   border-bottom: 1px solid var(--hairline);
   font-size: 13px;
-  animation: slide 0.4s var(--ease) both;
 }
 
 .log li:last-child {
@@ -954,31 +960,31 @@ button:disabled {
   flex: none;
 }
 
-@keyframes slide {
-  from {
-    opacity: 0;
-    transform: translate3d(-6px, 0, 0);
-  }
-}
-
 /* -- what a step says while it works -- */
 
 .output {
-  max-height: 340px;
+  max-height: 430px;
   overflow: auto;
   padding: 6px 0;
   border-radius: var(--r-lg);
   background: var(--surface);
   border: 1px solid var(--hairline);
-  box-shadow: var(--shadow-2);
   font-size: 13px;
 }
 
+/* A new line announces itself once, quickly. */
 .output .note {
   display: flex;
   gap: 12px;
   padding: 3px 16px;
-  animation: slide 0.35s var(--ease) both;
+  animation: slide 0.15s var(--ease) both;
+}
+
+@keyframes slide {
+  from {
+    opacity: 0;
+    transform: translate3d(-4px, 0, 0);
+  }
 }
 
 .output .step {
@@ -996,6 +1002,7 @@ button:disabled {
 .output .text {
   white-space: pre-wrap;
   word-break: break-word;
+  min-width: 0;
 }
 
 .output .reasoning .text {
@@ -1015,6 +1022,414 @@ button:disabled {
   font-size: 12px;
 }
 
+.activity time {
+  flex: none;
+  padding-top: 2px;
+  color: var(--text-3);
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.activity .note.event .text {
+  color: var(--text-2);
+}
+
+.activity .note.bad-turn .text {
+  color: var(--red);
+}
+
+.activity .note.turn .text {
+  color: var(--accent);
+}
+
+/* -- the hero, which says what happens now and what a person should do -- */
+
+.hero {
+  margin: 16px 0;
+  padding: 20px 22px;
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+}
+
+.hero h2 {
+  margin: 8px 0 4px;
+  font-size: 19px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  text-transform: none;
+  color: var(--text);
+}
+
+.hero .badge {
+  display: inline-flex;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  background: var(--raised);
+  color: var(--text-2);
+}
+
+.hero .ask {
+  margin: 4px 0 14px;
+  font-size: 14px;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+.hero.waiting {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.hero.waiting .badge {
+  background: var(--accent);
+  color: #fff;
+}
+
+.hero.running .badge {
+  background: color-mix(in srgb, var(--orange) 14%, transparent);
+  color: var(--orange);
+}
+
+.hero.done .badge {
+  background: color-mix(in srgb, var(--green) 14%, transparent);
+  color: var(--green);
+}
+
+.hero.failed {
+  border-color: color-mix(in srgb, var(--red) 45%, transparent);
+}
+
+.hero.failed .badge {
+  background: color-mix(in srgb, var(--red) 14%, transparent);
+  color: var(--red);
+}
+
+/* -- the progress strip: one cell for each step of the run -- */
+
+.progress {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 14px 0;
+}
+
+.progress .track {
+  display: flex;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.progress .seg {
+  flex: 1;
+  height: 9px;
+  min-width: 8px;
+  max-width: 46px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: var(--raised);
+  cursor: pointer;
+  transition: background 0.2s var(--ease), transform 0.15s var(--ease);
+}
+
+.progress .seg:hover {
+  transform: scaleY(1.3);
+}
+
+.progress .seg.done {
+  background: var(--green);
+}
+.progress .seg.failed {
+  background: var(--red);
+}
+.progress .seg.waiting {
+  background: var(--accent);
+  animation: throb 1.6s var(--ease) infinite;
+}
+.progress .seg.running {
+  background: var(--orange);
+  animation: throb 1.6s var(--ease) infinite;
+}
+.progress .seg.skipped {
+  background: var(--hairline);
+}
+
+.progress .seg.chosen {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.progress .tally {
+  flex: none;
+  color: var(--text-2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* -- the cards for a run that acts now, on the list of runs -- */
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 14px;
+  margin: 16px 0;
+}
+
+.card {
+  display: block;
+  padding: 16px 18px;
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  color: var(--text);
+  transition: background 0.15s var(--ease), border-color 0.15s var(--ease);
+}
+
+.card:hover {
+  text-decoration: none;
+  background: var(--raised);
+}
+
+.card .top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.card .name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.card .ask {
+  margin: 0 0 12px;
+  color: var(--text-2);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.card.needs-you {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+/* The card is the link, so the button inside it presses with the card. */
+.card .button {
+  pointer-events: none;
+}
+
+/* -- the ports and drags of the editable drawing -- */
+
+.graph.editable {
+  user-select: none;
+}
+
+.graph.editable .node {
+  cursor: grab;
+}
+
+/* The kind of a step, drawn beside its name. */
+.graph .node-icon {
+  color: var(--text-2);
+}
+
+.graph .node.skipped .node-icon {
+  color: var(--text-3);
+}
+
+.graph .port-hit {
+  fill: transparent;
+  cursor: crosshair;
+}
+
+/* A port shows itself when the hand comes near, and says what it starts. */
+.graph .port-hold {
+  opacity: 0;
+  cursor: crosshair;
+  transition: opacity 0.15s var(--ease);
+}
+
+.graph.editable .node:hover .port-hold,
+.graph.pulling .port-hold {
+  opacity: 1;
+}
+
+.graph .port {
+  fill: var(--surface);
+  stroke: var(--text-3);
+  stroke-width: 1.5;
+  transition: stroke 0.15s var(--ease);
+}
+
+.graph .port-glyph {
+  color: var(--text-2);
+  pointer-events: none;
+  transition: color 0.15s var(--ease);
+}
+
+.graph .port-hold.out:hover .port {
+  stroke: var(--accent);
+}
+
+.graph .port-hold.out:hover .port-glyph {
+  color: var(--accent);
+}
+
+.graph .port-hold.loop:hover .port {
+  stroke: var(--orange);
+}
+
+.graph .port-hold.loop:hover .port-glyph {
+  color: var(--orange);
+}
+
+.graph.pulling {
+  user-select: none;
+  cursor: crosshair;
+}
+
+.wire-preview {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-dasharray: 6 5;
+  pointer-events: none;
+}
+
+.wire-preview.cycle {
+  stroke: var(--orange);
+}
+
+/* The wide and unseen twin of a line, which takes the click. */
+.graph .edge.hit {
+  stroke: transparent;
+  stroke-width: 14;
+  stroke-dasharray: none;
+  cursor: pointer;
+  pointer-events: stroke;
+}
+
+.graph .edge.picked {
+  stroke: var(--accent);
+  stroke-width: 2.5;
+}
+
+.graph .node.target .box {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.graph .node.deaf {
+  opacity: 0.45;
+}
+
+.canvas .hint {
+  margin: 10px 0 0;
+  color: var(--text-3);
+}
+
+.edge-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline);
+  font-size: 13px;
+}
+
+/* -- the drawer on the right, where a loop takes its shape -- */
+
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  height: 100dvh;
+  width: min(420px, 92vw);
+  z-index: 20;
+  padding: 18px 20px 24px;
+  overflow-y: auto;
+  background: var(--surface);
+  border-left: 1px solid var(--hairline);
+  box-shadow: var(--shadow);
+  animation: drawer-in 0.2s var(--ease);
+}
+
+@keyframes drawer-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+}
+
+.drawer > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.drawer > header h3 {
+  margin: 0;
+}
+
+.drawer > .sentence {
+  margin: 0 0 18px;
+}
+
+/* The file drawer is wider, because a prompt is prose and a module is code. */
+.drawer.file {
+  width: min(580px, 94vw);
+  display: flex;
+  flex-direction: column;
+}
+
+.drawer.file .file-text {
+  flex: 1;
+  min-height: 300px;
+  margin-bottom: 12px;
+  resize: none;
+}
+
+/* A path input and the button that opens the file it names. */
+.with-open {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.with-open input {
+  flex: 1;
+}
+
+.with-open button {
+  flex: none;
+}
+
+/* -- the loop, read back as a sentence -- */
+
+.sentence {
+  margin: 10px 0 0;
+  padding: 10px 14px;
+  border-radius: var(--r-md);
+  background: var(--raised);
+  border-top: 1px solid color-mix(in srgb, var(--orange) 35%, transparent);
+  font-size: 13px;
+  color: var(--text-2);
+}
+
 /* -- the record of a run -- */
 
 .attempt {
@@ -1029,7 +1444,7 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 11px 2px;
+  padding: 10px 2px;
   cursor: pointer;
   list-style: none;
   color: var(--text);
@@ -1043,7 +1458,7 @@ button:disabled {
 .attempt > summary::before {
   content: "›";
   color: var(--text-3);
-  transition: transform 0.25s var(--ease);
+  transition: transform 0.15s var(--ease);
 }
 
 .attempt[open] > summary::before {
@@ -1066,6 +1481,7 @@ button:disabled {
 
 .turns {
   padding: 4px 0 16px 22px;
+  min-width: 0;
 }
 
 .turn {
@@ -1092,6 +1508,7 @@ button:disabled {
 .turn .said {
   min-width: 0;
   flex: 1;
+  overflow-wrap: anywhere;
 }
 
 .turn .what,
@@ -1110,11 +1527,26 @@ button:disabled {
   margin-bottom: 6px;
 }
 
+.turn .call .did {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.turn .call .gist {
+  color: var(--text-2);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .turn .call code {
   display: inline-block;
   padding: 1px 8px;
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
   color: var(--accent);
   font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
   font-size: 12px;
@@ -1128,6 +1560,80 @@ button:disabled {
 
 .turn .result {
   color: var(--text-2);
+}
+
+details.thinking > summary,
+.result-fold > summary,
+.turn .call details > summary {
+  cursor: pointer;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+details.thinking .thought {
+  margin: 6px 0;
+  font-size: 13px;
+  color: var(--text-3);
+  font-style: italic;
+  white-space: pre-wrap;
+}
+
+.result-fold {
+  margin: 5px 0;
+}
+
+.turns .answer {
+  display: flex;
+  gap: 12px;
+  margin-top: 6px;
+  padding: 10px 0 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.turns .answer .who {
+  flex: none;
+  width: 58px;
+  padding-top: 3px;
+  color: var(--green);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.prose {
+  min-width: 0;
+}
+
+.prose p {
+  margin: 0 0 6px;
+  font-size: 13px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.prose code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--raised);
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+/* -- small words -- */
+
+em.need {
+  color: var(--text-3);
+  font-style: normal;
+  font-weight: 400;
+}
+
+h4.part {
+  margin: 16px 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
 }
 
 /* -- what a page shows while it reads -- */

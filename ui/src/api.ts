@@ -267,6 +267,11 @@ export const api = {
     call<Ticket>(`/api/flows/${id}/runs`, { method: "POST", body: JSON.stringify({ with: values }) }),
   validate: (flow: Flow) =>
     call<{ problems: string[] }>("/api/validate", { method: "POST", body: JSON.stringify({ flow }) }),
+  /** A file a flow names: a prompt, a module, an inner flow. The daemon keeps it under its root. */
+  file: (path: string) =>
+    call<{ path: string; exists: boolean; content: string }>(`/api/file?path=${encodeURIComponent(path)}`),
+  writeFile: (path: string, content: string) =>
+    call<{ written: boolean; path: string }>("/api/file", { method: "PUT", body: JSON.stringify({ path, content }) }),
   runs: () => call<RunRow[]>("/api/runs"),
   run: (runId: string) => call<{ row: RunRow | null; state: RunState }>(`/api/runs/${runId}`),
   trajectory: (runId: string) => call<Atif>(`/api/runs/${runId}/trajectory`),

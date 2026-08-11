@@ -8,15 +8,27 @@ export function Run({ runId }: { runId: string }) {
   const { events: all } = useNotices(runId);
   const { value, error, again } = useLoad(() => api.run(runId), [runId]);
   const [chosen, setChosen] = useState<string>();
+  // Once a person picks a step, the page stops following the run for them.
+  const picked = useRef(false);
   const [fault, setFault] = useState<string>();
 
   // What the run did, and what its steps said while they did it.
   const events = all.filter((event) => event.type !== "output");
   const output = all.filter((event) => event.type === "output");
+  const live = liveSteps(events);
 
   useEffect(() => {
     again();
   }, [events.length, again]);
+
+  // The elapsed times move while the run does.
+  useTick(value?.state.status === "running");
+
+  // The page follows the run: the step that acts is the step that shows.
+  const follow = value ? followed(value.state, live) : undefined;
+  useEffect(() => {
+    if (!picked.current && follow) setChosen(follow);
+  }, [follow]);
 
   if (error) return <p className="bad">{error}</p>;
   if (!value) return <Loading lines={4} />;
@@ -25,7 +37,11 @@ export function Run({ runId }: { runId: string }) {
   const step = state.flow.steps.find((one) => one.id === chosen);
   const record = chosen ? state.steps[chosen] : undefined;
   const gate = state.waitingFor ? state.flow.steps.find((one) => one.id === state.waitingFor) : undefined;
-  const done = Object.values(state.steps).filter((one) => one.status === "done").length;
+  const marks = marksOf(state, events);
+  const pick = (id: string) => {
+    picked.current = true;
+    setChosen(id);
+  };
 
   return (
     <section className="stagger">
@@ -37,6 +53,22 @@ export function Run({ runId }: { runId: string }) {
         {runId}
       </p>
 
+      <Hero
+        state={state}
+        live={live}
+        gate={gate}
+        onOpen={pick}
+        onAnswer={(answer) =>
+          api
+            .resume(runId, answer)
+            .then(() => (setFault(undefined), again()))
+            .catch((problem: Error) => setFault(problem.message))
+        }
+      />
+      {fault && <p className="bad">{fault}</p>}
+
+      <Progress steps={state.flow.steps} marks={marks} chosen={chosen} onPick={pick} />
+
       <dl className="tiles" style={{ "--i": 2 } as CSSProperties}>
         <div className="tile">
           <dt>Started</dt>
@@ -44,12 +76,18 @@ export function Run({ runId }: { runId: string }) {
         </div>
         <div className="tile">
           <dt>Took</dt>
-          <dd>{row?.endedAt ? length(new Date(row.endedAt).getTime() - new Date(row.startedAt).getTime()) : "—"}</dd>
+          <dd>
+            {row?.endedAt
+              ? length(new Date(row.endedAt).getTime() - new Date(row.startedAt).getTime())
+              : row && state.status === "running"
+                ? length(Date.now() - new Date(row.startedAt).getTime())
+                : "—"}
+          </dd>
         </div>
         <div className="tile">
           <dt>Steps done</dt>
           <dd>
-            {done}
+            {Object.values(state.steps).filter((one) => one.status === "done").length}
             <span style={{ color: "var(--text-3)" }}>/{state.flow.steps.length}</span>
           </dd>
         </div>
@@ -68,9 +106,6 @@ export function Run({ runId }: { runId: string }) {
           <dd>{row?.tokens ? row.tokens.toLocaleString() : "—"}</dd>
         </div>
       </dl>
-
-      {/* A fault of the run, and not of one step, such as a budget it reached. */}
-      {state.error && <p className="bad">{state.error}</p>}
 
       {state.with && (
         <details>
@@ -91,29 +126,8 @@ export function Run({ runId }: { runId: string }) {
       </div>
 
       <div className="canvas" style={{ "--i": 4 } as CSSProperties}>
-        <Graph steps={state.flow.steps} marks={marksOf(state, events)} selected={chosen} onSelect={setChosen} />
+        <Graph steps={state.flow.steps} marks={marks} selected={chosen} onSelect={pick} />
       </div>
-
-      {gate && (
-        <Answer
-          question={state.question ?? ""}
-          schema={(gate as Step).returns ?? {}}
-          onSend={(answer) =>
-            api
-              .resume(runId, answer)
-              .then(() => (setFault(undefined), again()))
-              .catch((problem: Error) => setFault(problem.message))
-          }
-        />
-      )}
-      {fault && <p className="bad">{fault}</p>}
-
-      {output.length > 0 && (
-        <>
-          <h2>What the steps say</h2>
-          <Output notes={output} live={state.status === "running"} />
-        </>
-      )}
 
       <div className="split">
         <div>
@@ -136,23 +150,17 @@ export function Run({ runId }: { runId: string }) {
           )}
         </div>
         <div>
-          <h2>Events</h2>
-          <ul className="log">
-            {events.map((event, index) => (
-              <li key={index}>
-                <time>{new Date(event.at).toLocaleTimeString()}</time>
-                <span>{say(event)}</span>
-              </li>
-            ))}
-            {events.length === 0 && <li className="empty">No event yet.</li>}
-          </ul>
+          <h2>Activity</h2>
+          <Activity events={events} output={output} live={state.status === "running"} />
         </div>
       </div>
 
       <h2>Trajectory</h2>
       {/* Orchy writes the trajectory wherever the run stops, so there is none to ask for yet. */}
       {state.status === "running" ? (
-        <p className="empty">Orchy writes the trajectory wherever the run stops.</p>
+        <p className="empty">
+          Orchy writes the trajectory wherever the run stops. Until then, Activity shows the work as it lands.
+        </p>
       ) : (
         <Trajectory runId={runId} at={events.length} />
       )}
@@ -161,27 +169,201 @@ export function Run({ runId }: { runId: string }) {
 }
 
 /**
- * What a step says while it works. The daemon keeps this in memory only, so an
- * older run shows its trajectory instead.
+ * The one panel that says what happens now and what a person should do about
+ * it. Every state of a run answers both questions, so no one reads a log to
+ * learn whether to wait.
  */
-function Output({ notes, live }: { notes: RunEvent[]; live: boolean }) {
+function Hero({
+  state,
+  live,
+  gate,
+  onAnswer,
+  onOpen,
+}: {
+  state: RunState;
+  live: Array<{ id: string; since: string }>;
+  gate?: Step;
+  onAnswer: (value: unknown) => void;
+  onOpen: (id: string) => void;
+}) {
+  if (state.status === "waiting" && gate) {
+    return (
+      <div className="hero waiting" style={{ "--i": 1 } as CSSProperties}>
+        <span className="badge">Your turn</span>
+        <h2>This run waits for you</h2>
+        <p className="ask">{state.question ?? gate.question}</p>
+        <Contract schema={gate.returns ?? {}} label="Answer and continue" onSend={onAnswer} />
+      </div>
+    );
+  }
+
+  if (state.status === "running") {
+    return (
+      <div className="hero running" style={{ "--i": 1 } as CSSProperties}>
+        <span className="badge">Working</span>
+        <h2>Orchy is working — nothing for you to do</h2>
+        <p>
+          {live.length === 0
+            ? "The next wave of steps is about to start."
+            : live.map((one, index) => (
+                <span key={one.id}>
+                  {index > 0 && ", "}
+                  <button className="link" onClick={() => onOpen(one.id)}>
+                    {one.id}
+                  </button>{" "}
+                  <span className="dim">({length(Date.now() - new Date(one.since).getTime())})</span>
+                </span>
+              ))}
+          {live.length === 1 && " is on the way."}
+          {live.length > 1 && " are on the way."}
+        </p>
+      </div>
+    );
+  }
+
+  if (state.status === "failed") {
+    const [id, record] = broken(state) ?? [];
+    return (
+      <div className="hero failed" style={{ "--i": 1 } as CSSProperties}>
+        <span className="badge">Failed</span>
+        <h2>This run failed</h2>
+        {state.error && <p className="ask">{state.error}</p>}
+        {id && record && (
+          <>
+            <p>
+              The step <b>{id}</b> failed.{" "}
+              <button className="link" onClick={() => onOpen(id)}>
+                Open it
+              </button>{" "}
+              to read the whole error.
+            </p>
+            {record.error && <pre className="bad clamp">{record.error}</pre>}
+          </>
+        )}
+      </div>
+    );
+  }
+
+  if (state.status === "done") {
+    const value = returned(state);
+    return (
+      <div className="hero done" style={{ "--i": 1 } as CSSProperties}>
+        <span className="badge">Done</span>
+        <h2>This run is done</h2>
+        {value === undefined ? (
+          <p>Every step passed. Choose one in the drawing to read what it answered.</p>
+        ) : (
+          <>
+            <p>It returned this value:</p>
+            <pre className="clamp">{JSON.stringify(value, null, 2)}</pre>
+          </>
+        )}
+      </div>
+    );
+  }
+
+  // A state the page does not know, such as killed, still says what holds.
+  return (
+    <div className="hero" style={{ "--i": 1 } as CSSProperties}>
+      <span className="badge">{state.status}</span>
+      <h2>This run is {state.status}</h2>
+      {state.error && <p className="ask">{state.error}</p>}
+    </div>
+  );
+}
+
+/**
+ * One cell for each step, in the order the drawing holds them. The strip says
+ * how far the run is at a glance, and each cell opens its step.
+ */
+function Progress({
+  steps,
+  marks,
+  chosen,
+  onPick,
+}: {
+  steps: Step[];
+  marks: Record<string, Mark>;
+  chosen?: string;
+  onPick: (id: string) => void;
+}) {
+  const count = (mark: Mark) => steps.filter((one) => marks[one.id] === mark).length;
+  const parts = [
+    [count("done"), "done"],
+    [count("running"), "running"],
+    [count("waiting"), "waiting for a person"],
+    [count("failed"), "failed"],
+    [count("skipped"), "skipped"],
+    [count("idle"), "not started"],
+  ] as const;
+
+  return (
+    <div className="progress" style={{ "--i": 2 } as CSSProperties}>
+      <div className="track">
+        {steps.map((one) => (
+          <button
+            key={one.id}
+            className={`seg ${marks[one.id] ?? "idle"} ${chosen === one.id ? "chosen" : ""}`}
+            title={`${one.id} — ${marks[one.id] ?? "not started"}`}
+            onClick={() => onPick(one.id)}
+          />
+        ))}
+      </div>
+      <span className="tally">
+        {parts
+          .filter(([n]) => n > 0)
+          .map(([n, word]) => `${n} ${word}`)
+          .join(" · ")}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * Everything the run does, in the order it happens: the life of each step, and
+ * what the steps say while they work. One list, so a reader follows one thing.
+ */
+function Activity({ events, output, live }: { events: RunEvent[]; output: RunEvent[]; live: boolean }) {
   const foot = useRef<HTMLDivElement>(null);
+  const rows = [
+    ...events.map((event) => ({
+      at: event.at,
+      step: event.step ? String(event.step) : "",
+      kind: kindOf(event),
+      text: say(event),
+    })),
+    ...output.map((note) => ({
+      at: note.at,
+      step: String(note.step),
+      kind: String(note.kind),
+      text: String(note.text),
+    })),
+  ].sort((a, b) => a.at.localeCompare(b.at));
 
   useEffect(() => {
     if (live) foot.current?.scrollIntoView({ block: "nearest" });
-  }, [notes.length, live]);
+  }, [rows.length, live]);
 
   return (
-    <div className="output">
-      {notes.map((note, index) => (
-        <div key={index} className={`note ${String(note.kind)}`}>
-          <span className="step">{String(note.step)}</span>
-          <span className="text">{String(note.text)}</span>
+    <div className="output activity">
+      {rows.map((row, index) => (
+        <div key={index} className={`note ${row.kind}`}>
+          <time>{new Date(row.at).toLocaleTimeString()}</time>
+          <span className="step">{row.step}</span>
+          <span className="text">{row.text}</span>
         </div>
       ))}
+      {rows.length === 0 && <p className="empty" style={{ padding: "8px 16px" }}>Nothing yet.</p>}
       <div ref={foot} />
     </div>
   );
+}
+
+/** An event of the life of a step reads differently from a note it says. */
+function kindOf(event: RunEvent): string {
+  if (event.type === "step_end" && event.status === "failed") return "event bad-turn";
+  if (event.type === "waiting") return "event turn";
+  return "event";
 }
 
 function Detail({
@@ -218,6 +400,18 @@ function Detail({
             <dd>{step.tools?.join(", ") || "none"}</dd>
           </>
         )}
+        {step.prompt && (
+          <>
+            <dt>Prompt</dt>
+            <dd className="mono small">{step.prompt}</dd>
+          </>
+        )}
+        {step.module && (
+          <>
+            <dt>Module</dt>
+            <dd className="mono small">{step.module}</dd>
+          </>
+        )}
         {step.when && (
           <>
             <dt>Runs when</dt>
@@ -236,9 +430,9 @@ function Detail({
         )}
         {step.cycle && (
           <>
-            <dt>Cycle</dt>
+            <dt>Loop</dt>
             <dd>
-              {step.cycle.when === "failed" ? "retries" : `back to ${step.cycle.to}`}, {back ?? 0} of{" "}
+              {step.cycle.when === "failed" ? "retries itself" : `back to ${step.cycle.to}`}, {back ?? 0} of{" "}
               {step.cycle.limit} used
             </dd>
           </>
@@ -276,13 +470,23 @@ function Detail({
           </>
         )}
       </dl>
-      {record?.error && <pre className="bad">{record.error}</pre>}
-      {record && "value" in record && <pre>{JSON.stringify(record.value, null, 2)}</pre>}
+      {record?.error && (
+        <>
+          <h4 className="part">What went wrong</h4>
+          <pre className="bad">{record.error}</pre>
+        </>
+      )}
+      {record && "value" in record && (
+        <>
+          <h4 className="part">What it answered</h4>
+          <pre>{JSON.stringify(record.value, null, 2)}</pre>
+        </>
+      )}
       {!record && <p className="empty">This step has not ended yet.</p>}
       {history.length > 0 && (
         <details>
           <summary>
-            {history.length} attempt{history.length === 1 ? "" : "s"} that a cycle dropped
+            {history.length} attempt{history.length === 1 ? "" : "s"} that a loop dropped
           </summary>
           {history.map((one, index) => (
             <pre key={index} className="small">
@@ -291,24 +495,6 @@ function Detail({
           ))}
         </details>
       )}
-    </div>
-  );
-}
-
-function Answer({
-  question,
-  schema,
-  onSend,
-}: {
-  question: string;
-  schema: Schema;
-  onSend: (value: unknown) => void;
-}) {
-  return (
-    <div className="panel gate">
-      <h2>This run waits for a person</h2>
-      <h3 style={{ marginBottom: 18 }}>{question}</h3>
-      <Contract schema={schema} label="Answer and continue" onSend={onSend} />
     </div>
   );
 }
@@ -327,6 +513,7 @@ export function Contract({
   onSend: (value: unknown) => void;
 }) {
   const properties = (schema.properties ?? {}) as Record<string, Schema>;
+  const required = (schema.required ?? []) as string[];
   const [value, setValue] = useState<Record<string, unknown>>(() => blank(properties));
   const [raw, setRaw] = useState(false);
   const [text, setText] = useState(() => JSON.stringify(blank(properties), null, 2));
@@ -341,7 +528,10 @@ export function Contract({
             {field.type === "boolean" && (
               <input type="checkbox" checked={Boolean(value[key])} onChange={(e) => set(key, e.target.checked)} />
             )}
-            <span>{key}</span>
+            <span>
+              {key}
+              {required.includes(key) && <em className="need"> · needed</em>}
+            </span>
             {(field.type === "number" || field.type === "integer") && (
               <input type="number" value={String(value[key] ?? 0)} onChange={(e) => set(key, Number(e.target.value))} />
             )}
@@ -412,8 +602,53 @@ function marksOf(state: RunState, events: RunEvent[]): Record<string, Mark> {
   return marks;
 }
 
+/** The steps that started and have not ended, with the moment each one began. */
+function liveSteps(events: RunEvent[]): Array<{ id: string; since: string }> {
+  const live = new Map<string, string>();
+  for (const event of events) {
+    if (event.type === "step_start") live.set(String(event.step), event.at);
+    if (event.type === "step_end" || event.type === "skip") live.delete(String(event.step));
+  }
+  return [...live].map(([id, since]) => ({ id, since }));
+}
+
+/** The step the page shows while no one has chosen: the one that acts now. */
+function followed(state: RunState, live: Array<{ id: string }>): string | undefined {
+  if (state.waitingFor) return state.waitingFor;
+  const fault = broken(state);
+  if (state.status === "failed" && fault) return fault[0];
+  return live[live.length - 1]?.id;
+}
+
+/** The step whose failure the run carries, when one does. */
+function broken(state: RunState): [string, StepRecord] | undefined {
+  return Object.entries(state.steps).find(([, record]) => record.status === "failed");
+}
+
+/**
+ * The value the run returns: the value of the step it ends with. More ends
+ * than one mean the flow returns nothing, and the reader picks a step instead.
+ */
+function returned(state: RunState): unknown {
+  const needed = new Set(state.flow.steps.flatMap((one) => one.needs));
+  const ends = state.flow.steps.filter((one) => !needed.has(one.id));
+  const end = ends.length === 1 ? ends[0] : undefined;
+  const record = end && state.steps[end.id];
+  return record?.status === "done" ? record.value : undefined;
+}
+
 function attempts(state: RunState, id: string): StepRecord[] {
   return (state.history ?? []).filter((one) => one.step === id).map((one) => one.record);
+}
+
+/** A ticker for a page that shows elapsed time, so the numbers move. */
+function useTick(on: boolean) {
+  const [, setCount] = useState(0);
+  useEffect(() => {
+    if (!on) return;
+    const timer = setInterval(() => setCount((count) => count + 1), 1000);
+    return () => clearInterval(timer);
+  }, [on]);
 }
 
 function say(event: RunEvent): string {
@@ -421,15 +656,15 @@ function say(event: RunEvent): string {
     case "run_start":
       return "the run started";
     case "step_start":
-      return `${String(event.step)} started`;
+      return "started";
     case "step_end":
-      return `${String(event.step)} ended ${String(event.status)}`;
+      return `ended ${String(event.status)}`;
     case "skip":
-      return `${String(event.step)} is skipped, because ${String(event.why)}`;
+      return `skipped, because ${String(event.why)}`;
     case "cycle":
-      return `${String(event.step)} goes back to ${String(event.to)} (${String(event.count)})`;
+      return `goes back to ${String(event.to)} (round ${String(event.count)})`;
     case "waiting":
-      return `${String(event.step)} waits for a person`;
+      return "waits for a person";
     case "run_end":
       return `the run is ${String(event.status)}`;
     default:
