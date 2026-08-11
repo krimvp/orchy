@@ -207,6 +207,9 @@ Know these before you change the runner.
   its reasoning proves wrong, and say what changed.
 - `docs/plan.md` holds the design and the milestones.
 - `docs/running.md` tells a user how to run a flow.
+- `docs/usability.md` reports one usability run over the whole product. It is a
+  record, so it stays as it was written. Read it before you change an error
+  message, the reporter, or the daemon.
 - `docs/shape.md` studies the flow data, and names where it is weak. Read it
   before you add a field or change one. It is the record of one study, so keep
   the study as it was written, hold its table of fields to the code, and say
