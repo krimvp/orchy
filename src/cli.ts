@@ -8,11 +8,14 @@ import { type RunEvent, type RunState, resume, run } from "./run.ts";
 import { serve } from "./server.ts";
 
 const USAGE = `use: orchy run <flow file> [--with <json>] [--harness pi|claude] [--events]
-     orchy resume <run id> <json value> [--harness pi|claude] [--events]
+     orchy resume <run id> [json value] [--from <step>] [--harness pi|claude] [--events]
      orchy daemon [--port 4000]
 
 A flow file is TypeScript or YAML.
 --with supplies the values that the flow takes, as one JSON object.
+--from continues a run that ended, from the step it names. With no value and
+no step, a failed run goes back to the step that failed, and a stopped run
+continues where it stood.
 --events writes one JSON event for each line, for a parent process to read.`;
 
 const PORT = 4000;
@@ -45,6 +48,7 @@ const at = argv.indexOf("--harness");
 const chosen = at === -1 ? "pi" : (argv[at + 1] ?? "");
 if (at !== -1) argv.splice(at, 2);
 const given = text(argv, "--with");
+const from = text(argv, "--from");
 const port = number(argv, "--port") ?? PORT;
 
 function take(list: string[], flag: string): boolean {
@@ -115,9 +119,9 @@ try {
     finish(await run(await loadFlow(first), options));
   }
 
-  if (command === "resume" && first && second) {
-    const options = { onEvent: emit, harness, harnesses: HARNESSES };
-    finish(await resume(first, JSON.parse(second), options));
+  if (command === "resume" && first) {
+    const options = { onEvent: emit, harness, harnesses: HARNESSES, from };
+    finish(await resume(first, second === undefined ? undefined : JSON.parse(second), options));
   }
 
   if (command === "daemon") {

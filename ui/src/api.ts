@@ -108,6 +108,8 @@ export interface FlowRow {
   lastRun?: RunRow | null;
   /** The flow runs by itself this often, when set. */
   schedule?: { everyMinutes: number; lastAt: string | null } | null;
+  /** The token that starts this flow from a POST, when a webhook holds one. */
+  hook?: string | null;
 }
 
 export interface RunRow {
@@ -288,6 +290,9 @@ export const api = {
       body: JSON.stringify({ everyMinutes, with: values }),
     }),
   clearSchedule: (id: number) => call<unknown>(`/api/flows/${id}/schedule`, { method: "DELETE" }),
+  /** Makes the webhook of a flow, and gives back its token. */
+  setHook: (id: number) => call<{ token: string }>(`/api/flows/${id}/hook`, { method: "PUT" }),
+  clearHook: (id: number) => call<unknown>(`/api/flows/${id}/hook`, { method: "DELETE" }),
   /** The values the flow takes ride with the request. The child checks them. */
   startFlow: (id: number, values?: Record<string, unknown>) =>
     call<Ticket>(`/api/flows/${id}/runs`, { method: "POST", body: JSON.stringify({ with: values }) }),
@@ -304,8 +309,9 @@ export const api = {
   runs: () => call<RunRow[]>("/api/runs"),
   run: (runId: string) => call<{ row: RunRow | null; state: RunState }>(`/api/runs/${runId}`),
   trajectory: (runId: string) => call<Atif>(`/api/runs/${runId}/trajectory`),
-  resume: (runId: string, value: unknown) =>
-    call<Ticket>(`/api/runs/${runId}/resume`, { method: "POST", body: JSON.stringify({ value }) }),
+  /** A value answers a gate. No value continues an ended run, from `from` or where it stood. */
+  resume: (runId: string, value?: unknown, from?: string) =>
+    call<Ticket>(`/api/runs/${runId}/resume`, { method: "POST", body: JSON.stringify({ value, from }) }),
   stop: (runId: string) =>
     call<{ stopped: boolean; abandoned?: boolean }>(`/api/runs/${runId}/stop`, { method: "POST" }),
   queue: () => call<Ticket[]>("/api/queue"),

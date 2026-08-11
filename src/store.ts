@@ -43,6 +43,11 @@ create table if not exists schedule (
   withJson text,
   lastAt text
 );
+create table if not exists hook (
+  flowId integer primary key,
+  token text not null unique,
+  addedAt text not null
+);
 `;
 
 export interface FlowRow {
@@ -128,9 +133,26 @@ export function open(file: string) {
 
     removeFlow(id: number): void {
       db.prepare("delete from flow where id = ?").run(id);
-      // A schedule without its flow would fire nothing, so it goes with it.
+      // A schedule or a hook without its flow would fire nothing, so both go with it.
       db.prepare("delete from schedule where flowId = ?").run(id);
+      db.prepare("delete from hook where flowId = ?").run(id);
     },
+
+    /** The token that starts this flow from a POST, when a person made one. */
+    hook: (flowId: number): string | undefined =>
+      one<{ token: string }>("select token from hook where flowId = ?", flowId)?.token,
+
+    /** The flow a token starts, or nothing when no hook holds the token. */
+    hooked: (token: string): number | undefined =>
+      one<{ flowId: number }>("select flowId from hook where token = ?", token)?.flowId,
+
+    setHook(flowId: number, token: string): void {
+      db.prepare(
+        "insert into hook (flowId, token, addedAt) values (?, ?, ?) on conflict(flowId) do update set token = excluded.token",
+      ).run(flowId, token, new Date().toISOString());
+    },
+
+    clearHook: (flowId: number): void => void db.prepare("delete from hook where flowId = ?").run(flowId),
 
     schedules: (): ScheduleRow[] => all<ScheduleRow>("select * from schedule"),
 

@@ -617,3 +617,113 @@ test("a schedule for a flow that takes values must carry them", async () => {
     await site.close();
   }
 });
+
+test("a failed run resumes from the step that failed, and keeps the work that passed", async () => {
+  const flow = {
+    name: "mending",
+    steps: [
+      { id: "first", kind: "call", module: "count.ts", returns: NUMBER },
+      { id: "shaky", kind: "call", needs: ["first"], module: "flaky.ts", returns: NUMBER },
+    ],
+  };
+  const site = await running(project(flow));
+  const root = site.engine.root;
+  writeFileSync(
+    join(root, "flaky.ts"),
+    `import { existsSync } from "node:fs";
+export default () => {
+  if (!existsSync("go.txt")) throw new Error("go.txt is not there yet");
+  return { count: 7 };
+};
+`,
+  );
+  try {
+    await site.call("/api/flows", { method: "POST", body: JSON.stringify({ path: "flow.yaml" }) });
+    await site.call("/api/flows/1/runs", { method: "POST", body: "{}" });
+    await until(async () =>
+      ((await site.call("/api/runs")).body as Array<{ status: string }>).some((run) => run.status === "failed"),
+    );
+    const [row] = (await site.call("/api/runs")).body as Array<{ runId: string }>;
+    const runId = row?.runId as string;
+    const before = (await site.call(`/api/runs/${runId}`)).body as {
+      state: { steps: Record<string, { startedAt: string }> };
+    };
+    const firstRan = before.state.steps.first?.startedAt;
+
+    // The person mends the workspace, and the run continues from the failure.
+    writeFileSync(join(root, "go.txt"), "go\n");
+    const resumed = await site.call(`/api/runs/${runId}/resume`, { method: "POST", body: "{}" });
+    assert.equal(resumed.code, 200);
+    await until(async () =>
+      ((await site.call("/api/runs")).body as Array<{ status: string }>).some((run) => run.status === "done"),
+    );
+
+    const after = (await site.call(`/api/runs/${runId}`)).body as {
+      state: {
+        steps: Record<string, { startedAt: string; value?: { count: number } }>;
+        history?: Array<{ step: string; record: { status: string } }>;
+      };
+    };
+    // The step that passed kept its work, the failed attempt went to history.
+    assert.equal(after.state.steps.first?.startedAt, firstRan);
+    assert.equal(after.state.steps.shaky?.value?.count, 7);
+    assert.equal(after.state.history?.some((one) => one.step === "shaky" && one.record.status === "failed"), true);
+
+    // A done run goes back only to a step a person names.
+    const bare = await site.call(`/api/runs/${runId}/resume`, { method: "POST", body: "{}" });
+    assert.equal(bare.code, 400);
+    assert.match((bare.body as { error: string }).error, /Name the step to run again/);
+
+    // A named step runs again, with everything after it.
+    const back = await site.call(`/api/runs/${runId}/resume`, {
+      method: "POST",
+      body: JSON.stringify({ from: "first" }),
+    });
+    assert.equal(back.code, 200);
+    await until(async () => {
+      const held = (await site.call(`/api/runs/${runId}`)).body as {
+        row: { status: string } | null;
+        state: { steps: Record<string, { startedAt: string }> };
+      };
+      return held.row?.status === "done" && held.state.steps.first?.startedAt !== firstRan;
+    });
+  } finally {
+    await site.close();
+  }
+});
+
+test("a webhook starts the flow from a POST, and a wrong token starts nothing", async () => {
+  const site = await running(project(TAKING));
+  try {
+    await site.call("/api/flows", { method: "POST", body: JSON.stringify({ path: "flow.yaml" }) });
+    const made = await site.call("/api/flows/1/hook", { method: "PUT" });
+    assert.equal(made.code, 200);
+    const token = (made.body as { token: string }).token;
+
+    // The list carries the token, so the page can show the URL.
+    const [row] = (await site.call("/api/flows")).body as Array<{ hook: string | null }>;
+    assert.equal(row?.hook, token);
+
+    const wrong = await site.call("/api/hooks/not-a-token", { method: "POST", body: "{}" });
+    assert.equal(wrong.code, 400);
+
+    // The body is the values the flow takes.
+    const started = await site.call(`/api/hooks/${token}`, { method: "POST", body: JSON.stringify({ issue: 5 }) });
+    assert.equal(started.code, 200);
+    await until(async () =>
+      ((await site.call("/api/runs")).body as Array<{ status: string }>).some((run) => run.status === "done"),
+    );
+    const [run] = (await site.call("/api/runs")).body as Array<{ runId: string }>;
+    const state = (await site.call(`/api/runs/${run?.runId}`)).body as {
+      state: { steps: Record<string, { value?: { count: number } }> };
+    };
+    assert.equal(state.state.steps.work?.value?.count, 5);
+
+    // The hook goes, and the token opens nothing.
+    await site.call("/api/flows/1/hook", { method: "DELETE" });
+    const gone = await site.call(`/api/hooks/${token}`, { method: "POST", body: "{}" });
+    assert.equal(gone.code, 400);
+  } finally {
+    await site.close();
+  }
+});

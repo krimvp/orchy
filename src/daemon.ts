@@ -50,8 +50,12 @@ interface Job extends Ticket {
   harness: string;
   with?: Record<string, unknown>;
   runId?: string;
-  /** A resume carries the value that answers the gate. */
+  /** The job continues a run instead of starting one. */
+  resumes?: boolean;
+  /** The value that answers the gate, when the run waits for one. */
   value?: unknown;
+  /** The step the run goes back to, when a person names one. */
+  from?: string;
   child?: ChildProcess;
   stderr: string;
 }
@@ -133,10 +137,14 @@ export function daemon(root: string) {
       const job = queue.shift() as Job;
       running += 1;
       // A resume reads the values from the state on disk, so only a run carries them.
-      const args =
-        job.value === undefined
-          ? ["run", job.path, ...(job.with ? ["--with", JSON.stringify(job.with)] : [])]
-          : ["resume", job.runId as string, JSON.stringify(job.value)];
+      const args = job.resumes
+        ? [
+            "resume",
+            job.runId as string,
+            ...(job.value === undefined ? [] : [JSON.stringify(job.value)]),
+            ...(job.from ? ["--from", job.from] : []),
+          ]
+        : ["run", job.path, ...(job.with ? ["--with", JSON.stringify(job.with)] : [])];
       const child = spawn(process.execPath, [CLI, ...args, "--harness", job.harness, "--events"], {
         cwd: root,
         stdio: ["ignore", "pipe", "pipe"],
@@ -204,11 +212,27 @@ export function daemon(root: string) {
 
     start,
 
-    /** Answers the gate of a run that waits. The child checks the value again. */
-    resume(runId: string, value: unknown, harness: string): Ticket {
+    /**
+     * Continues a run. A value answers a gate. No value continues a run that
+     * ended, from the step `from` names or where the run stood. The child
+     * checks the details again; this refuses only what a row already refutes.
+     */
+    resume(runId: string, value: unknown, harness: string, from?: string): Ticket {
       const row = store.run(runId);
       if (!row) throw new Error(`this daemon holds no run ${runId}`);
-      if (row.status !== "waiting") throw new Error(`the run ${runId} is ${row.status}, so it takes no value`);
+      if (row.status === "running") throw new Error(`the run ${runId} is running, so there is nothing to continue`);
+      if (value !== undefined && row.status !== "waiting") {
+        throw new Error(`the run ${runId} is ${row.status}, so it takes no value`);
+      }
+      if (value === undefined && !from && row.status === "waiting") {
+        throw new Error(`the run ${runId} waits for a value. Answer it, or name a step to go back to.`);
+      }
+      if (value === undefined && !from && row.status === "done") {
+        throw new Error(`the run ${runId} is done. Name the step to run again.`);
+      }
+      if ([...jobs.values()].some((job) => job.runId === runId)) {
+        throw new Error(`the run ${runId} is already on its way`);
+      }
       tickets += 1;
       const job: Job = {
         ticket: tickets,
@@ -216,7 +240,9 @@ export function daemon(root: string) {
         path: row.path ?? "",
         harness,
         runId,
+        resumes: true,
         value,
+        from,
         queuedAt: new Date().toISOString(),
         stderr: "",
       };

@@ -206,26 +206,69 @@ export async function run(input: Flow, options: RunOptions = {}): Promise<RunSta
   return execute(state, cwd, options);
 }
 
-export async function resume(runId: string, value: unknown, options: RunOptions = {}): Promise<RunState> {
+/**
+ * Continues a run. A value answers the gate of a run that waits. No value
+ * continues a run that ended: from the step that `from` names, from the steps
+ * that failed, or where a stop left it. The record of a step that runs again
+ * goes to history first, because every attempt is a cost.
+ */
+export async function resume(
+  runId: string,
+  value: unknown,
+  options: RunOptions & { from?: string } = {},
+): Promise<RunState> {
   const cwd = resolve(options.cwd ?? process.cwd());
   const state = read(cwd, runId);
 
-  if (state.status !== "waiting" || !state.waitingFor) {
-    throw new Error(`the run ${runId} is ${state.status}, so it takes no value`);
+  if (value !== undefined) {
+    if (state.status !== "waiting" || !state.waitingFor) {
+      throw new Error(`the run ${runId} is ${state.status}, so it takes no value`);
+    }
+
+    const step = state.flow.steps.find((candidate) => candidate.id === state.waitingFor);
+    if (!step) throw new Error(`the run ${runId} waits for "${state.waitingFor}", which the flow does not hold`);
+    const problem = contractProblem(step, value);
+    if (problem) throw new Error(problem);
+
+    const now = new Date().toISOString();
+    state.steps[step.id] = { status: "done", startedAt: now, endedAt: now, value, answeredByPerson: true };
+    state.waitingFor = undefined;
+    state.question = undefined;
+    state.status = "running";
+    // A gate settles outside a wave, so its own cycle takes its turn in `execute`.
+    return execute(state, cwd, options, step);
   }
 
-  const step = state.flow.steps.find((candidate) => candidate.id === state.waitingFor);
-  if (!step) throw new Error(`the run ${runId} waits for "${state.waitingFor}", which the flow does not hold`);
-  const problem = contractProblem(step, value);
-  if (problem) throw new Error(problem);
+  if (state.status === "running") {
+    throw new Error(`the run ${runId} is running, so there is nothing to continue`);
+  }
 
-  const now = new Date().toISOString();
-  state.steps[step.id] = { status: "done", startedAt: now, endedAt: now, value, answeredByPerson: true };
+  const sorted = order(state.flow.steps);
+  if (options.from) {
+    if (!state.flow.steps.some((step) => step.id === options.from)) {
+      throw new Error(`the run ${runId} holds no step "${options.from}", so it cannot go back to it`);
+    }
+    // The named step and every step after it run again. The rest keep their work.
+    goBackTo(options.from, state, sorted);
+  } else if (state.status === "waiting") {
+    throw new Error(`the run ${runId} waits for a value. Answer it, or name a step to go back to.`);
+  } else if (state.status === "done") {
+    throw new Error(`the run ${runId} is done. Name the step to run again.`);
+  }
+
+  // A failed record runs again, so its attempt goes to history and its cost
+  // still counts. A stopped run has no failed record, and simply continues.
+  for (const [id, record] of Object.entries(state.steps)) {
+    if (record.status !== "failed") continue;
+    state.history = [...(state.history ?? []), { step: id, record }];
+    delete state.steps[id];
+  }
+
+  state.status = "running";
+  delete state.error;
   state.waitingFor = undefined;
   state.question = undefined;
-  state.status = "running";
-  // A gate settles outside a wave, so its own cycle takes its turn in `execute`.
-  return execute(state, cwd, options, step);
+  return execute(state, cwd, options);
 }
 
 function refuse(problems: string[]): void {

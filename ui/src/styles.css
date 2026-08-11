@@ -1786,3 +1786,11 @@ ul.warn.list {
 .activity details.long[open] {
   white-space: pre-wrap;
 }
+
+/* -- the URL of a webhook, one quiet line that never widens the page -- */
+
+.hookurl {
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+  min-width: 0;
+}

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -65,8 +66,44 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
             description: descriptionOf(row.path),
             lastRun: runs.find((run) => run.path === row.path) ?? null,
             schedule: schedule ? { everyMinutes: schedule.everyMinutes, lastAt: schedule.lastAt } : null,
+            hook: daemon.store.hook(row.id) ?? null,
           };
         });
+      },
+    ],
+
+    // A webhook starts the flow from a POST. The token is the whole door: a
+    // person makes it here, and the URL that holds it starts the run.
+    [
+      "PUT",
+      "/api/flows/:id/hook",
+      (parameters) => {
+        const row = flowRow(daemon, parameters.id as string);
+        const token = daemon.store.hook(row.id) ?? randomUUID();
+        daemon.store.setHook(row.id, token);
+        return { token };
+      },
+    ],
+
+    [
+      "DELETE",
+      "/api/flows/:id/hook",
+      (parameters) => {
+        daemon.store.clearHook(Number(parameters.id));
+        return { removed: true };
+      },
+    ],
+
+    // The body of the POST is the values the flow takes. A body a flow does
+    // not take fails the start, and the queue keeps the reason.
+    [
+      "POST",
+      "/api/hooks/:token",
+      async (parameters, body) => {
+        const flowId = daemon.store.hooked(parameters.token as string);
+        if (flowId === undefined) throw new Error("no hook holds this token");
+        const row = flowRow(daemon, String(flowId));
+        return start(daemon, row, Object.keys(body).length > 0 ? body : undefined);
       },
     ],
 
@@ -257,20 +294,8 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
       "/api/flows/:id/runs",
       async (parameters, body) => {
         const row = flowRow(daemon, parameters.id as string);
-        // A flow that cannot run must say so here, not in the log of a child.
-        const flow = await loadFlow(row.path, daemon.root);
-        const problems = validate(flow);
-        if (problems.length > 0) throw new Error(`the flow is not valid:\n- ${problems.join("\n- ")}`);
-        // A file the flow names must be there before a step spends money on it.
-        const gone = missing(await readFlow(row.path), row.path);
-        if (gone.length > 0) throw new Error(`the flow names files that are not there:\n- ${gone.join("\n- ")}`);
-        // The daemon adds no rule: it passes the values on, and the child checks them.
-        return daemon.start({
-          path: row.path,
-          flowName: flow.name,
-          harness: body.harness ? adapterOf(body.harness) : row.harness,
-          with: body.with as Record<string, unknown> | undefined,
-        });
+        const harness = body.harness ? adapterOf(body.harness) : undefined;
+        return start(daemon, row, body.with as Record<string, unknown> | undefined, harness);
       },
     ],
 
@@ -316,7 +341,8 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
       (parameters, body) => {
         const runId = parameters.id as string;
         const harness = body.harness ? adapterOf(body.harness) : harnessOfRun(daemon, runId);
-        return daemon.resume(runId, body.value, harness);
+        const from = typeof body.from === "string" && body.from !== "" ? body.from : undefined;
+        return daemon.resume(runId, body.value, harness, from);
       },
     ],
 
@@ -541,6 +567,27 @@ function flowRow(daemon: Daemon, id: string) {
   const row = daemon.store.flow(Number(id));
   if (!row) throw new Error(`there is no flow ${id}`);
   return row;
+}
+
+/**
+ * Starts a run, checked. A flow that cannot run must say so here, not in the
+ * log of a child, and a file the flow names must be there before a step spends
+ * money on it. The button, the schedule route, and the hook all come through
+ * this one door.
+ */
+async function start(
+  daemon: Daemon,
+  row: { id: number; path: string; harness: string },
+  values: Record<string, unknown> | undefined,
+  harness?: string,
+) {
+  const flow = await loadFlow(row.path, daemon.root);
+  const problems = validate(flow);
+  if (problems.length > 0) throw new Error(`the flow is not valid:\n- ${problems.join("\n- ")}`);
+  const gone = missing(await readFlow(row.path), row.path);
+  if (gone.length > 0) throw new Error(`the flow names files that are not there:\n- ${gone.join("\n- ")}`);
+  // The daemon adds no rule: it passes the values on, and the child checks them.
+  return daemon.start({ path: row.path, flowName: flow.name, harness: harness ?? row.harness, with: values });
 }
 
 /** A run keeps the file it came from, so a resume uses the harness of that flow. */

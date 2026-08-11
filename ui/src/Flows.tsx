@@ -153,6 +153,7 @@ export function Flows() {
             setTiming(undefined);
             again();
           }}
+          onChanged={again}
           onFault={setFault}
         />
       )}
@@ -260,12 +261,15 @@ function Timing({
   name,
   takes,
   onDone,
+  onChanged,
   onFault,
 }: {
   flow?: FlowRow;
   name: string;
   takes?: Schema;
   onDone: () => void;
+  /** The list holds new facts, and the panel stays open to show them. */
+  onChanged: () => void;
   onFault: (fault: string) => void;
 }) {
   const [count, setCount] = useState(() => {
@@ -314,6 +318,7 @@ function Timing({
           </button>
         </div>
       )}
+      {flow && <Hook flow={flow} onChanged={onChanged} onFault={onFault} />}
       <div className="row" style={{ marginBottom: 0, marginTop: 10 }}>
         {flow?.schedule && (
           <button
@@ -327,6 +332,65 @@ function Timing({
           Close
         </button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The webhook of one flow. The token is the whole door: a POST to its URL
+ * starts the run, with the body as the values the flow takes.
+ */
+function Hook({
+  flow,
+  onChanged,
+  onFault,
+}: {
+  flow: FlowRow;
+  onChanged: () => void;
+  onFault: (fault: string) => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const url = flow.hook ? `${location.origin}/api/hooks/${flow.hook}` : undefined;
+  const copy = () =>
+    void navigator.clipboard?.writeText(url ?? "").then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+
+  return (
+    <div className="field set" style={{ marginTop: 16 }}>
+      <span>Or start it from a webhook</span>
+      {url ? (
+        <>
+          <div className="row" style={{ margin: "10px 0 0", flexWrap: "nowrap" }}>
+            <span className="mono small hookurl">{url}</span>
+            <button className="quiet" onClick={copy}>
+              {copied ? "Copied" : "Copy"}
+            </button>
+            <button className="quiet" onClick={() => void api.clearHook(flow.id).then(onChanged)}>
+              Remove it
+            </button>
+          </div>
+          <span className="note small">
+            A POST to this URL starts the run. Send the values the flow takes as one JSON object. The token is
+            the key, so share the URL with care.
+          </span>
+        </>
+      ) : (
+        <div className="row" style={{ margin: "10px 0 0" }}>
+          <button
+            className="quiet"
+            onClick={() =>
+              void api
+                .setHook(flow.id)
+                .then(onChanged)
+                .catch((problem: Error) => onFault(problem.message))
+            }
+          >
+            Make a webhook
+          </button>
+        </div>
+      )}
     </div>
   );
 }

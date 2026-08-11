@@ -80,6 +80,12 @@ export function Run({ runId }: { runId: string }) {
             .then(() => (setFault(undefined), again()))
             .catch((problem: Error) => setFault(problem.message))
         }
+        onResume={(from) =>
+          api
+            .resume(runId, undefined, from)
+            .then(() => (setFault(undefined), again()))
+            .catch((problem: Error) => setFault(problem.message))
+        }
       />
       {fault && <p className="bad">{fault}</p>}
 
@@ -188,6 +194,17 @@ export function Run({ runId }: { runId: string }) {
               record={record}
               history={attempts(state, step.id)}
               cycles={state.cycles}
+              onRerun={
+                // A run that ended can go back to a step: the steps before it
+                // keep their work, and this one onward runs again.
+                state.status === "done" || state.status === "failed" || state.status === "stopped"
+                  ? () =>
+                      void api
+                        .resume(runId, undefined, step.id)
+                        .then(() => (setFault(undefined), again()))
+                        .catch((problem: Error) => setFault(problem.message))
+                  : undefined
+              }
             />
           )}
         </div>
@@ -221,12 +238,14 @@ function Hero({
   gate,
   onAnswer,
   onOpen,
+  onResume,
 }: {
   state: RunState;
   live: Array<{ id: string; since: string }>;
   gate?: Step;
   onAnswer: (value: unknown) => void;
   onOpen: (id: string) => void;
+  onResume: (from?: string) => void;
 }) {
   if (state.status === "waiting" && gate) {
     // The question reads the steps before it, so their answers stand right here.
@@ -287,6 +306,12 @@ function Hero({
               to read the whole error.
             </p>
             {record.error && <pre className="bad clamp">{record.error}</pre>}
+            <div className="row" style={{ marginBottom: 0 }}>
+              <button className="go" onClick={() => onResume()}>
+                Fix it and resume from {id}
+              </button>
+              <span className="dim small">The steps that passed keep their work.</span>
+            </div>
           </>
         )}
         <Leavings state={state} />
@@ -316,6 +341,14 @@ function Hero({
       <span className="badge">{state.status}</span>
       <h2>This run is {state.status}</h2>
       {state.error && <p className="ask">{state.error}</p>}
+      {state.status === "stopped" && (
+        <div className="row" style={{ marginBottom: 0 }}>
+          <button className="go" onClick={() => onResume()}>
+            Resume this run
+          </button>
+          <span className="dim small">It continues where it stood. The steps that passed keep their work.</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -432,11 +465,13 @@ function Detail({
   record,
   history,
   cycles,
+  onRerun,
 }: {
   step: Step;
   record?: StepRecord;
   history: StepRecord[];
   cycles: Record<string, number>;
+  onRerun?: () => void;
 }) {
   const back = step.cycle ? cycles[`${step.id}->${step.cycle.to}`] : undefined;
   return (
@@ -539,6 +574,13 @@ function Detail({
       )}
       {record && "value" in record && <Value label="What it answered" value={record.value} />}
       {!record && <p className="empty">This step has not ended yet.</p>}
+      {onRerun && record && (
+        <div className="row" style={{ marginBottom: 0, marginTop: 12 }}>
+          <button className="quiet" onClick={onRerun} title="The steps before this one keep their work.">
+            Run again from this step
+          </button>
+        </div>
+      )}
       {history.length > 0 && (
         <details>
           <summary>
