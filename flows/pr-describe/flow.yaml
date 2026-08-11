@@ -1,0 +1,29 @@
+# Read the branch, tell the reviewer what it does. The diff comes from git,
+# so no model spends tokens listing files.
+name: pr-describe
+workspace: { kind: git, path: . }
+
+steps:
+  - id: diff
+    kind: call
+    module: diff.ts
+    returns:
+      type: object
+      required: [base, files, subjects]
+      properties:
+        base: { type: string }
+        files: { type: array, items: { type: string } }
+        subjects: { type: array, items: { type: string } }
+
+  - id: draft
+    kind: agent
+    needs: [diff]
+    prompt: prompts/draft.md
+    tools: [read, grep, find]
+    changes: nothing
+    returns:
+      type: object
+      required: [title, body]
+      properties:
+        title: { type: string }
+        body: { type: string }

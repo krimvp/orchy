@@ -1,0 +1,29 @@
+# A fragment: two reviewers with two lenses, and one verdict. It holds no
+# workspace, because the flow that includes it holds one.
+name: panel
+
+steps:
+  - id: reviewer
+    kind: agent
+    prompt: prompts/review.md
+    tools: [read, grep, find, ls]
+    changes: nothing
+    takes:
+      type: object
+      required: [lens]
+      properties: { lens: { type: string } }
+    returns: &verdict
+      type: object
+      required: [approved, findings]
+      properties:
+        approved: { type: boolean }
+        findings: { type: array, items: { type: string } }
+    fanout:
+      - { name: correctness, with: { lens: "does the change do what its summary says" } }
+      - { name: clarity, with: { lens: "will the next reader understand the change" } }
+
+  - id: verdict
+    kind: call
+    needs: [reviewer]
+    module: verdict.ts
+    returns: *verdict

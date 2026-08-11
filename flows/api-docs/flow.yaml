@@ -1,0 +1,71 @@
+name: api-docs
+workspace:
+  kind: git
+  path: .
+steps:
+  - id: list
+    kind: call
+    module: list.ts
+    returns:
+      type: object
+      required:
+        - modules
+      properties:
+        modules:
+          type: array
+          items:
+            type: object
+            required:
+              - name
+              - file
+            properties:
+              name:
+                type: string
+              file:
+                type: string
+  - needs:
+      - list
+    id: document
+    kind: agent
+    prompt: prompts/document.md
+    tools:
+      - read
+      - write
+      - grep
+    changes:
+      paths:
+        - docs/api
+    takes:
+      type: object
+      required:
+        - name
+        - file
+      properties:
+        name:
+          type: string
+        file:
+          type: string
+    returns:
+      type: object
+      required:
+        - file
+      properties:
+        file:
+          type: string
+    fanout:
+      step: list
+      key: modules
+  - needs:
+      - document
+    id: index
+    kind: call
+    module: index.ts
+    returns:
+      type: object
+      required:
+        - files
+      properties:
+        files:
+          type: array
+          items:
+            type: string

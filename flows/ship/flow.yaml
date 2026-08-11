@@ -1,0 +1,26 @@
+# The panel is another file, so the same reviewers serve any flow. The cycle
+# hangs on the step the inner flow ends with.
+name: ship
+workspace: { kind: git, path: . }
+takes:
+  type: object
+  required: [change]
+  properties: { change: { type: string } }
+
+steps:
+  - id: code
+    kind: agent
+    prompt: prompts/code.md
+    tools: [read, write, edit, grep, find, ls]
+    returns:
+      type: object
+      required: [summary, files]
+      properties:
+        summary: { type: string }
+        files: { type: array, items: { type: string } }
+
+  - id: review
+    kind: flow
+    needs: [code]
+    flow: ./panel.yaml
+    cycle: { to: code, when: { approved: false }, limit: 3, policy: escalate }

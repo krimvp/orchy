@@ -1,0 +1,59 @@
+# Three narrow sweeps, one merge, one report. Only the report may write, and
+# only its own file.
+name: security-sweep
+workspace: { kind: git, path: . }
+parallel: 3
+
+steps:
+  - id: sweep
+    kind: agent
+    prompt: prompts/sweep.md
+    tools: [read, grep, find, ls]
+    changes: nothing
+    takes:
+      type: object
+      required: [area]
+      properties: { area: { type: string } }
+    returns:
+      type: object
+      required: [area, findings]
+      properties:
+        area: { type: string }
+        findings:
+          type: array
+          items:
+            type: object
+            required: [file, what, severity]
+            properties:
+              file: { type: string }
+              what: { type: string }
+              severity: { type: string, enum: [low, medium, high] }
+    fanout:
+      - { name: secrets, with: { area: "credentials or keys committed to the tree" } }
+      - { name: injection, with: { area: "input that reaches a shell, a query, or an eval" } }
+      - { name: deps, with: { area: "dependencies that are pinned loosely or look abandoned" } }
+
+  - id: merge
+    kind: call
+    needs: [sweep]
+    module: merge.ts
+    returns:
+      type: object
+      required: [total, high, findings]
+      properties:
+        total: { type: number }
+        high: { type: number }
+        findings: { type: array }
+
+  - id: report
+    kind: agent
+    needs: [merge]
+    prompt: prompts/report.md
+    tools: [read, write]
+    changes: { paths: [SECURITY-SWEEP.md] }
+    returns:
+      type: object
+      required: [file, total]
+      properties:
+        file: { type: string }
+        total: { type: number }

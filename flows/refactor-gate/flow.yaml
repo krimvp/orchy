@@ -1,0 +1,48 @@
+# An agent proposes, a person disposes, and only then does anything move.
+name: refactor-gate
+workspace: { kind: git, path: . }
+takes:
+  type: object
+  required: [target]
+  properties: { target: { type: string } }
+
+steps:
+  - id: plan
+    kind: agent
+    prompt: prompts/plan.md
+    tools: [read, grep, find, ls]
+    changes: nothing
+    returns:
+      type: object
+      required: [plan, files, risk]
+      properties:
+        plan: { type: string }
+        files: { type: array, items: { type: string } }
+        risk: { type: string, enum: [low, medium, high] }
+
+  - id: approve
+    kind: gate
+    needs: [plan]
+    question: >
+      Read the plan. Answer {"approved":true} to let it run, or
+      {"approved":false,"reason":"..."} to send it back.
+    returns:
+      type: object
+      required: [approved]
+      properties:
+        approved: { type: boolean }
+        reason: { type: string }
+    cycle: { to: plan, when: { approved: false }, limit: 2, policy: accept }
+
+  - id: apply
+    kind: agent
+    needs: [plan, approve]
+    when: { approve: { approved: true } }
+    prompt: prompts/apply.md
+    tools: [read, write, edit, grep, find, ls]
+    returns:
+      type: object
+      required: [summary, files]
+      properties:
+        summary: { type: string }
+        files: { type: array, items: { type: string } }

@@ -1,0 +1,50 @@
+# Find the code the tests miss, write the tests, and review them.
+# The writer may touch the test directory and nothing else.
+name: test-writer
+workspace: { kind: git, path: . }
+
+steps:
+  - id: survey
+    kind: agent
+    prompt: prompts/survey.md
+    tools: [read, grep, find, ls]
+    changes: nothing
+    returns:
+      type: object
+      required: [gaps]
+      properties:
+        gaps:
+          type: array
+          items:
+            type: object
+            required: [file, what]
+            properties:
+              file: { type: string }
+              what: { type: string }
+
+  - id: write
+    kind: agent
+    needs: [survey]
+    prompt: prompts/write.md
+    tools: [read, write, edit, grep, find, ls, bash]
+    changes: { paths: [test] }
+    returns:
+      type: object
+      required: [files, cases]
+      properties:
+        files: { type: array, items: { type: string } }
+        cases: { type: number }
+
+  - id: review
+    kind: agent
+    needs: [write]
+    prompt: prompts/review.md
+    tools: [read, grep, bash]
+    changes: nothing
+    returns:
+      type: object
+      required: [approved, findings]
+      properties:
+        approved: { type: boolean }
+        findings: { type: array, items: { type: string } }
+    cycle: { to: write, when: { approved: false }, limit: 2, policy: escalate }

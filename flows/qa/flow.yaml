@@ -1,0 +1,41 @@
+# Answer a question about this codebase, with the file and line to prove it.
+# The flow promises to change nothing, so the workspace checks every step.
+name: codebase-qa
+workspace: { kind: git, path: . }
+changes: nothing
+takes:
+  type: object
+  required: [question]
+  properties: { question: { type: string } }
+returns:
+  type: object
+  required: [verified, answer]
+  properties:
+    verified: { type: boolean }
+    answer: { type: string }
+
+steps:
+  - id: answer
+    kind: agent
+    prompt: prompts/answer.md
+    tools: [read, grep, find, ls]
+    returns:
+      type: object
+      required: [answer, citations]
+      properties:
+        answer: { type: string }
+        citations: { type: array, items: { type: string }, minItems: 1 }
+
+  - id: verify
+    kind: agent
+    needs: [answer]
+    prompt: prompts/verify.md
+    tools: [read, grep]
+    returns:
+      type: object
+      required: [verified, answer, problems]
+      properties:
+        verified: { type: boolean }
+        answer: { type: string }
+        problems: { type: array, items: { type: string } }
+    cycle: { to: answer, when: { verified: false }, limit: 2, policy: accept }

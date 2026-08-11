@@ -1,0 +1,50 @@
+# Find the typos, fix them, and let a checker confirm the fix fixed.
+# The fixer reaches only the documents, so the code cannot drift.
+name: typo-hunt
+workspace: { kind: git, path: . }
+
+steps:
+  - id: hunt
+    kind: agent
+    prompt: prompts/hunt.md
+    tools: [read, grep, find, ls]
+    changes: nothing
+    returns:
+      type: object
+      required: [typos]
+      properties:
+        typos:
+          type: array
+          items:
+            type: object
+            required: [file, wrong, right]
+            properties:
+              file: { type: string }
+              wrong: { type: string }
+              right: { type: string }
+
+  - id: fix
+    kind: agent
+    needs: [hunt]
+    when: { hunt: { typos: { empty: false } } }
+    prompt: prompts/fix.md
+    tools: [read, edit, grep]
+    changes: { paths: [docs, README.md, AGENTS.md, CONTEXT.md] }
+    returns:
+      type: object
+      required: [fixed]
+      properties: { fixed: { type: number } }
+
+  - id: check
+    kind: agent
+    needs: [hunt, fix]
+    prompt: prompts/check.md
+    tools: [read, grep]
+    changes: nothing
+    returns:
+      type: object
+      required: [clean, remaining]
+      properties:
+        clean: { type: boolean }
+        remaining: { type: array, items: { type: string } }
+    cycle: { to: fix, when: { clean: false }, limit: 2, policy: accept }

@@ -1,0 +1,33 @@
+# Take an issue, write the fix, and let a second step prove it.
+name: bugfix
+workspace: { kind: git, path: . }
+takes:
+  type: object
+  required: [issue]
+  properties: { issue: { type: string } }
+
+steps:
+  - id: fix
+    kind: agent
+    prompt: prompts/fix.md
+    tools: [read, write, edit, grep, find, ls]
+    returns:
+      type: object
+      required: [summary, files]
+      properties:
+        summary: { type: string }
+        files: { type: array, items: { type: string } }
+
+  - id: verify
+    kind: agent
+    needs: [fix]
+    prompt: prompts/verify.md
+    tools: [read, grep, bash]
+    changes: nothing
+    returns:
+      type: object
+      required: [passes, findings]
+      properties:
+        passes: { type: boolean }
+        findings: { type: array, items: { type: string } }
+    cycle: { to: fix, when: { passes: false }, limit: 3, policy: escalate }

@@ -1,0 +1,56 @@
+# Three estimators who cannot see each other, one spread, one person.
+name: planning-poker
+workspace: { kind: git, path: . }
+parallel: 3
+takes:
+  type: object
+  required: [task]
+  properties: { task: { type: string } }
+
+steps:
+  - id: estimate
+    kind: agent
+    prompt: prompts/estimate.md
+    tools: [read, grep, find, ls]
+    changes: nothing
+    takes:
+      type: object
+      required: [task, stance]
+      properties:
+        task: { type: string }
+        stance: { type: string }
+    returns:
+      type: object
+      required: [stance, days, reason]
+      properties:
+        stance: { type: string }
+        days: { type: number, minimum: 0 }
+        reason: { type: string }
+    fanout:
+      - { name: optimist, with: { stance: "the plan goes as written" } }
+      - { name: pessimist, with: { stance: "everything that can slip, slips" } }
+      - { name: historian, with: { stance: "the last change of this shape sets the pace" } }
+
+  - id: spread
+    kind: call
+    needs: [estimate]
+    module: spread.ts
+    returns:
+      type: object
+      required: [low, high, mean, agree]
+      properties:
+        low: { type: number }
+        high: { type: number }
+        mean: { type: number }
+        agree: { type: boolean }
+
+  - id: commit
+    kind: gate
+    needs: [spread]
+    question: >
+      Read the spread. Answer {"days": <number>} with the estimate you commit
+      to.
+    returns:
+      type: object
+      required: [days]
+      properties: { days: { type: number } }

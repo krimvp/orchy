@@ -1,0 +1,37 @@
+# One prompt, four languages. A member holds the language that is its own.
+name: translate-readme
+workspace: { kind: git, path: . }
+
+steps:
+  - id: translate
+    kind: agent
+    prompt: prompts/translate.md
+    tools: [read, write]
+    changes: { paths: [docs/i18n] }
+    takes:
+      type: object
+      required: [language, file]
+      properties:
+        language: { type: string }
+        file: { type: string }
+    returns: &translation
+      type: object
+      required: [language, file]
+      properties:
+        language: { type: string }
+        file: { type: string }
+    fanout:
+      - { name: de, with: { language: German, file: docs/i18n/README.de.md } }
+      - { name: fr, with: { language: French, file: docs/i18n/README.fr.md } }
+      - { name: es, with: { language: Spanish, file: docs/i18n/README.es.md } }
+      - { name: ja, with: { language: Japanese, file: docs/i18n/README.ja.md } }
+
+  - id: table
+    kind: call
+    needs: [translate]
+    module: table.ts
+    returns:
+      type: object
+      required: [translations]
+      properties:
+        translations: { type: array, items: *translation }

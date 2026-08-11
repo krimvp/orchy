@@ -1,0 +1,33 @@
+# What happened in this repository in the last day, told for a standup.
+# A deterministic step reads git, so no model spends tokens on it.
+name: standup
+workspace: { kind: git, path: . }
+
+steps:
+  - id: log
+    kind: call
+    module: log.ts
+    returns:
+      type: object
+      required: [since, commits]
+      properties:
+        since: { type: string }
+        commits:
+          type: array
+          items:
+            type: object
+            required: [hash, subject]
+            properties:
+              hash: { type: string }
+              subject: { type: string }
+
+  - id: note
+    kind: agent
+    needs: [log]
+    prompt: prompts/note.md
+    tools: [read, grep]
+    changes: nothing
+    returns:
+      type: object
+      required: [note]
+      properties: { note: { type: string } }
