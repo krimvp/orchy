@@ -412,20 +412,34 @@ ul.list li::before {
 
 /* -- the grouped list, for runs and flows -- */
 
+/* A list of runs is output, not a table in a card: no box around it, a dim
+ * legend, and a row that the cursor points at. */
 .group {
-  border-radius: var(--r-lg);
-  background: var(--surface);
-  border: 1px solid var(--hairline);
-  overflow: hidden;
+  border-top: 1px solid var(--hairline);
 }
 
 .head,
 .line {
   display: grid;
-  grid-template-columns: 118px minmax(120px, 1fr) 116px 80px 92px 100px 16px;
+  /* The first column belongs to the pointer, which only the hovered row shows. */
+  grid-template-columns: 14px 108px minmax(120px, 1fr) 116px 80px 92px 100px 16px;
   align-items: center;
-  gap: 16px;
-  padding: 0 16px;
+  gap: 14px;
+  padding: 0 6px;
+}
+
+.head::before {
+  content: "";
+}
+
+.line::before {
+  content: "\276f";
+  color: transparent;
+  transition: color 0.15s var(--ease);
+}
+
+.line:hover::before {
+  color: var(--accent);
 }
 
 /* A number reads down a column, so it sits to the right and keeps one width. */
@@ -436,34 +450,26 @@ ul.list li::before {
 }
 
 .head {
-  height: 32px;
+  height: 26px;
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 500;
   text-transform: lowercase;
   letter-spacing: 0.05em;
   color: var(--text-3);
-  background: rgba(255, 255, 255, 0.018);
   border-bottom: 1px solid var(--hairline);
 }
 
 .line {
   position: relative;
-  height: 48px;
-  border-bottom: 1px solid var(--hairline);
+  height: 34px;
   color: var(--text);
   text-decoration: none;
-  transition: background 0.16s var(--ease), box-shadow 0.16s var(--ease);
+  transition: background 0.16s var(--ease);
 }
 
-.line:last-child {
-  border-bottom: 0;
-}
-
-/* The hand over a line marks it the way a cursor marks a row: a bar on the
- * left, and the ground one shade lighter. */
+/* The hand over a row lights the whole band, the way a cursor marks a line. */
 .line:hover {
   background: var(--raised);
-  box-shadow: inset 2px 0 0 var(--accent);
   text-decoration: none;
 }
 
@@ -496,9 +502,20 @@ ul.list li::before {
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 11px 16px;
-  border-bottom: 1px solid var(--hairline);
+  padding: 9px 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   transition: background 0.16s var(--ease);
+}
+
+.flow-line::before {
+  content: "\276f";
+  flex: none;
+  color: transparent;
+  transition: color 0.15s var(--ease);
+}
+
+.flow-line:hover::before {
+  color: var(--accent);
 }
 
 .flow-line:last-child {
@@ -506,7 +523,7 @@ ul.list li::before {
 }
 
 .flow-line:hover {
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--raised);
 }
 
 .flow-line .grow {
@@ -519,15 +536,11 @@ ul.list li::before {
 .pill {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 1px 8px;
-  border-radius: var(--r-sm);
-  font-size: 11.5px;
+  gap: 7px;
+  font-size: 12px;
   font-weight: 500;
   letter-spacing: 0.01em;
   text-transform: lowercase;
-  background: var(--raised);
-  border: 1px solid transparent;
   color: var(--text-2);
   white-space: nowrap;
 }
@@ -543,23 +556,15 @@ ul.list li::before {
 
 .pill.done {
   color: var(--green);
-  background: color-mix(in srgb, var(--green) 10%, transparent);
-  border-color: color-mix(in srgb, var(--green) 22%, transparent);
 }
 .pill.failed {
   color: var(--red);
-  background: color-mix(in srgb, var(--red) 10%, transparent);
-  border-color: color-mix(in srgb, var(--red) 24%, transparent);
 }
 .pill.running {
   color: var(--orange);
-  background: color-mix(in srgb, var(--orange) 10%, transparent);
-  border-color: color-mix(in srgb, var(--orange) 24%, transparent);
 }
 .pill.waiting {
   color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 26%, transparent);
 }
 /* A step that never ran carries no colour of its own. */
 .pill.skipped {
@@ -581,7 +586,10 @@ ul.list li::before {
 
 .big.pill {
   font-size: 12.5px;
-  padding: 3px 10px;
+  padding: 2px 10px;
+  border-radius: var(--r-sm);
+  background: var(--raised);
+  border: 1px solid var(--hairline);
 }
 
 /* -- the numbers of a run, told as one quiet line and not as trophies -- */
@@ -823,19 +831,21 @@ ul.list li::before {
 
 .panel dl {
   display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 6px 18px;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 2px 14px;
   margin: 0 0 14px;
 }
 
 .panel dt {
   color: var(--text-3);
   font-size: 12.5px;
+  text-transform: lowercase;
 }
 
 .panel dd {
   margin: 0;
   font-size: 12.5px;
+  color: var(--text);
   min-width: 0;
   overflow-wrap: anywhere;
 }
@@ -875,18 +885,65 @@ details summary:hover {
   color: var(--text);
 }
 
+/* A field is a line of a config file, not a box on a form: the key on the
+ * left, the value on the right, and the value is plain text until the hand
+ * reaches it. The line the caret is in says so, and lights its key. */
 .field {
-  display: block;
-  margin-bottom: 14px;
+  display: grid;
+  grid-template-columns: 168px minmax(0, 1fr);
+  align-items: start;
+  gap: 3px 14px;
+  margin: 0;
+  padding: 2px 8px;
+  border-radius: var(--r-sm);
+  transition: background 0.15s var(--ease);
 }
 
-.field > span {
-  display: block;
-  margin-bottom: 5px;
-  font-size: 11.5px;
-  font-weight: 500;
-  letter-spacing: 0.03em;
+.field:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.field:focus-within {
+  background: rgba(255, 255, 255, 0.032);
+}
+
+.field > span:first-child {
+  margin: 0;
+  padding-top: 7px;
+  font-size: 12px;
+  letter-spacing: 0.01em;
+  text-transform: lowercase;
   color: var(--text-3);
+}
+
+.field:focus-within > span:first-child {
+  color: var(--accent);
+}
+
+/* What a field says after its value — a warning, a hint — keeps the value's
+ * column, so the keys read straight down the page. */
+.field > :nth-child(n + 3) {
+  grid-column: 2;
+}
+
+/* The value carries no box until the hand asks for one. */
+.field input:not([type="checkbox"]),
+.field select,
+.field textarea {
+  background: transparent;
+  border-color: transparent;
+}
+
+.field input:not([type="checkbox"]):hover,
+.field select:hover,
+.field textarea:hover {
+  border-color: var(--hairline);
+}
+
+.field input:not([type="checkbox"]):focus,
+.field select:focus,
+.field textarea:focus {
+  background: var(--void);
 }
 
 .field.tick,
@@ -894,21 +951,48 @@ label.tick {
   display: flex;
   align-items: center;
   gap: 9px;
+  padding: 3px 8px;
 }
 
 .field.tick > span,
 label.tick > span {
   margin: 0;
+  padding-top: 0;
   font-size: 12.5px;
   font-weight: 400;
   letter-spacing: 0;
   color: var(--text);
 }
 
+/* A set is a part of the file, so it takes a rule and a heading of its own. */
 .field.set {
-  margin-top: 18px;
-  padding-top: 16px;
+  display: block;
+  margin: 16px 0 0;
+  padding: 14px 8px 0;
   border-top: 1px solid var(--hairline);
+}
+
+.field.set > span:first-child {
+  display: block;
+  margin-bottom: 8px;
+  padding-top: 0;
+  text-transform: lowercase;
+  color: var(--text-3);
+}
+
+@media (max-width: 700px) {
+  .field {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .field > :nth-child(n + 3),
+  .field > * {
+    grid-column: 1;
+  }
+
+  .field > span:first-child {
+    padding-top: 4px;
+  }
 }
 
 .ticks {
@@ -994,8 +1078,26 @@ textarea {
 }
 
 input[type="checkbox"] {
-  width: auto;
-  accent-color: var(--accent);
+  appearance: none;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 1px solid var(--hairline-2);
+  border-radius: 3px;
+  background: var(--void);
+  cursor: pointer;
+}
+
+input[type="checkbox"]:hover {
+  border-color: var(--text-3);
+}
+
+input[type="checkbox"]:checked {
+  border-color: var(--accent);
+  background: var(--accent);
+  /* The ring is the well showing through, so the square reads as filled. */
+  box-shadow: inset 0 0 0 2px var(--void);
 }
 
 select {
@@ -1014,14 +1116,13 @@ select {
   display: inline-flex;
   width: fit-content;
   gap: 2px;
-  padding: 2px;
-  border-radius: var(--r-sm);
-  background: var(--void);
-  border: 1px solid var(--hairline);
+  padding: 0;
+  background: none;
+  border: 0;
 }
 
 .segmented button {
-  padding: 3px 11px;
+  padding: 4px 9px;
   border: 0;
   border-radius: 3px;
   background: none;
@@ -1505,20 +1606,18 @@ button.tool svg {
 
 .card {
   display: block;
-  padding: 14px 16px;
-  border-radius: var(--r-lg);
-  background: var(--surface);
-  border: 1px solid var(--hairline);
+  padding: 13px 16px;
+  border: 0;
+  border-left: 2px solid var(--hairline-2);
+  border-radius: 0 var(--r-md) var(--r-md) 0;
+  background: rgba(255, 255, 255, 0.024);
   color: var(--text);
-  transition: background 0.16s var(--ease), border-color 0.16s var(--ease),
-    transform 0.16s var(--ease);
+  transition: background 0.16s var(--ease), border-color 0.16s var(--ease);
 }
 
 .card:hover {
   text-decoration: none;
-  background: var(--surface-2);
-  border-color: var(--hairline-2);
-  transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .card .top {
@@ -1545,11 +1644,12 @@ button.tool svg {
 }
 
 .card.needs-you {
-  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
 }
 
 .card.needs-you:hover {
-  border-color: color-mix(in srgb, var(--accent) 70%, transparent);
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
 }
 
 /* The card is the link, so the button inside it presses with the card. */
