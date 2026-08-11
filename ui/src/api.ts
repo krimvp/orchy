@@ -123,6 +123,8 @@ export interface RunRow {
   question: string | null;
   cost: number | null;
   tokens: number | null;
+  /** The values the run took, as JSON. Two runs of one flow read apart by these. */
+  withJson: string | null;
 }
 
 export interface Ticket {
@@ -311,6 +313,8 @@ export const api = {
   writeFile: (path: string, content: string) =>
     call<{ written: boolean; path: string }>("/api/file", { method: "PUT", body: JSON.stringify({ path, content }) }),
   runs: () => call<RunRow[]>("/api/runs"),
+  /** The runs of one flow, newest first. */
+  flowRuns: (id: number) => call<RunRow[]>(`/api/flows/${id}/runs`),
   run: (runId: string) => call<{ row: RunRow | null; state: RunState }>(`/api/runs/${runId}`),
   trajectory: (runId: string) => call<Atif>(`/api/runs/${runId}/trajectory`),
   /** A value answers a gate. No value continues an ended run, from `from` or where it stood. */

@@ -274,6 +274,9 @@ export function Editor({ id }: { id: number }) {
         <button title={dirty && editable ? "A run reads the file, so this saves first." : undefined} onClick={run}>
           {dirty && editable ? "Save and run" : "Run"}
         </button>
+        <a className="button" href={`#/flows/${id}/runs`} title="Every run of this flow, and the next one">
+          Runs
+        </a>
         {dirty && (
           <span className="dim small" title="The file still holds the old flow until you save.">
             not saved yet

@@ -197,6 +197,13 @@ export function Flows() {
               >
                 {flow.schedule ? "Reschedule" : "Schedule"}
               </button>
+              <a
+                className="button"
+                href={`#/flows/${flow.id}/runs`}
+                title="Every run of this flow, and the next one"
+              >
+                Runs
+              </a>
               <a className="button" href={`#/flows/${flow.id}`}>
                 Edit
               </a>

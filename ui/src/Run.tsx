@@ -18,6 +18,8 @@ import { Trajectory } from "./Trajectory";
 export function Run({ runId }: { runId: string }) {
   const { events: all } = useNotices(runId);
   const { value, error, again } = useLoad(() => api.run(runId), [runId]);
+  // The flow this run came from, so the other runs of it are one click away.
+  const flows = useLoad(() => api.flows(), []);
   const [chosen, setChosen] = useState<string>();
   // Once a person picks a step, the page stops following the run for them.
   const picked = useRef(false);
@@ -46,6 +48,7 @@ export function Run({ runId }: { runId: string }) {
   if (!value) return <Loading lines={4} />;
 
   const { state: held, row } = value;
+  const sibling = row?.path ? flows.value?.find((one) => one.path === row.path) : undefined;
   // A daemon that died mid-run leaves a state that still says running. The
   // index reconciles at boot, and this guard holds the same line meanwhile.
   const state: RunState =
@@ -64,6 +67,11 @@ export function Run({ runId }: { runId: string }) {
       <h1>
         {state.flow.name}
         <span className={`pill big ${state.status}`}>{state.status}</span>
+        {sibling && (
+          <a className="button" href={`#/flows/${sibling.id}/runs`} title="Every run of this flow">
+            Other runs
+          </a>
+        )}
       </h1>
       <p className="note mono small" style={{ "--i": 1 } as CSSProperties}>
         {runId}

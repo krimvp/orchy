@@ -35,7 +35,10 @@ export function Runs() {
             <a key={run.runId} className="card needs-you" href={`#/runs/${run.runId}`}>
               <div className="top">
                 <span className="pill waiting">your turn</span>
-                <span className="name">{run.flowName}</span>
+                <span className="name">
+                  {run.flowName}
+                  {taken(run) && <span className="with">{taken(run)}</span>}
+                </span>
                 <span className="dim small">{when(run.startedAt)}</span>
               </div>
               <p className="ask">{run.question ?? `The step ${run.waitingFor ?? ""} waits for an answer.`}</p>
@@ -51,7 +54,10 @@ export function Runs() {
             <a key={run.runId} className="card" href={`#/runs/${run.runId}`}>
               <div className="top">
                 <span className="pill running">on the way</span>
-                <span className="name">{run.flowName}</span>
+                <span className="name">
+                  {run.flowName}
+                  {taken(run) && <span className="with">{taken(run)}</span>}
+                </span>
                 <span className="dim small">{when(run.startedAt)}</span>
               </div>
               <p className="note" style={{ margin: 0 }}>
@@ -119,7 +125,10 @@ export function Runs() {
                 <span>
                   <span className={`pill ${run.status}`}>{run.status}</span>
                 </span>
-                <span className="name">{run.flowName}</span>
+                <span className="name">
+                  {run.flowName}
+                  {taken(run) && <span className="with">{taken(run)}</span>}
+                </span>
                 <span className="dim">{when(run.startedAt)}</span>
                 <span className="dim">{took(run)}</span>
                 <span className="dim">{run.cost ? `$${run.cost.toFixed(4)}` : "—"}</span>
@@ -155,6 +164,24 @@ export function when(at: string): string {
 export function took(run: { startedAt: string; endedAt: string | null }): string {
   if (!run.endedAt) return "—";
   return length(new Date(run.endedAt).getTime() - new Date(run.startedAt).getTime());
+}
+
+/**
+ * `issue 41 · repo orchy` — the values a run took, on one line. Two runs of one
+ * flow differ by these and by nothing else a list can show. A row that holds no
+ * values says nothing, and JSON that will not parse reads as it stands.
+ */
+export function taken(run: { withJson: string | null }): string | undefined {
+  if (!run.withJson) return undefined;
+  try {
+    const values = JSON.parse(run.withJson) as Record<string, unknown>;
+    const said = Object.entries(values)
+      .map(([key, value]) => `${key} ${typeof value === "string" ? value : JSON.stringify(value)}`)
+      .join(" · ");
+    return said === "" ? undefined : said;
+  } catch {
+    return run.withJson;
+  }
 }
 
 /** `deleted docs/x, added docs/y`. The record names the verb, and not only the path. */

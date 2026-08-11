@@ -27,7 +27,8 @@ create table if not exists run (
   waitingFor text,
   question text,
   cost real,
-  tokens integer
+  tokens integer,
+  withJson text
 );
 create table if not exists event (
   id integer primary key,
@@ -69,6 +70,11 @@ export interface RunRow {
   question: string | null;
   cost: number | null;
   tokens: number | null;
+  /**
+   * The values the run took, as JSON. Two runs of one flow differ by these and
+   * by nothing else a list can show, so the list shows them.
+   */
+  withJson: string | null;
 }
 
 /**
@@ -108,6 +114,13 @@ export function open(file: string) {
   const db = new DatabaseSync(file);
   db.exec("pragma journal_mode = wal");
   db.exec(SCHEMA);
+
+  // `create table if not exists` leaves a table that is already there alone, so
+  // a column added later arrives here. `index()` fills it from the state on disk.
+  const columns = db.prepare("pragma table_info(run)").all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === "withJson")) {
+    db.exec("alter table run add column withJson text");
+  }
 
   const all = <T>(sql: string, ...values: unknown[]): T[] =>
     db.prepare(sql).all(...(values as never[])) as T[];
@@ -173,17 +186,22 @@ export function open(file: string) {
     markScheduled: (flowId: number, at: string): void =>
       void db.prepare("update schedule set lastAt = ? where flowId = ?").run(at, flowId),
 
-    runs: (limit = KEPT): RunRow[] => all<RunRow>("select * from run order by startedAt desc limit ?", limit),
+    /** Every run, or every run of one flow file, newest first. */
+    runs: (path?: string, limit = KEPT): RunRow[] =>
+      path
+        ? all<RunRow>("select * from run where path = ? order by startedAt desc limit ?", path, limit)
+        : all<RunRow>("select * from run order by startedAt desc limit ?", limit),
 
     run: (runId: string): RunRow | undefined => one<RunRow>("select * from run where runId = ?", runId),
 
     saveRun(row: RunRow): void {
       db.prepare(
-        `insert into run (runId, flowName, path, status, startedAt, endedAt, waitingFor, question, cost, tokens)
-         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `insert into run (runId, flowName, path, status, startedAt, endedAt, waitingFor, question, cost, tokens, withJson)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          on conflict(runId) do update set
            status = excluded.status, endedAt = excluded.endedAt, waitingFor = excluded.waitingFor,
-           question = excluded.question, cost = excluded.cost, tokens = excluded.tokens`,
+           question = excluded.question, cost = excluded.cost, tokens = excluded.tokens,
+           withJson = excluded.withJson`,
       ).run(
         row.runId,
         row.flowName,
@@ -195,6 +213,7 @@ export function open(file: string) {
         row.question,
         row.cost,
         row.tokens,
+        row.withJson,
       );
     },
 
@@ -265,6 +284,7 @@ export function rowOf(state: RunState, path: string | null, spend?: { cost?: num
     question: state.question ?? null,
     cost: spend?.cost ?? null,
     tokens: spend?.tokens ?? null,
+    withJson: state.with ? JSON.stringify(state.with) : null,
   };
 }
 

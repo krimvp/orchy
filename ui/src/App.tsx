@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, unsaved, useLoad, useNotices } from "./api";
 import { Editor } from "./Editor";
+import { FlowRuns } from "./FlowRuns";
 import { Flows } from "./Flows";
 import { Run } from "./Run";
 import { Runs } from "./Runs";
@@ -132,6 +133,8 @@ export function App() {
       <main key={parts.join("/")}>
         {parts[0] === "runs" && parts[1] ? (
           <Run runId={parts[1]} />
+        ) : parts[0] === "flows" && parts[1] && parts[2] === "runs" ? (
+          <FlowRuns id={Number(parts[1])} />
         ) : parts[0] === "flows" && parts[1] ? (
           <Editor id={Number(parts[1])} />
         ) : parts[0] === "flows" ? (

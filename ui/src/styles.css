@@ -480,6 +480,20 @@ ul.list li::before {
   white-space: nowrap;
 }
 
+/* The values a run took, beside the flow it belongs to. Two runs of one flow
+ * read apart by these, so they follow the name and never crowd it. */
+.line .with,
+.card .with {
+  margin-left: 10px;
+  color: var(--text-3);
+  font-weight: 400;
+}
+
+.card .name .with {
+  display: block;
+  margin: 0;
+}
+
 .line .dim {
   color: var(--text-2);
   font-size: 12px;

@@ -314,6 +314,14 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
 
     ["GET", "/api/runs", () => daemon.store.runs()],
 
+    // The runs of one flow, newest first. Several runs of one flow go at once,
+    // each on its own values, and this is where a person reads them together.
+    [
+      "GET",
+      "/api/flows/:id/runs",
+      (parameters) => daemon.store.runs(flowRow(daemon, parameters.id as string).path),
+    ],
+
     [
       "GET",
       "/api/runs/:id",

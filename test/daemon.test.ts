@@ -475,6 +475,7 @@ test("the index drops the events of a run that falls behind the list, and keeps 
       question: null,
       cost: null,
       tokens: null,
+      withJson: null,
     });
     store.addEvent(runId, { type: "run_start", runId });
   }
@@ -723,6 +724,51 @@ test("a webhook starts the flow from a POST, and a wrong token starts nothing", 
     await site.call("/api/flows/1/hook", { method: "DELETE" });
     const gone = await site.call(`/api/hooks/${token}`, { method: "POST", body: "{}" });
     assert.equal(gone.code, 400);
+  } finally {
+    await site.close();
+  }
+});
+
+test("two runs of one flow go at once, each on its own values", async () => {
+  const site = await running(project(TAKING));
+  try {
+    await site.call("/api/flows", { method: "POST", body: JSON.stringify({ path: "flow.yaml" }) });
+    await site.call("/api/flows/1/runs", { method: "POST", body: JSON.stringify({ with: { issue: 7 } }) });
+    await site.call("/api/flows/1/runs", { method: "POST", body: JSON.stringify({ with: { issue: 9 } }) });
+
+    const runs = async () => (await site.call("/api/runs")).body as Array<{ status: string; withJson: string }>;
+    await until(async () => (await runs()).filter((run) => run.status === "done").length === 2);
+
+    // The row of a run keeps what that run took, so a list tells the two apart.
+    const took = (await runs()).map((run) => (JSON.parse(run.withJson) as { issue: number }).issue).sort();
+    assert.deepEqual(took, [7, 9]);
+  } finally {
+    await site.close();
+  }
+});
+
+test("the daemon gives back the runs of one flow, and not the runs of another", async () => {
+  const root = project();
+  writeFileSync(
+    join(root, "other.yaml"),
+    formatFlow({
+      name: "other",
+      steps: [{ id: "only", kind: "call", module: "count.ts", returns: NUMBER }],
+    } as never),
+  );
+  const site = await running(root);
+  try {
+    await site.call("/api/flows", { method: "POST", body: JSON.stringify({ path: "flow.yaml" }) });
+    await site.call("/api/flows", { method: "POST", body: JSON.stringify({ path: "other.yaml" }) });
+    await site.call("/api/flows/1/runs", { method: "POST", body: "{}" });
+    await site.call("/api/flows/2/runs", { method: "POST", body: "{}" });
+    await until(async () => ((await site.call("/api/runs")).body as unknown[]).length === 2);
+
+    const mine = (await site.call("/api/flows/2/runs")).body as Array<{ flowName: string }>;
+    assert.deepEqual(
+      mine.map((run) => run.flowName),
+      ["other"],
+    );
   } finally {
     await site.close();
   }

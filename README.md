@@ -201,6 +201,12 @@ form built from its contract, read the value, the cost, and the changed files
 of every step, open the trajectory of every run of every step, and edit a flow
 as a drawing.
 
+One flow runs many times. Every run of a flow reads together on its own page,
+newest first, and a run starts from there without leaving it — so a person
+starts one run on issue 41 and the next on issue 42, and watches both. Four
+runs work at once and the rest wait in the queue. Each run keeps the values it
+took, so every list tells one run of a flow from another.
+
 A flow also runs by itself. A schedule fires it on a pace, at most every 15
 minutes, and a hook starts it from a POST whose body is the values the flow
 takes. Both start a run through the same checked door as the button, so each
