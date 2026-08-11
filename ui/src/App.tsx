@@ -65,7 +65,7 @@ function useAttention() {
       link.rel = "icon";
       document.head.appendChild(link);
     }
-    link.href = favicon(waiting.length > 0 ? "#e0a542" : running.length > 0 ? "#4c8f5f" : "#8a8a8a");
+    link.href = favicon(waiting.length > 0 ? "#d3a04c" : running.length > 0 ? "#8fb573" : "#6b6e75");
   }, [waiting.length, running.length]);
 
   // One notice for each run that starts to wait or ends, sent as it happens.
@@ -97,8 +97,14 @@ export function App() {
   return (
     <>
       <nav>
+        {/* The three lamps of a window. They stay dark until a hand comes near. */}
+        <span className="lights" aria-hidden="true">
+          <i />
+          <i />
+          <i />
+        </span>
         <a className="brand" href="#/">
-          Orchy
+          orchy
         </a>
         <div className="tabs">
           <a href="#/" className={onRuns ? "here" : ""}>

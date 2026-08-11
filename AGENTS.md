@@ -85,8 +85,10 @@ the daemon serves that directory.
 - The tool list, the harness list, and the operators of a match come from `GET
   /api/health`, for the same reason. A set that the page must draw goes there.
   The answer names the set and holds no rule: `validate()` still refuses.
-- `styles.css` holds every colour as a token, once for light and once for dark.
-  A component names a token. No component names a colour.
+- The page is a terminal: a title bar, one dark well under it, one monospaced
+  typeface, and a hairline wherever two things meet. `styles.css` holds every
+  colour as a token. A terminal is dark, so there is one set of tokens and no
+  second theme. A component names a token. No component names a colour.
 - Motion uses the two curves that the stylesheet declares, and it carries
   meaning: a step that runs pulses, and a cycle keeps moving. Every animation
   stops under `prefers-reduced-motion`, and nothing is invisible when it does.
