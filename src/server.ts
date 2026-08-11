@@ -1,7 +1,7 @@
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { extname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import type { Daemon } from "./daemon.ts";
 import { type Flow, OPERATORS, validate } from "./flow.ts";
 import { ADAPTERS, TOOLS } from "./harness.ts";
@@ -100,6 +100,42 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
       (parameters) => {
         daemon.store.removeFlow(Number(parameters.id));
         return { removed: true };
+      },
+    ],
+
+    // The editor opens the files a flow names: a prompt, a module, an inner
+    // flow. Every step acts in the root, so a file above it is another
+    // project, and the same line that guards a flow file guards these.
+    [
+      "GET",
+      "/api/file",
+      (_p, _b, request) => {
+        const root = resolve(daemon.root);
+        const wanted = new URL(request.url ?? "/", "http://orchy").searchParams.get("path") ?? "";
+        const path = resolve(root, wanted);
+        if (!under(root, path)) {
+          throw new Error(`the file at "${path}" is outside the root "${root}"`);
+        }
+        if (!existsSync(path)) return { path, exists: false, content: "" };
+        // A file this big is not a prompt, and the editor is not the tool for it.
+        if (statSync(path).size > 1_000_000) throw new Error(`the file at "${path}" is too large for this editor`);
+        return { path, exists: true, content: readFileSync(path, "utf8") };
+      },
+    ],
+
+    [
+      "PUT",
+      "/api/file",
+      (_p, body) => {
+        const root = resolve(daemon.root);
+        const path = resolve(root, String(body.path ?? ""));
+        if (!under(root, path)) {
+          throw new Error(`the file at "${path}" is outside the root "${root}"`);
+        }
+        // A prompt for a new step names a directory that is not there yet.
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(path, String(body.content ?? ""));
+        return { written: true, path };
       },
     ],
 
