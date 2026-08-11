@@ -44,7 +44,8 @@ _Avoid_: Plugin, module, block, primitive
 **Prompt**:
 What an agent step tells the model. It lives in a file beside the flow. A name
 in braces, such as `{{ issue }}`, takes a value, and a name that nothing
-supplies fails the step.
+supplies fails the step. The record of the step keeps the text that Orchy really
+sent, because neither the file nor the values alone say it.
 _Avoid_: Instruction, template, system message
 
 **Gate**:

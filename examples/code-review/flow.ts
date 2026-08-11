@@ -6,6 +6,8 @@ import { agent, flow } from "../../src/index.ts";
  * code until it approves, or until the limit sends the decision to a person.
  */
 export default flow("code-and-review", {
+  harness: "claude",
+  model: "sonnet",
   steps: [
     agent({
       id: "code",

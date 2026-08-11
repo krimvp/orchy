@@ -244,9 +244,16 @@ refused, and the message names the directory.
 .orchy/
 ├── index.db          the daemon builds this from the runs, and rebuilds it
 └── runs/<run id>/
-    ├── state.json        the flow, the value of every step, the cycle counts
+    ├── state.json        the flow, the prompt and the value of every step,
+    │                     the value the flow returns, and the cycle counts
     └── trajectory.json   one ATIF v1.7 trajectory, a child for each agent step
 ```
+
+`orchy runs` lists them, newest first.
+
+`state.json` holds `value`, which is what the flow produced: the value of the
+step it ends with. It holds the `prompt` of every agent step as well, filled in
+with the values of the run, so a reader knows what the step was really asked.
 
 The trajectory holds the tool calls, the reasoning, the tokens, and the cost of
 every step, including the runs a cycle threw away. ATIF is a standard format,
@@ -298,6 +305,38 @@ node src/cli.ts run flow.yaml
 A run needs `ajv`, `yaml`, and the Pi SDK. Add `@sinclair/typebox` only to
 write a flow in TypeScript. A flow in YAML holds plain JSON Schema and needs
 nothing.
+
+### A model comes from the harness
+
+Orchy holds no credential and no model catalogue. Each harness reads its own,
+so a flow runs only where its harness can reach the model it names.
+
+**Pi** reads `~/.pi/agent/auth.json` for a key, and `~/.pi/agent/models.json`
+for a provider it does not ship. A local model, an Ollama server, or any
+OpenAI-compatible endpoint goes in that file:
+
+```json
+{
+  "providers": {
+    "ollama": {
+      "baseUrl": "https://ollama.com/v1",
+      "api": "openai-completions",
+      "apiKey": "$OLLAMA_API_KEY",
+      "models": [{ "id": "glm-5.2" }]
+    }
+  }
+}
+```
+
+That name is the one a flow writes: `model: ollama/glm-5.2`. Run
+`npx pi --list-models` to see what Pi reaches, and `npx pi auth check --provider
+<name>` to see whether it can reach it.
+
+**Claude Code** reads the account that `claude` is logged in to. A flow writes a
+plain name: `model: opus`.
+
+A flow that names no model takes the default of its harness, and the default of
+Pi is a model that most machines cannot reach. So name one.
 
 The page needs a build, and its packages live under `ui/` and reach no run.
 

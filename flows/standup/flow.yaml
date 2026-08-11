@@ -1,8 +1,18 @@
 # What happened in this repository in the last day, told for a standup.
-# A deterministic step reads git, so no model spends tokens on it.
+# A deterministic step reads git, so no model spends tokens on it, and the
+# note rests on the patch and not on a commit subject alone.
+#
+#   orchy run flows/standup/flow.yaml --with '{}'
+#   orchy run flows/standup/flow.yaml --with '{"since":"3 days ago"}'
+#
+# The window is one day when the run supplies none.
 name: standup
+harness: pi
+model: ollama/gpt-oss:120b
 workspace: { kind: git, path: . }
-budget: 2
+takes:
+  type: object
+  properties: { since: { type: string } }
 
 steps:
   - id: log
@@ -10,9 +20,10 @@ steps:
     module: log.ts
     returns:
       type: object
-      required: [since, commits]
+      required: [since, commits, diff]
       properties:
         since: { type: string }
+        diff: { type: string }
         commits:
           type: array
           items:

@@ -1,7 +1,19 @@
 # Turn a range of commits into release notes a reader understands.
-# A deterministic step reads git, so no model spends tokens on it.
+# A deterministic step reads git, so no model spends tokens on it, and the
+# notes rest on the patch and not on a commit subject alone.
+#
+#   orchy run examples/release-notes/flow.yaml --with '{}'
+#   orchy run examples/release-notes/flow.yaml --with '{"range":"v0.1.0..HEAD"}'
+#
+# The range is everything after the last tag when the run supplies none, and
+# the whole history of a clone that holds no tag.
 name: release-notes
+harness: pi
+model: ollama/glm-5.2
 workspace: { kind: git, path: . }
+takes:
+  type: object
+  properties: { range: { type: string } }
 
 steps:
   - id: log
@@ -9,9 +21,10 @@ steps:
     module: log.ts
     returns:
       type: object
-      required: [range, commits]
+      required: [range, commits, diff]
       properties:
         range: { type: string }
+        diff: { type: string }
         commits:
           type: array
           items:

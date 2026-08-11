@@ -1,7 +1,8 @@
 # Three estimators who cannot see each other, one spread, one person.
 name: planning-poker
+harness: pi
+model: ollama/glm-5.2
 workspace: { kind: git, path: . }
-budget: 5
 parallel: 3
 takes:
   type: object

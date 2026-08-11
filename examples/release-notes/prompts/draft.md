@@ -1,4 +1,5 @@
-An earlier step gave a list of commits.
+An earlier step gave the commits of the range and the patch that goes with
+them. Read the patch, and not the subjects alone.
 
 Write release notes for a reader who uses this project and did not read the
 commits.
@@ -7,7 +8,10 @@ commits.
 - Lead each note with what a reader can now do, or no longer must do.
 - Name a fix by the fault it removes, not by the code it touched.
 - Leave out a change that no reader can see, such as a rename inside a file.
-- Read the code when a commit subject does not say enough.
+
+Name only what the patch shows. The patch stops at its length when the range
+is long, so read the code for the part it does not hold. Do not name a
+feature, an option, or a field that you did not read.
 
 If a check step gave findings, correct every one of them.
 

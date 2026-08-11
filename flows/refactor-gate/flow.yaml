@@ -1,5 +1,7 @@
 # An agent proposes, a person disposes, and only then does anything move.
 name: refactor-gate
+harness: claude
+model: sonnet
 workspace: { kind: git, path: . }
 budget: 10
 takes:
@@ -46,4 +48,6 @@ steps:
       required: [summary, files]
       properties:
         summary: { type: string }
-        files: { type: array, items: { type: string } }
+        # A step that edits eight files and answers with an empty list breaks
+        # its contract, and the run says so. It answered one once.
+        files: { type: array, items: { type: string }, minItems: 1 }

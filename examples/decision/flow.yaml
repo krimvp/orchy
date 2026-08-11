@@ -1,6 +1,8 @@
 # Three advisors argue a decision from fixed stances, then one brief, then a
 # person decides. It touches no files and needs no workspace.
 name: decision
+harness: pi
+model: ollama/glm-5.2
 parallel: 3
 
 steps:
@@ -8,6 +10,15 @@ steps:
     kind: agent
     prompt: prompts/advise.md
     tools: [read]
+    # The stance is a value, so one prompt carries the rules and each member
+    # carries only what differs. A member prompt that sent the agent to read
+    # the rules from a file found none, and invented an answer.
+    takes:
+      type: object
+      required: [stance, argue]
+      properties:
+        stance: { type: string }
+        argue: { type: string }
     returns: &opinion
       type: object
       required: [stance, position, risks, confidence]
@@ -17,9 +28,9 @@ steps:
         risks: { type: array, items: { type: string } }
         confidence: { type: number, minimum: 0, maximum: 1 }
     fanout:
-      - { name: builder, prompt: prompts/builder.md }
-      - { name: skeptic, prompt: prompts/skeptic.md }
-      - { name: operator, prompt: prompts/operator.md }
+      - { name: builder, with: { stance: builder, argue: "you argue for the change. Ask what the project gains, and what it loses by waiting." } }
+      - { name: skeptic, with: { stance: skeptic, argue: "you argue against the change. Ask what breaks, what it costs to reverse, and who carries the cost." } }
+      - { name: operator, with: { stance: operator, argue: "you run this in production at three in the morning. Ask what the failure looks like, who sees it first, and what they can do about it." } }
 
   - id: brief
     kind: agent

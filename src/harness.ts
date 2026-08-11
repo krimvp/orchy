@@ -60,7 +60,8 @@ export interface AgentResult {
  * the trajectory holds the whole of it, and a note is short enough to read.
  */
 export interface Note {
-  kind: "text" | "reasoning" | "tool" | "result";
+  /** `prompt` is what the step asked, after Orchy read its file and filled it. */
+  kind: "prompt" | "text" | "reasoning" | "tool" | "result";
   text: string;
 }
 

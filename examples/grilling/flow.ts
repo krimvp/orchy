@@ -7,6 +7,8 @@ import { agent, flow, gate } from "../../src/index.ts";
  * designed Orchy.
  */
 export default flow("grilling", {
+  harness: "claude",
+  model: "sonnet",
   workspace: { kind: "git", path: "." },
   steps: [
     agent({

@@ -1,6 +1,8 @@
 # The panel is another file, so the same reviewers serve any flow. The cycle
 # hangs on the step the inner flow ends with.
 name: ship
+harness: claude
+model: sonnet
 workspace: { kind: git, path: . }
 budget: 10
 takes:

@@ -9,12 +9,26 @@ import {
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import { type Metrics, SCHEMA_VERSION, type Step, type Trajectory, totalMetrics } from "./atif.ts";
-import { type AgentRequest, type Harness, MODELS, SUPPLIES, type ToolName, notesOf } from "./harness.ts";
+import { type AgentRequest, type Harness, MODELS, SUPPLIES, type ToolName, type Watch, notesOf } from "./harness.ts";
 import { tail } from "./tail.ts";
 
 const SUBMIT = "submit_result";
 
 const REMIND = `You ended without calling ${SUBMIT}, so the work you just did was not recorded. Call it once now, with that result.`;
+
+/**
+ * How many times a step may offer a value that its contract refuses. Pi checks
+ * the value itself and asks again, so a contract that no value satisfies makes
+ * a model call and call and call. Invariant 4 says a flow cannot run forever,
+ * and a cycle limit does not reach inside one step. This is that limit.
+ */
+const REFUSALS = 8;
+
+/**
+ * What Pi says when it refuses a value. A session line is JSON, so the quotes
+ * around the name of the tool are escaped in it. This matches either form.
+ */
+const REFUSED = "Validation failed for tool";
 
 export const pi: Harness = {
   async run(request, watch) {
@@ -74,22 +88,33 @@ export const pi: Harness = {
     });
 
     // Pi writes its session one line at a time, so the record of the step is
-    // also the report of it.
-    const stop = watch ? tail(() => fileOf(sessionManager), (line) => report(line, watch)) : undefined;
+    // also the report of it. The tail runs whether or not a caller watches,
+    // because the count of refused values comes from the same lines.
+    let refusals = 0;
+    const stop = tail(
+      () => fileOf(sessionManager),
+      (line) => {
+        if (line.includes(REFUSED)) refusals += 1;
+        // The step has offered value after value, and the contract refuses each
+        // one. Nothing here will change, so stop instead of running for ever.
+        if (refusals >= REFUSALS) void session.abort();
+        if (watch) report(line, watch);
+      },
+    );
 
     try {
       await session.prompt(request.prompt);
       // A model that answers in prose has done the work and skipped the last
       // step of it, which is the common way a step fails here. One reminder
       // recovers the value. A second never has, so the step fails after it.
-      if (value === undefined) await session.prompt(REMIND);
+      if (value === undefined && refusals < REFUSALS) await session.prompt(REMIND);
     } finally {
-      stop?.();
+      stop();
       session.dispose();
     }
 
     const file = sessionManager.getSessionFile();
-    if (value === undefined) throw new Error(refused(request, file));
+    if (value === undefined) throw new Error(refused(request, file, refusals));
     return { value, trajectory: file, cost: costOf(file) };
   },
 
@@ -167,11 +192,50 @@ export function costOf(path: string | undefined): number | undefined {
  * did instead, and what to do about it. The step id and the model come from the
  * request, because the session file names neither.
  */
-function refused(request: AgentRequest, path: string | undefined): string {
+function refused(request: AgentRequest, path: string | undefined, refusals = 0): string {
   const named = request.model ? `The model "${request.model}"` : "The model";
+  // A provider that refuses the request is not a model that will not call a
+  // tool. The two used to wear one face, and the advice was wrong for one.
+  const broke = path ? errorOf(path) : undefined;
+  if (broke) {
+    return `step "${request.step}" reached no answer. ${named} answered: ${broke}. Read the message of the provider: this is not the step, and not the contract.`;
+  }
+  if (refusals >= REFUSALS) {
+    const why = path ? lastRefusal(path) : "";
+    return `step "${request.step}" offered ${refusals} values, and the contract refused every one${why ? `: ${why}` : ""}. Check that "returns" describes a value that exists.`;
+  }
   const said = path ? lastText(path) : "";
   const instead = said ? ` ${named} answered in prose instead: "${said}".` : "";
   return `step "${request.step}" ended without a call to ${SUBMIT}, and again when reminded.${instead} Give the step a cycle on "failed", or name a model that calls a tool.`;
+}
+
+/** What a provider said when it refused the request, or nothing when it did not. */
+function errorOf(path: string): string | undefined {
+  for (const entry of (messages(path) ?? []).slice().reverse()) {
+    const message = entry.message as PiMessage | undefined;
+    if (message?.stopReason === "error" && message.errorMessage) return cut(message.errorMessage);
+  }
+  return undefined;
+}
+
+/** Why the contract refused the last value the step offered. */
+function lastRefusal(path: string): string {
+  for (const entry of (messages(path) ?? []).slice().reverse()) {
+    const message = entry.message as PiMessage | undefined;
+    if (message?.role !== "toolResult") continue;
+    const text = textOf(message);
+    // The reason, and not the value that carried it: the value is in the record.
+    if (text.includes(REFUSED)) {
+      const why = text.replace(/^Validation failed for tool[^\n]*\n?/, "").split("Received arguments")[0] ?? "";
+      return cut(why.replace(/^\s*-\s*/gm, ""));
+    }
+  }
+  return "";
+}
+
+function cut(text: string): string {
+  const flat = text.trim().replace(/\s+/g, " ");
+  return flat.length > 200 ? `${flat.slice(0, 200)}…` : flat;
 }
 
 /** The last thing the model said, short enough to sit inside an error. */
@@ -196,7 +260,7 @@ function fileOf(sessionManager: ReturnType<typeof SessionManager.create>): strin
 }
 
 /** One line of the session, as notes. A line that says nothing reports nothing. */
-function report(line: string, watch: (note: { kind: "text" | "reasoning" | "tool" | "result"; text: string }) => void) {
+function report(line: string, watch: Watch) {
   let entry: Record<string, unknown>;
   try {
     entry = JSON.parse(line) as Record<string, unknown>;
@@ -219,6 +283,8 @@ interface PiContent {
 
 interface PiMessage {
   role?: string;
+  stopReason?: string;
+  errorMessage?: string;
   content?: string | PiContent[];
   model?: string;
   toolCallId?: string;

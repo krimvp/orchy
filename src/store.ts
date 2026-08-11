@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { RunEvent, RunState } from "./run.ts";
+import { alive, type RunEvent, type RunState } from "./run.ts";
 
 /**
  * ADR 0008: the state on disk is the run. This database is an index of it, and
@@ -232,10 +232,11 @@ export function open(file: string) {
       for (const runId of directories(runs)) {
         const state = stateAt(join(runs, runId, "state.json"));
         if (!state) continue;
-        // The daemon starts here and drives no run yet, so nothing is running.
-        // The state on disk is the run, so the truth goes there, not only in
-        // this index — a page that reads the state must hear the same status.
-        if (state.status === "running") {
+        // A run that says it runs, and whose process has gone, is a run that
+        // died. A run whose process is alive belongs to that process: the state
+        // on disk is the run, and this index must never rewrite a live one.
+        // ADR 0008.
+        if (state.status === "running" && !alive(state.pid)) {
           state.status = "stopped";
           writeFileSync(join(runs, runId, "state.json"), JSON.stringify(state, null, 2));
         }

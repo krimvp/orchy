@@ -1,8 +1,17 @@
 # Read the branch, tell the reviewer what it does. The diff comes from git,
-# so no model spends tokens listing files.
+# so no model spends tokens listing files, and no model invents a change.
+#
+#   orchy run flows/pr-describe/flow.yaml --with '{}'
+#   orchy run flows/pr-describe/flow.yaml --with '{"base":"origin/main"}'
+#
+# The base is "main" when the run supplies none.
 name: pr-describe
+harness: pi
+model: ollama/glm-5.2
 workspace: { kind: git, path: . }
-budget: 3
+takes:
+  type: object
+  properties: { base: { type: string } }
 
 steps:
   - id: diff
@@ -10,11 +19,12 @@ steps:
     module: diff.ts
     returns:
       type: object
-      required: [base, files, subjects]
+      required: [base, files, subjects, diff]
       properties:
         base: { type: string }
         files: { type: array, items: { type: string } }
         subjects: { type: array, items: { type: string } }
+        diff: { type: string }
 
   - id: draft
     kind: agent

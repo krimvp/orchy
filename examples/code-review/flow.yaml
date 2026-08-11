@@ -1,6 +1,8 @@
 # The same flow as flow.ts. A test keeps the two the same, because the API, a
 # file, and a graphical editor must all produce one flow.
 name: code-and-review
+harness: claude
+model: sonnet
 
 steps:
   - id: code

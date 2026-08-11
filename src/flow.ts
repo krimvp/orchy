@@ -415,11 +415,25 @@ export async function expandFlows(flow: Flow, load: (path: string) => Promise<Fl
     }
 
     const inner = expandFanout(await expandFlows(await load(step.flow), load));
-    // A budget belongs to the run, so no step can carry one. Expansion would
-    // drop it, and a budget that looks enforced and is not costs more than none.
+    // A budget and a width belong to the run, so no step can carry one.
+    // Expansion would drop it, and a rule that looks enforced and is not costs
+    // more than a missing rule. `harness` and `model` ride on each step below,
+    // because a step holds both.
     if (inner.budget !== undefined) {
       throw new Error(
         `the flow at "${step.flow}" has a budget, and step "${step.id}" holds it. A budget belongs to the run, so only the flow that the run starts sets one.`,
+      );
+    }
+    if (inner.parallel !== undefined) {
+      throw new Error(
+        `the flow at "${step.flow}" runs ${inner.parallel} steps at a time, and step "${step.id}" holds it. A width belongs to the run, so only the flow that the run starts sets one.`,
+      );
+    }
+    // One run acts in one workspace, so a flow that names the same one reads as
+    // a flow that stands alone as well. A flow that names another one does not.
+    if (inner.workspace && JSON.stringify(inner.workspace) !== JSON.stringify(flow.workspace)) {
+      throw new Error(
+        `the flow at "${step.flow}" works in ${JSON.stringify(inner.workspace)}, and step "${step.id}" holds it. One run works in one workspace, so an inner flow names the same one or none.`,
       );
     }
     const takes = takesProblem(inner, step.with, `step "${step.id}"`);
@@ -447,6 +461,14 @@ export async function expandFlows(flow: Flow, load: (path: string) => Promise<Fl
         if (step.with) moved.with = { ...step.with, ...moved.with };
         // A promise that expansion drops is a rule that looks enforced and is not.
         if (inner.changes) moved.changes ??= inner.changes;
+      }
+      // The harness and the model of the inner flow ride on each step it holds.
+      // Expansion drops the inner flow, so a step that kept neither would run on
+      // the harness of the outer flow, and spend the wrong money on the wrong
+      // provider. The step keeps what only it names, which is the narrower.
+      if (moved.kind === "agent") {
+        if (inner.harness) moved.harness ??= inner.harness;
+        if (inner.model) moved.model ??= inner.model;
       }
       // A cycle inside a flow stays inside it, and so does a computed fanout.
       const cycle = cycleOf(moved);
@@ -534,12 +556,10 @@ function shapeProblems(flow: Flow): string[] {
   }
   problems.push(...workspaceProblems(flow.workspace));
   problems.push(...changesProblems("the flow", flow.changes));
-  if (flow.takes !== undefined && !isSchema(flow.takes)) {
-    problems.push(`the flow takes ${JSON.stringify(flow.takes)}, which is not JSON Schema`);
-  }
-  if (flow.returns !== undefined && !isSchema(flow.returns)) {
-    problems.push(`the flow returns ${JSON.stringify(flow.returns)}, which is not JSON Schema`);
-  }
+  const takesFault = flow.takes === undefined ? undefined : schemaFault(flow.takes);
+  if (takesFault) problems.push(`the flow takes ${JSON.stringify(flow.takes)}, ${takesFault}`);
+  const returnsFault = flow.returns === undefined ? undefined : schemaFault(flow.returns);
+  if (returnsFault) problems.push(`the flow returns ${JSON.stringify(flow.returns)}, ${returnsFault}`);
   if (flow.budget !== undefined && !(typeof flow.budget === "number" && flow.budget > 0)) {
     problems.push(`the flow has a budget of ${JSON.stringify(flow.budget)}. A budget is a number of dollars above zero.`);
   }
@@ -566,13 +586,13 @@ function shapeProblems(flow: Flow): string[] {
     }
     const returns = (step as GateStep).returns;
     // A missing one already has its own problem, so this one speaks for a wrong one.
-    if (step.kind !== "flow" && returns !== undefined && !isSchema(returns)) {
-      problems.push(`step "${step.id}" returns "${JSON.stringify(returns)}", which is not JSON Schema`);
+    const returnsWrong = step.kind === "flow" || returns === undefined ? undefined : schemaFault(returns);
+    if (returnsWrong) {
+      problems.push(`step "${step.id}" returns "${JSON.stringify(returns)}", ${returnsWrong}`);
     }
     const takes = (step as CallStep).takes;
-    if (takes !== undefined && !isSchema(takes)) {
-      problems.push(`step "${step.id}" takes ${JSON.stringify(takes)}, which is not JSON Schema`);
-    }
+    const takesWrong = takes === undefined ? undefined : schemaFault(takes);
+    if (takesWrong) problems.push(`step "${step.id}" takes ${JSON.stringify(takes)}, ${takesWrong}`);
     problems.push(...changesProblems(`step "${step.id}"`, (step as AgentStep).changes));
     problems.push(...memberProblems(step));
   }
@@ -586,6 +606,21 @@ function allowed(kind: string): string[] {
 
 function isSchema(value: unknown): boolean {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Why Ajv refuses a schema, or nothing when it reads it. An object is not yet a
+ * schema: `{ type: "objekt" }` is an object, and Ajv throws over it in the
+ * middle of a run, after the step it belongs to has spent its tokens.
+ */
+function schemaFault(value: unknown): string | undefined {
+  if (!isSchema(value)) return "which is not JSON Schema";
+  try {
+    ajv.compile(value as TSchema);
+    return undefined;
+  } catch (error) {
+    return `which Ajv refuses: ${String(error instanceof Error ? error.message : error).split("\n")[0]}`;
+  }
 }
 
 const WORKSPACES = ["none", "git"];
@@ -637,6 +672,12 @@ function changesProblems(who: string, changes: Changes | undefined): string[] {
   if (paths.length === 0) {
     const write = tag === "paths" ? 'Write "changes: nothing" instead.' : 'Leave "changes" out instead.';
     return [...problems, `${who} promises "${tag}" with no path. ${write}`];
+  }
+  // A promise holds names, not patterns. ADR 0013 chose it that way, and a
+  // pattern that reads as a name refuses every path it looks like it allows.
+  const patterns = (paths as string[]).filter((path) => /[*?[\]]/.test(path));
+  for (const path of patterns) {
+    problems.push(`${who} promises the path "${path}". A promise holds a name, not a pattern. Write "${path.replace(/\/?[*?[\]].*$/, "")}".`);
   }
   return problems;
 }
@@ -696,8 +737,10 @@ export function validate(flow: Flow): string[] {
   if (!flow.name) problems.push("the flow has no name");
   if (flow.steps.length === 0) problems.push("the flow has no steps");
 
-  if (flow.parallel !== undefined && flow.parallel < 1) {
-    problems.push("the flow runs fewer than one step at a time");
+  if (flow.parallel !== undefined && !(Number.isInteger(flow.parallel) && flow.parallel >= 1)) {
+    problems.push(
+      `the flow runs ${JSON.stringify(flow.parallel)} steps at a time. Write a whole number of one or more.`,
+    );
   }
 
   const ids = new Set<string>();

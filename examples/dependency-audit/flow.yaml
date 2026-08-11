@@ -3,6 +3,7 @@
 # gathered findings say something is risky.
 name: dependency-audit
 harness: claude
+model: sonnet
 workspace: { kind: git, path: . }
 
 steps:

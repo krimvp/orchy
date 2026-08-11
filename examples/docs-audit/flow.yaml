@@ -1,6 +1,8 @@
 # Find a document that disagrees with the code. Every step is read-only, so the
 # flow promises to change nothing and the workspace checks every step.
 name: docs-audit
+harness: pi
+model: ollama/glm-5.2
 workspace: { kind: git, path: . }
 changes: nothing
 
@@ -9,6 +11,14 @@ steps:
     kind: agent
     prompt: prompts/audit.md
     tools: [read, grep, find, ls]
+    # What to audit is a value, so one prompt carries the rules. A member
+    # prompt that sent the agent to read the rules from a file found none.
+    takes:
+      type: object
+      required: [target, check]
+      properties:
+        target: { type: string }
+        check: { type: string }
     returns: &report
       type: object
       required: [checked, disagreements]
@@ -25,8 +35,8 @@ steps:
               code: { type: string }
               detail: { type: string }
     fanout:
-      - { name: readme, prompt: prompts/audit-readme.md }
-      - { name: docs, prompt: prompts/audit-docs.md }
+      - { name: readme, with: { target: "`README.md`", check: "Check every command, every file path, every dependency, and every claim about what the program guarantees." } }
+      - { name: docs, with: { target: "every file under `docs/`", check: "Check the plan and each decision record. A decision record that states a rule must match the code that enforces the rule." } }
 
   - id: report
     kind: call

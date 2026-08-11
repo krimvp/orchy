@@ -1031,6 +1031,23 @@ button.tool svg {
   font-variant-numeric: tabular-nums;
 }
 
+/* What a step asked, before it did the work. It reads apart from what it said. */
+.activity .note.prompt .text,
+.activity .note.prompt .text.long {
+  border-left: 2px solid var(--hairline);
+  padding-left: 12px;
+  color: var(--text-2);
+}
+
+.panel .asked summary {
+  cursor: pointer;
+}
+
+.panel .asked pre {
+  margin-top: 8px;
+  white-space: pre-wrap;
+}
+
 .activity .note.event .text {
   color: var(--text-2);
 }

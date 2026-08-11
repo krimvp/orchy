@@ -6,9 +6,16 @@ import type { Flow, Step } from "./flow.ts";
  * field maps one to one, and a contract is plain JSON Schema. So a graphical
  * editor writes the same file with no translation.
  */
-export function parseFlow(text: string): Flow {
-  const raw = parse(text) as (Omit<Partial<Flow>, "steps"> & { steps?: Array<Partial<Step>> }) | null;
-  if (!raw || typeof raw !== "object") throw new Error("the file holds no flow");
+export function parseFlow(text: string, file?: string): Flow {
+  // A parser reports a line and a column, and the reader has many files open.
+  const named = file ? ` in "${file}"` : "";
+  let raw: (Omit<Partial<Flow>, "steps"> & { steps?: Array<Partial<Step>> }) | null;
+  try {
+    raw = parse(text) as typeof raw;
+  } catch (error) {
+    throw new Error(`the YAML${named} is not valid: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!raw || typeof raw !== "object") throw new Error(`the file${named} holds no flow`);
 
   // Every field passes through. A parser that keeps only the fields it knows
   // drops the rest in silence, and `parallel` went that way for a while.

@@ -1,8 +1,9 @@
 name: api-docs
+harness: pi
+model: ollama/glm-5.2
 workspace:
   kind: git
   path: .
-budget: 15
 steps:
   - id: list
     kind: call
@@ -61,6 +62,9 @@ steps:
     id: index
     kind: call
     module: index.ts
+    changes:
+      paths:
+        - docs/api
     returns:
       type: object
       required:

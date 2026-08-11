@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
@@ -123,6 +123,12 @@ export interface StepRecord {
   value?: unknown;
   error?: string;
   trajectory?: string;
+  /**
+   * What the step asked, after Orchy read the file the step names and filled
+   * every `{{ name }}` in it. A prompt lives in a file, so the run keeps the
+   * text it really sent, and a reader needs no second file to know what it was.
+   */
+  prompt?: string;
   /** A person supplied this value, so the cycle of the step does not fire again. */
   answeredByPerson?: boolean;
   /** The cycle reached its limit and the policy accepted the disagreement. */
@@ -145,11 +151,18 @@ export interface RunState {
   with?: Record<string, unknown>;
   /** `stopped` is what a person or a dead daemon leaves; a run never writes it itself. */
   status: "running" | "waiting" | "done" | "failed" | "stopped";
+  /**
+   * The process that drives this run, while it runs. A reader asks after it to
+   * tell a run that works from a run that died with its state at `running`.
+   */
+  pid?: number;
   /** Why the run failed, when the fault belongs to the run and not to one step. */
   error?: string;
   waitingFor?: string;
   question?: string;
   steps: Record<string, StepRecord>;
+  /** The value of the step the flow ends with. A flow that returns one keeps it. */
+  value?: unknown;
   cycles: Record<string, number>;
   /** Each value that sent the run back, and the step it goes back to. */
   feedback?: Array<{ step: string; to: string; value: unknown }>;
@@ -163,12 +176,13 @@ export type RunEvent =
   | { type: "step_start"; step: string }
   /** What a step reports while it works. The trajectory holds the whole of it. */
   | { type: "output"; step: string; kind: Note["kind"]; text: string }
-  | { type: "step_end"; step: string; status: "done" | "failed" }
+  /** `error` says why a step failed. A parent reports no reason it never gets. */
+  | { type: "step_end"; step: string; status: "done" | "failed"; error?: string }
   /** A condition ruled the step out. It never starts, so it never ends. */
   | { type: "skip"; step: string; why: string }
   | { type: "cycle"; step: string; to: string; count: number }
   | { type: "waiting"; step: string; question: string }
-  | { type: "run_end"; status: RunState["status"] };
+  | { type: "run_end"; status: RunState["status"]; error?: string };
 
 export interface RunOptions {
   cwd?: string;
@@ -239,8 +253,16 @@ export async function resume(
     return execute(state, cwd, options, step);
   }
 
+  // A run that says it runs, and whose process has gone, is a run that died.
+  // ADR 0005 makes a crash and a gate the same case, so `--from` opens it.
   if (state.status === "running") {
-    throw new Error(`the run ${runId} is running, so there is nothing to continue`);
+    if (alive(state.pid)) throw new Error(`the run ${runId} is running, so there is nothing to continue`);
+    if (!options.from) {
+      throw new Error(
+        `the run ${runId} says it runs, and the process that drove it has gone. Name the step to run again, with --from.`,
+      );
+    }
+    state.status = "stopped";
   }
 
   const sorted = order(state.flow.steps);
@@ -275,8 +297,52 @@ function refuse(problems: string[]): void {
   if (problems.length > 0) throw new Error(`the flow is not valid:\n- ${problems.join("\n- ")}`);
 }
 
+/** Whether a process still holds a run. A run with no pid is from an older Orchy. */
+export function alive(pid: number | undefined): boolean {
+  if (pid === undefined) return false;
+  try {
+    // Signal 0 asks after a process and sends it nothing.
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Every run this directory holds, newest first. `orchy runs` reads it. */
+export function list(cwd: string): RunState[] {
+  const at = join(resolve(cwd), ".orchy", "runs");
+  let ids: string[];
+  try {
+    ids = readdirSync(at);
+  } catch {
+    return [];
+  }
+  const runs: RunState[] = [];
+  for (const id of ids) {
+    try {
+      runs.push(read(cwd, id));
+    } catch {
+      // A run that is half written is not a run to list.
+    }
+  }
+  return runs.sort((one, other) => startOf(other).localeCompare(startOf(one)));
+}
+
+/** When a run started: the earliest step it holds, or nothing to sort it last. */
+function startOf(state: RunState): string {
+  return Object.values(state.steps)
+    .map((record) => record.startedAt)
+    .sort()[0] ?? "";
+}
+
 export function read(cwd: string, runId: string): RunState {
-  return JSON.parse(readFileSync(join(directoryOf(resolve(cwd), runId), "state.json"), "utf8")) as RunState;
+  const file = join(directoryOf(resolve(cwd), runId), "state.json");
+  try {
+    return JSON.parse(readFileSync(file, "utf8")) as RunState;
+  } catch {
+    throw new Error(`this directory holds no run "${runId}". Run "orchy runs" to see the runs it holds.`);
+  }
 }
 
 function directoryOf(cwd: string, runId: string): string {
@@ -288,6 +354,8 @@ async function execute(state: RunState, cwd: string, options: RunOptions, answer
   const emit = options.onEvent ?? (() => {});
   // ADR 0005: the state on disk is the run. A gate and a crash recover the same way.
   const file = join(directoryOf(cwd, state.runId), "state.json");
+  // The pid rides with the state, so a reader knows a live run from a dead one.
+  state.pid = process.pid;
   const save = () => writeFileSync(file, JSON.stringify(state, null, 2));
   // Each step may use a different harness, so each trajectory is read by its own.
   const convert = (id: string, handle: string, trajectoryId: string, at: string) => {
@@ -296,6 +364,7 @@ async function execute(state: RunState, cwd: string, options: RunOptions, answer
     return harnessFor(state.flow, step, harness, options.harnesses).toTrajectory(handle, trajectoryId, at);
   };
   const close = () => {
+    state.pid = undefined;
     save();
     const file = join(directoryOf(cwd, state.runId), "trajectory.json");
     writeFileSync(file, JSON.stringify(toAtif(state, version, convert), null, 2));
@@ -350,7 +419,7 @@ async function execute(state: RunState, cwd: string, options: RunOptions, answer
         const now = new Date().toISOString();
         emit({ type: "step_start", step: step.id });
         state.steps[step.id] = { status: "failed", startedAt: now, endedAt: now, error: problem };
-        emit({ type: "step_end", step: step.id, status: "failed" });
+        emit({ type: "step_end", step: step.id, status: "failed", error: problem });
         return fail(state, undefined, close, emit);
       }
       // The expansion made new steps, so the order of the run holds them now.
@@ -388,7 +457,12 @@ async function execute(state: RunState, cwd: string, options: RunOptions, answer
       // ADR 0005: the state on disk is the run, so a wave that dies keeps what settled.
       state.steps[step.id] = record;
       save();
-      emit({ type: "step_end", step: step.id, status: record.status === "failed" ? "failed" : "done" });
+      emit({
+        type: "step_end",
+        step: step.id,
+        status: record.status === "failed" ? "failed" : "done",
+        ...(record.error ? { error: record.error } : {}),
+      });
     });
 
     const failures = work.filter((step) => state.steps[step.id]?.status === "failed");
@@ -464,12 +538,17 @@ async function execute(state: RunState, cwd: string, options: RunOptions, answer
   const problem = returnProblem(state);
   state.status = problem ? "failed" : "done";
   if (problem) state.error = problem;
+  else state.value = valueOf(state);
   close();
-  emit({ type: "run_end", status: state.status });
+  emit({ type: "run_end", status: state.status, ...(state.error ? { error: state.error } : {}) });
   return state;
 }
 
-/** The run ends here. `error` names a fault of the run, and not one of a step. */
+/**
+ * The run ends here. `error` names a fault of the run. A run that fails on a
+ * step takes the reason of that step, because a reader of the end of a run must
+ * never have to go and look for the why of it.
+ */
 function fail(
   state: RunState,
   error: string | undefined,
@@ -478,9 +557,27 @@ function fail(
 ): RunState {
   state.status = "failed";
   if (error) state.error = error;
+  else state.error ??= reasons(state);
   close();
-  emit({ type: "run_end", status: state.status });
+  emit({ type: "run_end", status: state.status, ...(state.error ? { error: state.error } : {}) });
   return state;
+}
+
+/**
+ * What the run produced: the value of the step it ends with. A flow that
+ * declares `returns` is checked against this, and a flow that declares none
+ * still ends in a value that a person and a `kind: flow` step both read.
+ */
+function valueOf(state: RunState): unknown {
+  const [exit] = exitsOf(state.flow.steps);
+  return exit ? state.steps[exit.id]?.value : undefined;
+}
+
+/** Why the steps of this run failed, as one line for each. */
+function reasons(state: RunState): string | undefined {
+  const failed = Object.entries(state.steps).filter(([, record]) => record.status === "failed");
+  if (failed.length === 0) return undefined;
+  return failed.map(([id, record]) => `step "${id}" failed: ${record.error ?? "with no reason"}`).join("\n");
 }
 
 function stop(
@@ -712,13 +809,20 @@ async function runStep(
   const before = take(state.flow.workspace, cwd);
 
   let result: { value: unknown; trajectory?: string; cost?: number };
+  let prompt: string | undefined;
   try {
+    if (step.kind === "agent") {
+      prompt = buildPrompt(step, inputs, cwd, values, state.with);
+      // The prompt is the whole of what the step was asked, and it lives in a
+      // file that a value fills in. So the run says it once, before the work.
+      watch({ kind: "prompt", text: prompt });
+    }
     result =
       step.kind === "agent"
         ? await harness.run(
             {
               step: step.id,
-              prompt: buildPrompt(step, inputs, cwd, values, state.with),
+              prompt: prompt as string,
               tools: step.tools,
               returns: step.returns,
               cwd,
@@ -728,12 +832,16 @@ async function runStep(
           )
         : { value: await callModule(step as CallStep, inputs, cwd, watch, values) };
   } catch (error) {
-    return { ...at(), status: "failed", error: String(error) };
+    // The message, and not the word "Error" in front of it. A reader of a
+    // console reads the reason, not the class of the object that carried it.
+    const why = error instanceof Error ? error.message : String(error);
+    return { ...at(), status: "failed", error: why, ...(prompt ? { prompt } : {}) };
   }
 
   // Invariant 5: what the step really did, not what it says it did.
   const touched = changed(before, take(state.flow.workspace, cwd));
   const record: StepRecord = { ...at(), status: "done", value: result.value, trajectory: result.trajectory };
+  if (prompt !== undefined) record.prompt = prompt;
   // A step that broke a rule spent its tokens all the same, so the record keeps
   // the cost and the budget counts it. See ADR 0019.
   if (result.cost !== undefined) record.cost = result.cost;
@@ -760,19 +868,30 @@ function brokenPromise(changes: Changes | undefined, touched: Change[]): string 
   if (changes === "nothing") return `promises to change nothing, but it ${say(touched)}`;
 
   if ("except" in changes) {
-    const inside = touched.filter((one) => changes.except.some((refused) => under(one.path, refused)));
+    const inside = touched.filter((one) => changes.except.some((refused) => touches(one, refused)));
     if (inside.length === 0) return undefined;
     return `promises to change nothing in ${changes.except.join(", ")}, but it ${say(inside)}`;
   }
 
-  const outside = touched.filter((one) => !changes.paths.some((allowed) => under(one.path, allowed)));
+  const outside = touched.filter((one) => !allows(changes.paths, one));
   if (outside.length === 0) return undefined;
   return `promises to change only ${changes.paths.join(", ")}, but it ${say(outside)}`;
 }
 
+/** A rename moves a file, so a promise that names only its source allows neither half. */
+function allows(paths: string[], change: Change): boolean {
+  const halves = [change.path, ...(change.to ? [change.to] : [])];
+  return halves.every((half) => paths.some((allowed) => under(half, allowed)));
+}
+
+/** A change reaches a path when either half of it does. */
+function touches(change: Change, refused: string): boolean {
+  return under(change.path, refused) || (change.to !== undefined && under(change.to, refused));
+}
+
 /** `deleted docs/x, added docs/y`. The kind of each change, and not only the path. */
 function say(touched: Change[]): string {
-  return touched.map((one) => `${one.how} ${one.path}`).join(", ");
+  return touched.map((one) => `${one.how} ${one.path}${one.to ? ` to ${one.to}` : ""}`).join(", ");
 }
 
 /** A path is the file itself, or anything under it as a directory. */
@@ -788,7 +907,14 @@ function buildPrompt(
   values: Record<string, unknown>,
   takes?: Record<string, unknown>,
 ): string {
-  const parts = [fill(readFileSync(resolve(cwd, step.prompt), "utf8"), step.id, values)];
+  const at = resolve(cwd, step.prompt);
+  let text: string;
+  try {
+    text = readFileSync(at, "utf8");
+  } catch {
+    throw new Error(`step "${step.id}" has no prompt at "${at}". A prompt path is relative to the flow file.`);
+  }
+  const parts = [fill(text, step.id, values)];
   // A step that guesses this writes its file outside the workspace, where
   // invariant 5 cannot see it and the step after it cannot read it.
   parts.push(`The working directory is \`${cwd}\`. Read and write by a path inside it.`);
@@ -841,7 +967,17 @@ async function callModule(
   watch: (note: Note) => void,
   values: Record<string, unknown>,
 ): Promise<unknown> {
-  const module = await import(pathToFileURL(resolve(cwd, step.module)).href);
+  const path = resolve(cwd, step.module);
+  let module: { default?: unknown };
+  try {
+    module = await import(pathToFileURL(path).href);
+  } catch (error) {
+    const why = error instanceof Error ? error.message.split("\n")[0] : String(error);
+    throw new Error(`step "${step.id}" cannot load its module at "${path}": ${why}`);
+  }
+  if (typeof module.default !== "function") {
+    throw new Error(`step "${step.id}" names the module "${path}", which exports no default function.`);
+  }
   const say = (text: string) => watch({ kind: "text", text: String(text) });
-  return module.default(inputs, say, values);
+  return (module.default as (...args: unknown[]) => unknown)(inputs, say, values);
 }

@@ -1,8 +1,9 @@
 # Find the typos, fix them, and let a checker confirm the fix fixed.
 # The fixer reaches only the documents, so the code cannot drift.
 name: typo-hunt
+harness: pi
+model: ollama/gpt-oss:120b
 workspace: { kind: git, path: . }
-budget: 5
 
 steps:
   - id: hunt

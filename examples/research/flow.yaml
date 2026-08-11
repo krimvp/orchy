@@ -1,9 +1,19 @@
 # Research a question with three readers, then one writer, then a check.
 # The readers use the web, and only Claude Code has a web tool, so the flow
 # names the harness once. `validate()` then refuses the flow under pi.
+#
+#   orchy run examples/research/flow.yaml --with '{"question":"..."}'
+#
+# The run takes the question, so a run with none is refused before it spends a
+# token. It read a file for it once, and a missing file cost $0.46 of research
+# into the words "source file missing".
 name: research
 harness: claude
-model: claude-sonnet-5
+model: sonnet
+takes:
+  type: object
+  required: [question]
+  properties: { question: { type: string } }
 # Three readers, a writer on opus, and a cycle. The cycle limit bounds the
 # rounds, and this bounds the money. See ADR 0019.
 budget: 10
@@ -13,7 +23,7 @@ steps:
   - id: question
     kind: agent
     prompt: prompts/question.md
-    tools: [read]
+    tools: []
     returns:
       type: object
       required: [question, angles]
@@ -42,7 +52,7 @@ steps:
   - id: brief
     kind: agent
     needs: [reader]
-    model: claude-opus-4-5
+    model: opus
     prompt: prompts/brief.md
     tools: [write]
     returns:

@@ -56,6 +56,14 @@ interface Job extends Ticket {
   value?: unknown;
   /** The step the run goes back to, when a person names one. */
   from?: string;
+  /**
+   * The run reached its end, or a gate, and the child is on its way out. The
+   * job lives on until the process closes, and a person who answers a gate the
+   * moment it appears must not hear that the run "is already on its way".
+   */
+  settled?: boolean;
+  /** The child has closed. The job may still hold a ticket, for its reason. */
+  done?: boolean;
   child?: ChildProcess;
   stderr: string;
 }
@@ -88,8 +96,11 @@ export function daemon(root: string) {
   const told = () => tell({ kind: "queue", pending: [...jobs.values()].map(ticketOf) });
 
   const finish = (job: Job) => {
-    // A run that reached a run id lives in the index from here on.
-    if (job.runId) jobs.delete(job.ticket);
+    job.done = true;
+    // A run that reached a run id lives in the index from here on. A job that
+    // ended with a reason of its own keeps its ticket, so the reason reaches a
+    // person: a resume that a contract refused leaves no other trace.
+    if (job.runId && !job.error) jobs.delete(job.ticket);
     running -= 1;
     if (closed) return;
     pump();
@@ -112,6 +123,10 @@ export function daemon(root: string) {
       job.runId = event.runId;
       told();
     }
+    // The run stops here. The child takes a moment more to go, and in that
+    // moment the index already says `waiting`, so a page that answers at once
+    // used to be refused.
+    if (event.type === "waiting" || event.type === "run_end") job.settled = true;
     if (!job.runId) return;
 
     // The output of a step is a view, so it stays in memory and out of the index.
@@ -132,9 +147,16 @@ export function daemon(root: string) {
     tell({ kind: "event", runId: job.runId, event: stored });
   };
 
+  /** A run has one child. A job that continues a run waits for the one before it. */
+  const held = (job: Job) =>
+    job.runId !== undefined &&
+    [...jobs.values()].some((one) => one !== job && one.runId === job.runId && !one.done);
+
   const pump = () => {
     while (running < RUNS && queue.length > 0) {
-      const job = queue.shift() as Job;
+      const at = queue.findIndex((one) => !held(one));
+      if (at === -1) return;
+      const [job] = queue.splice(at, 1) as [Job];
       running += 1;
       // A resume reads the values from the state on disk, so only a run carries them.
       const args = job.resumes
@@ -162,8 +184,16 @@ export function daemon(root: string) {
         record(job, true);
         // A run ends, so a run falls behind the list. The index bounds what it holds here.
         if (!closed) store.trim();
-        // Never hide a failure: a child that started no run keeps its ticket and its reason.
-        if (!job.runId) job.error = job.stderr.trim() || `the run ended with the code ${code}`;
+        // Never hide a failure: a child that ended badly keeps its ticket and its
+        // reason. A resume that a contract refused ends this way, and dropping
+        // it left a person pressing a button that answered nothing.
+        // A child that reported an end of its own already said why, through its
+        // events. A child that ended badly and said nothing keeps its reason
+        // here: a resume that a contract refused leaves no other trace, and a
+        // person who pressed a button heard nothing at all.
+        if (code !== 0 && !job.settled) {
+          job.error = job.stderr.trim() || `the run ended with the code ${code}`;
+        }
         finish(job);
       });
     }
@@ -230,7 +260,7 @@ export function daemon(root: string) {
       if (value === undefined && !from && row.status === "done") {
         throw new Error(`the run ${runId} is done. Name the step to run again.`);
       }
-      if ([...jobs.values()].some((job) => job.runId === runId)) {
+      if ([...jobs.values()].some((job) => job.runId === runId && !job.settled && !job.done)) {
         throw new Error(`the run ${runId} is already on its way`);
       }
       tickets += 1;

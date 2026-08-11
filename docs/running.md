@@ -16,10 +16,10 @@ Each adapter gives the contract to its harness whole. Pi builds a
 it gives one source for the contract and the static type that makes
 `cycle.when` safe. A flow in YAML holds plain JSON Schema and needs nothing.
 
-```bash
-npm i orchy @sinclair/typebox   # to write a flow in TypeScript
-npm i orchy                     # to run a flow from YAML
-```
+Orchy is not on npm yet, and another package already holds the name. Install it
+from the repository, as the [Install](../README.md#install) part of the README
+says. Add `@sinclair/typebox` only to write a flow in TypeScript. A flow in YAML
+holds plain JSON Schema and needs nothing.
 
 ## The values a run takes
 

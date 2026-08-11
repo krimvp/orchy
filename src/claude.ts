@@ -82,7 +82,15 @@ export const claude: Harness = {
 
     let stdout: string;
     try {
-      ({ stdout } = await run("claude", args, { cwd: request.cwd, maxBuffer: 64 * 1024 * 1024 }));
+      const command = run("claude", args, { cwd: request.cwd, maxBuffer: 64 * 1024 * 1024 });
+      // The command reads its input stream, and Orchy writes nothing to it. Left
+      // open, the command waits out its own timeout on every step of every flow.
+      command.child.stdin?.end();
+      ({ stdout } = await command);
+    } catch (error) {
+      // A command that ends badly says why on its own streams. Node throws the
+      // whole argument list instead, prompt and all, and names no reason.
+      throw new Error(`step "${request.step}" could not run the claude command: ${whyOf(error)}`);
     } finally {
       stop?.();
     }
@@ -95,10 +103,12 @@ export const claude: Harness = {
     }
 
     if (answer.is_error || answer.subtype !== "success") {
-      throw new Error(`the step ended as ${answer.subtype ?? "an error"}: ${String(answer.result).slice(0, 300)}`);
+      throw new Error(
+        `step "${request.step}" ended as ${answer.subtype ?? "an error"}: ${String(answer.result).slice(0, 300)}`,
+      );
     }
     if (answer.structured_output === undefined) {
-      throw new Error("the step ended with no structured output");
+      throw new Error(`step "${request.step}" ended with no value for its contract`);
     }
 
     // Claude writes no cost into its transcript, so take it from the answer.
@@ -148,6 +158,28 @@ export const claude: Harness = {
     };
   },
 };
+
+/**
+ * Why the command failed, in its own words. Node puts the whole argument list
+ * in `message`, and the prompt is one of those arguments, so the reason drowns.
+ * The command writes the reason to its streams.
+ */
+function whyOf(error: unknown): string {
+  const held = error as { stderr?: string; stdout?: string; message?: string; code?: number };
+  const said = (held.stderr ?? "").trim() || resultOf(held.stdout) || "";
+  if (said) return said.split("\n").slice(0, 3).join(" ").slice(0, 300);
+  return `it ended with the code ${held.code ?? "unknown"}`;
+}
+
+/** The reason inside a JSON answer, when the command wrote one before it failed. */
+function resultOf(stdout: string | undefined): string {
+  try {
+    const answer = JSON.parse(stdout ?? "") as Answer;
+    return String(answer.result ?? "");
+  } catch {
+    return "";
+  }
+}
 
 /** One line of the transcript, as notes. A line that says nothing reports nothing. */
 function report(line: string, watch: Watch): void {
@@ -249,11 +281,12 @@ function toStep(entry: Entry, id: number): Step | undefined {
     message: textOf(message.content),
     reasoning_content: thinking || undefined,
     tool_calls: calls.length > 0 ? calls : undefined,
+    // Claude keeps no cost in its transcript. The adapter puts the cost of the
+    // whole step on `final_metrics`, so a per-step zero here would read as free.
     metrics: {
       prompt_tokens: message.usage?.input_tokens ?? 0,
       completion_tokens: message.usage?.output_tokens ?? 0,
       cached_tokens: message.usage?.cache_read_input_tokens ?? 0,
-      cost_usd: 0,
     },
   };
 }

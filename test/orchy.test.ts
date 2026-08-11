@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { Type } from "@sinclair/typebox";
+import type { TSchema } from "@sinclair/typebox";
 import { type AgentStep, type CallStep, type Flow, type GateStep, agent, call, expandFanout, expandFlows, flow, gate, resolvePaths, validate } from "../src/flow.ts";
 import { loadFlow } from "../src/load.ts";
 import type { AgentRequest, AgentResult, Harness } from "../src/harness.ts";
@@ -360,12 +361,64 @@ test("a run reports what it does through events", async () => {
     onEvent: (event) => events.push(event.type),
   });
 
-  // A run names itself first, so a parent process knows the run it drives.
+  // A run names itself first, so a parent process knows the run it drives. Each
+  // agent step says what it asked before it says what it did.
   assert.deepEqual(events, [
     "run_start",
-    "step_start", "step_end", "step_start", "step_end", "cycle",
-    "step_start", "step_end", "step_start", "step_end", "run_end",
+    "step_start", "output", "step_end", "step_start", "output", "step_end", "cycle",
+    "step_start", "output", "step_end", "step_start", "output", "step_end", "run_end",
   ]);
+});
+
+test("a run keeps the prompt it sent, and says it before the step works", async () => {
+  const cwd = workspace();
+  writeFileSync(join(cwd, "ask.md"), "Count to {{ n }}.");
+  const events: RunEvent[] = [];
+
+  const state = await run(
+    flow("asking", {
+      takes: Type.Object({ n: Type.Number() }),
+      steps: [agent({ id: "one", prompt: "ask.md", tools: ["read"], returns: Summary })],
+    }),
+    { cwd, with: { n: 3 }, harness: fakeHarness({ summary: "v" }), onEvent: (event) => events.push(event) },
+  );
+
+  // A prompt lives in a file that a value fills in, so neither the file nor the
+  // value alone says what the step was asked.
+  assert.match(state.steps.one?.prompt ?? "", /^Count to 3\./);
+  const said = events.find((event) => event.type === "output" && event.kind === "prompt");
+  assert.match(said && said.type === "output" ? said.text : "", /^Count to 3\./);
+});
+
+test("a run keeps the value of the step it ends with", async () => {
+  const cwd = workspace();
+
+  const state = await run(
+    flow("answering", {
+      steps: [agent({ id: "one", prompt: "step.md", tools: ["read"], returns: Summary })],
+    }),
+    { cwd, harness: fakeHarness({ summary: "the answer" }) },
+  );
+
+  assert.deepEqual(state.value, { summary: "the answer" });
+});
+
+test("a step that fails says why in its event, so a parent process reports it", async () => {
+  const cwd = workspace();
+  const events: RunEvent[] = [];
+
+  const state = await run(
+    flow("breaking", {
+      steps: [agent({ id: "one", prompt: "step.md", tools: ["read"], returns: Summary })],
+    }),
+    { cwd, harness: fakeHarness({ wrong: true }), onEvent: (event) => events.push(event) },
+  );
+
+  assert.equal(state.status, "failed");
+  const [ended] = events.filter((event) => event.type === "step_end");
+  assert.match(String(ended && "error" in ended ? ended.error : ""), /breaks the contract/);
+  const [over] = events.filter((event) => event.type === "run_end");
+  assert.match(String(over && "error" in over ? over.error : ""), /step "one" failed/);
 });
 
 test("a resume names the run again, so a parent process follows it", async () => {
@@ -434,8 +487,10 @@ test("a harness reports what a step does, and the run passes it on", async () =>
 
   assert.equal(state.status, "done");
   const output = events.filter((event) => event.type === "output");
+  // The run says the prompt itself, and the harness says the rest.
+  const said = output.filter((event) => event.kind !== "prompt");
   assert.deepEqual(
-    output.map((event) => `${event.kind}: ${event.text}`),
+    said.map((event) => `${event.kind}: ${event.text}`),
     ["tool: Read package.json", "text: the file holds a name"],
   );
   assert.equal(
@@ -509,6 +564,47 @@ function actingHarness(work: () => void, value: unknown): Harness {
 function writingHarness(directory: string, name: string, value: unknown): Harness {
   return actingHarness(() => writeFileSync(join(directory, name), "written by the step"), value);
 }
+
+test("validate refuses a contract that Ajv cannot read", () => {
+  const problems = validate({
+    name: "bad-schema",
+    steps: [
+      {
+        id: "a",
+        kind: "agent",
+        needs: [],
+        prompt: "step.md",
+        tools: ["read"],
+        returns: { type: "objekt" } as unknown as TSchema,
+      },
+    ],
+  } as unknown as Flow);
+
+  assert.ok(problems.some((p) => p.includes('step "a" returns') && p.includes("Ajv refuses")));
+});
+
+test("validate refuses a width that is not a whole number", () => {
+  const problems = validate({
+    name: "bad-width",
+    parallel: "abc" as unknown as number,
+    steps: [{ id: "a", kind: "agent", needs: [], prompt: "step.md", tools: ["read"], returns: Summary }],
+  } as unknown as Flow);
+
+  assert.ok(problems.some((p) => p.includes('runs "abc" steps at a time')));
+});
+
+test("validate refuses a pattern where a promise wants a name", () => {
+  const problems = validate(
+    flow("pattern", {
+      workspace: { kind: "git", path: "." },
+      steps: [
+        agent({ id: "a", prompt: "step.md", tools: ["read"], returns: Summary, changes: { paths: ["docs/**"] } }),
+      ],
+    }),
+  );
+
+  assert.ok(problems.some((p) => p.includes('promises the path "docs/**"') && p.includes('Write "docs"')));
+});
 
 test("validate refuses a promise that no workspace can check", () => {
   const problems = validate(
@@ -1424,7 +1520,7 @@ test("validate refuses a flow that runs fewer than one step at a time", () => {
     }),
   );
 
-  assert.ok(problems.some((p) => p.includes("fewer than one step")));
+  assert.ok(problems.some((p) => p.includes("runs 0 steps at a time")));
 });
 
 test("a call step fans out too, and a member overrides its module", () => {
@@ -3079,6 +3175,56 @@ test("a flow sets the promise, and a step that declares none takes it", async ()
   assert.match(state.steps.a?.error ?? "", /step "a" promises to change nothing, but it added sneaky\.txt/);
 });
 
+test("a step that writes a file the workspace already changed breaks its promise", async () => {
+  const cwd = gitWorkspace();
+  // The tree is dirty before the step, which is the ordinary state of a repository.
+  writeFileSync(join(cwd, "step.md"), "Do the work. Edited by a person.");
+
+  const state = await run(
+    flow("read-only", {
+      workspace: { kind: "git", path: "." },
+      steps: [
+        agent({ id: "a", prompt: "step.md", tools: ["read"], returns: Summary, changes: "nothing" }),
+      ],
+    }),
+    { cwd, harness: writingHarness(cwd, "step.md", { summary: "I changed nothing" }) },
+  );
+
+  assert.equal(state.status, "failed");
+  assert.match(state.steps.a?.error ?? "", /promises to change nothing, but it changed step\.md/);
+});
+
+test("a step that renames a file out of the paths it promises breaks its promise", async () => {
+  const cwd = gitWorkspace();
+  mkdirSync(join(cwd, "docs"));
+  writeFileSync(join(cwd, "docs", "one.md"), "one");
+  const git = (...args: string[]) => execFileSync("git", args, { cwd, stdio: "pipe" });
+  git("add", "docs/one.md");
+  git("commit", "-qm", "docs");
+
+  const state = await run(
+    flow("docs-only", {
+      workspace: { kind: "git", path: "." },
+      steps: [
+        agent({
+          id: "a",
+          prompt: "step.md",
+          tools: ["read"],
+          returns: Summary,
+          changes: { paths: ["docs"] },
+        }),
+      ],
+    }),
+    {
+      cwd,
+      harness: actingHarness(() => git("mv", "docs/one.md", "moved.md"), { summary: "moved it" }),
+    },
+  );
+
+  assert.equal(state.status, "failed");
+  assert.match(state.steps.a?.error ?? "", /promises to change only docs, but it renamed docs\/one\.md to moved\.md/);
+});
+
 test("a step overrides the promise of the flow", async () => {
   const cwd = gitWorkspace();
   mkdirSync(join(cwd, "docs"));
@@ -3413,6 +3559,49 @@ test("validate refuses a budget on a flow where no step spends", () => {
   );
 
   assert.ok(problems.some((p) => p.includes("no step of it spends")));
+});
+
+test("a sub-flow carries the harness and the model it names onto each step it holds", async () => {
+  const inner = flow("panel", {
+    harness: "claude",
+    model: "haiku",
+    steps: [
+      agent({ id: "look", prompt: "look.md", tools: ["read"], returns: Summary }),
+      agent({ id: "own", needs: ["look"], prompt: "look.md", tools: ["read"], returns: Summary, model: "opus" }),
+    ],
+  });
+
+  const expanded = await expandFlows(
+    flow("outer", {
+      harness: "pi",
+      model: "ollama/glm-5.2",
+      steps: [{ kind: "flow", id: "review", needs: [], flow: "./panel.yaml" }],
+    }),
+    async () => inner,
+  );
+
+  const look = expanded.steps.find((step) => step.id === "review/look") as AgentStep;
+  const own = expanded.steps.find((step) => step.id === "review/own") as AgentStep;
+  assert.equal(look.harness, "claude");
+  assert.equal(look.model, "haiku");
+  // The step keeps what only it names, which is the narrower of the two.
+  assert.equal(own.model, "opus");
+});
+
+test("a flow step that names a flow with a width of its own is refused", async () => {
+  const inner = flow("panel", {
+    parallel: 1,
+    steps: [agent({ id: "look", prompt: "look.md", tools: ["read"], returns: Summary })],
+  });
+
+  await assert.rejects(
+    () =>
+      expandFlows(
+        flow("outer", { steps: [{ kind: "flow", id: "review", needs: [], flow: "./panel.yaml" }] }),
+        async () => inner,
+      ),
+    /runs 1 steps at a time, and step "review" holds it/,
+  );
 });
 
 test("a flow step that names a flow with a budget of its own is refused", async () => {

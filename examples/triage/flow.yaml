@@ -1,6 +1,8 @@
 # Sort an incoming issue, then let a person confirm the call.
 # It touches no files, so it declares no workspace.
 name: triage
+harness: pi
+model: ollama/gpt-oss:120b
 
 steps:
   - id: read

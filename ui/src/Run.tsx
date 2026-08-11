@@ -499,7 +499,18 @@ function Detail({
         {step.prompt && (
           <>
             <dt>Prompt</dt>
-            <dd className="mono small">{step.prompt}</dd>
+            {/* The file names the prompt; the run holds the text it really sent,
+                with every value filled in. A reader needs the second one. */}
+            <dd className="mono small">
+              {record?.prompt ? (
+                <details className="asked">
+                  <summary>{step.prompt}</summary>
+                  <pre className="clamp">{record.prompt}</pre>
+                </details>
+              ) : (
+                step.prompt
+              )}
+            </dd>
           </>
         )}
         {step.module && (

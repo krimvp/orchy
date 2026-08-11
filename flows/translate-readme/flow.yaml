@@ -1,7 +1,8 @@
 # One prompt, four languages. A member holds the language that is its own.
 name: translate-readme
+harness: pi
+model: ollama/glm-5.2
 workspace: { kind: git, path: . }
-budget: 5
 
 steps:
   - id: translate

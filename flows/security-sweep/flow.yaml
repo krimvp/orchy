@@ -1,8 +1,9 @@
 # Three narrow sweeps, one merge, one report. Only the report may write, and
 # only its own file.
 name: security-sweep
+harness: pi
+model: ollama/glm-5.2
 workspace: { kind: git, path: . }
-budget: 10
 parallel: 3
 
 steps:

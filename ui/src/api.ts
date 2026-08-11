@@ -141,6 +141,8 @@ export interface StepRecord {
   value?: unknown;
   error?: string;
   trajectory?: string;
+  /** What the step asked, after Orchy read its file and filled every value in. */
+  prompt?: string;
   answeredByPerson?: boolean;
   disagreement?: "accepted";
   /** Why a condition ruled the step out. */
@@ -163,6 +165,8 @@ export interface RunState {
   waitingFor?: string;
   question?: string;
   steps: Record<string, StepRecord>;
+  /** The value of the step the flow ends with. */
+  value?: unknown;
   cycles: Record<string, number>;
   history?: Array<{ step: string; record: StepRecord }>;
 }

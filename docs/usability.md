@@ -595,6 +595,34 @@ word per ADR 0019). Around it:
 - Repeated flags are silently first-wins; `--from` and `--port` on `run` are
   silently ignored; a `.json` flow file gives a raw Node loader error.
 
+## What later work closed
+
+The change that follows this report closes most of it. This section says what,
+so a reader knows which finding above is history and which still stands. The
+findings stay as they were written.
+
+**Closed.**
+
+| Finding | What changed |
+| --- | --- |
+| 1 — no reason on the console | `step_end` and `run_end` carry `error`, so the console and `--events` both say why. `report()` prints the whole note instead of its first line, and it has a `skip` case. |
+| 2 — the promise misses a dirty file | `status()` hashes what each path holds, so a second write to a dirty file is a change. A rename keeps both halves, and a promise reads both. |
+| 3 — a step runs for ever | Pi counts the values a contract refuses and stops the step at eight, with a message that names the count and the reason. |
+| 4 — a run nothing can leave | The state holds the pid of the process that drives it. `orchy run` writes `stopped` on a signal, `resume --from` opens a run whose process has gone, and `validate()` refuses a `parallel` that is not a whole number. A malformed contract is refused before the run starts. |
+| 5 — the daemon and the run disagree | A job is settled when its child reports `waiting` or `run_end`, so an answer at that moment is accepted. A run keeps one child. The index leaves a live run alone. A resume that a contract refuses keeps its ticket and its reason. |
+| 6 — fields that vanish | A sub-flow carries its `harness` and `model` onto each step; a `parallel`, a `budget` or another `workspace` is refused. |
+| 7 — no provider, no run | The README says where a model comes from. Pi reports what the provider said instead of blaming the model. The `claude` adapter reports what the command said instead of its own argument list. A `.ts` flow written as a plain object loads. |
+| 8 — no help, one exit code | `--help` and `--version` write to the output stream and end with 0. `orchy runs` lists the runs. A wrong command ends with 2, a failed run with 1, and a waiting run with 3. |
+| 9 — the value a flow returns | `state.value` holds it. |
+| 10 — cost | A Claude trajectory keeps no per-step zero. A busy port, a bad `--port`, a missing file, a missing prompt, a missing module and an unknown run id all say what to do. The Claude adapter closes the input stream it never writes to, which takes about 2.5 s off every step. |
+| the shipped flows | Every flow names a harness and a model. A `budget` stays only where the harness reports a cost. The prompts carry their own rules. The git modules take values instead of reading the environment. `examples/research` declares what it takes. |
+
+**Still open.** The rejection that Pi writes still does not name the values a
+contract allows, because Pi builds that message. A `changes` promise still sees
+nothing a step writes outside the workspace, which the README states. A step
+that answers without doing the work still passes: a contract measures the shape
+of a value and not the work behind it.
+
 ## What to fix first
 
 In this order. The first three cost the least and buy the most.

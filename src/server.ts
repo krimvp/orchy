@@ -400,13 +400,22 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
     void answer(routes, origins, request, response);
   });
 
-  return new Promise((keep) =>
+  return new Promise((keep, refuse) => {
+    // A port that another program holds is a fault a person can act on. Without
+    // this the error reaches the top as an unhandled event, in a stack trace.
+    server.once("error", (error: NodeJS.ErrnoException) => {
+      if (error.code === "EADDRINUSE") {
+        refuse(new Error(`another program listens on ${host}:${port}. Name a free port with --port.`));
+        return;
+      }
+      refuse(error);
+    });
     server.listen(port, host, () => {
       // The caller can ask for the port 0, so this daemon learns its name here.
       origins = originsOf(host, (server.address() as AddressInfo).port);
       keep(server);
-    }),
-  );
+    });
+  });
 }
 
 async function answer(

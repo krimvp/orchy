@@ -1,11 +1,14 @@
-You have the notes and the list of commits.
+You have the notes, the commits of the range, and the patch that goes with
+them.
 
 Check three things:
 
-1. Every note matches a commit in the list. A note with no commit is invented.
-2. A change that a reader can see has a note. Read the commit and decide.
-3. No note names a file or a function that a reader never calls.
+1. The patch holds every change a note names. A note that the patch and the
+   code do not carry is invented, and it is a fault.
+2. A change that a reader can see has a note. Read the patch and decide.
+3. No note names a file, a field, or a function that a reader never calls.
 
-Change no file.
+Read the code when the patch stops before the change a note names. Change no
+file.
 
 Answer with `approved`, and one sentence for each fault in `findings`.
