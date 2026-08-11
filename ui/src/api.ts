@@ -102,6 +102,12 @@ export interface FlowRow {
   name: string;
   harness: string;
   addedAt: string;
+  /** The leading comment of the flow file, which says what the flow does. */
+  description?: string;
+  /** The newest run of this flow, so the list says what a run costs. */
+  lastRun?: RunRow | null;
+  /** The flow runs by itself this often, when set. */
+  schedule?: { everyMinutes: number; lastAt: string | null } | null;
 }
 
 export interface RunRow {
@@ -219,6 +225,8 @@ export interface Health {
   tools: string[];
   /** The operators a match holds. The page draws them, and holds no copy. */
   operators: Operator[];
+  /** What a model name looks like, for each harness. The editor hints with it. */
+  models?: Record<string, string>;
 }
 
 /**
@@ -237,6 +245,12 @@ export function operatorOf(wanted: unknown, operators: Operator[]): [Operator, u
 
 export type RunEvent = { type: string; at: string } & Record<string, unknown>;
 
+/**
+ * The editor holds this while its flow differs from the file, and the router
+ * reads it before it leaves the page. One flag, because one editor is open.
+ */
+export const unsaved = { here: false };
+
 export type Notice = { kind: "event"; runId: string; event: RunEvent } | { kind: "queue"; pending: Ticket[] };
 
 async function call<T>(path: string, options?: RequestInit): Promise<T> {
@@ -254,19 +268,34 @@ export const api = {
   flows: () => call<FlowRow[]>("/api/flows"),
   addFlow: (path: string, harness: string) =>
     call<FlowRow>("/api/flows", { method: "POST", body: JSON.stringify({ path, harness }) }),
+  /** Scaffolds a new flow file with one step and its prompt, and registers it. */
+  newFlow: (name: string, harness: string, path?: string) =>
+    call<FlowRow>("/api/flows/new", { method: "POST", body: JSON.stringify({ name, harness, path }) }),
   flow: (id: number) =>
-    call<{ row: FlowRow; flow: Flow; problems: string[]; editable: boolean }>(`/api/flows/${id}`),
+    call<{ row: FlowRow; flow: Flow; problems: string[]; warnings: string[]; editable: boolean }>(
+      `/api/flows/${id}`,
+    ),
   saveFlow: (id: number, flow: Flow) =>
     call<{ problems: string[]; saved: boolean }>(`/api/flows/${id}`, {
       method: "PUT",
       body: JSON.stringify({ flow }),
     }),
   removeFlow: (id: number) => call<unknown>(`/api/flows/${id}`, { method: "DELETE" }),
+  /** The flow runs by itself, this often, with these values. */
+  setSchedule: (id: number, everyMinutes: number, values?: Record<string, unknown>) =>
+    call<{ scheduled: boolean }>(`/api/flows/${id}/schedule`, {
+      method: "PUT",
+      body: JSON.stringify({ everyMinutes, with: values }),
+    }),
+  clearSchedule: (id: number) => call<unknown>(`/api/flows/${id}/schedule`, { method: "DELETE" }),
   /** The values the flow takes ride with the request. The child checks them. */
   startFlow: (id: number, values?: Record<string, unknown>) =>
     call<Ticket>(`/api/flows/${id}/runs`, { method: "POST", body: JSON.stringify({ with: values }) }),
-  validate: (flow: Flow) =>
-    call<{ problems: string[] }>("/api/validate", { method: "POST", body: JSON.stringify({ flow }) }),
+  validate: (flow: Flow, path?: string) =>
+    call<{ problems: string[]; warnings: string[] }>("/api/validate", {
+      method: "POST",
+      body: JSON.stringify({ flow, path }),
+    }),
   /** A file a flow names: a prompt, a module, an inner flow. The daemon keeps it under its root. */
   file: (path: string) =>
     call<{ path: string; exists: boolean; content: string }>(`/api/file?path=${encodeURIComponent(path)}`),
@@ -277,10 +306,32 @@ export const api = {
   trajectory: (runId: string) => call<Atif>(`/api/runs/${runId}/trajectory`),
   resume: (runId: string, value: unknown) =>
     call<Ticket>(`/api/runs/${runId}/resume`, { method: "POST", body: JSON.stringify({ value }) }),
-  stop: (runId: string) => call<{ stopped: boolean }>(`/api/runs/${runId}/stop`, { method: "POST" }),
+  stop: (runId: string) =>
+    call<{ stopped: boolean; abandoned?: boolean }>(`/api/runs/${runId}/stop`, { method: "POST" }),
   queue: () => call<Ticket[]>("/api/queue"),
   forget: (ticket: number) => call<unknown>(`/api/queue/${ticket}`, { method: "DELETE" }),
 };
+
+/**
+ * Follows a ticket until its run starts, and lands the person on the run page.
+ * A queue that stays full for a while ends the wait on the Runs page instead,
+ * so a person is never left in front of the button they already pressed.
+ */
+export async function follow(ticket: Ticket): Promise<void> {
+  for (let turn = 0; turn < 40; turn += 1) {
+    const pending = await api.queue().catch(() => [] as Ticket[]);
+    const held = pending.find((one) => one.ticket === ticket.ticket);
+    // A job leaves the queue when it ends; its run page is the place to read why.
+    if (held?.runId || (!held && ticket.runId)) {
+      location.hash = `#/runs/${held?.runId ?? ticket.runId}`;
+      return;
+    }
+    if (held?.error) throw new Error(held.error);
+    if (!held) break;
+    await new Promise((rest) => setTimeout(rest, 500));
+  }
+  location.hash = "#/";
+}
 
 /**
  * Holds the events of one run, or of every run, and the queue. The daemon sends

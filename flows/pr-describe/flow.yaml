@@ -2,6 +2,7 @@
 # so no model spends tokens listing files.
 name: pr-describe
 workspace: { kind: git, path: . }
+budget: 3
 
 steps:
   - id: diff

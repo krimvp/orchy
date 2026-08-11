@@ -1,6 +1,7 @@
 # An agent proposes, a person disposes, and only then does anything move.
 name: refactor-gate
 workspace: { kind: git, path: . }
+budget: 10
 takes:
   type: object
   required: [target]

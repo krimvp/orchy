@@ -2,6 +2,7 @@
 # hangs on the step the inner flow ends with.
 name: ship
 workspace: { kind: git, path: . }
+budget: 10
 takes:
   type: object
   required: [change]

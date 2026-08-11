@@ -1,6 +1,7 @@
 # One prompt, four languages. A member holds the language that is its own.
 name: translate-readme
 workspace: { kind: git, path: . }
+budget: 5
 
 steps:
   - id: translate

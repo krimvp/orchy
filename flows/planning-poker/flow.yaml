@@ -1,6 +1,7 @@
 # Three estimators who cannot see each other, one spread, one person.
 name: planning-poker
 workspace: { kind: git, path: . }
+budget: 5
 parallel: 3
 takes:
   type: object

@@ -13,6 +13,10 @@ export function Runs() {
   const waiting = runs?.filter((run) => run.status === "waiting") ?? [];
   const running = runs?.filter((run) => run.status === "running") ?? [];
   const past = runs?.filter((run) => run.status !== "waiting" && run.status !== "running") ?? [];
+  // A ticket whose run is on the way already shows as that run, so it shows once.
+  const queued = pending.filter(
+    (ticket) => ticket.error || !ticket.runId || !runs?.some((run) => run.runId === ticket.runId),
+  );
 
   return (
     <section className="stagger">
@@ -21,7 +25,7 @@ export function Runs() {
         {runs ? `${runs.length} run${runs.length === 1 ? "" : "s"}` : "Reading the runs"}
         {running.length > 0 ? ` · ${running.length} on the way` : ""}
         {waiting.length > 0 ? ` · ${waiting.length} waiting for you` : ""}
-        {pending.length > 0 ? ` · ${pending.length} in the queue` : ""}
+        {queued.length > 0 ? ` · ${queued.length} in the queue` : ""}
       </p>
       {error && <p className="bad">{error}</p>}
 
@@ -51,19 +55,19 @@ export function Runs() {
                 <span className="dim small">{when(run.startedAt)}</span>
               </div>
               <p className="note" style={{ margin: 0 }}>
-                Nothing to do — open it to watch the steps land.
+                Running by itself — open it to watch the steps land.
               </p>
             </a>
           ))}
         </div>
       )}
 
-      {pending.length > 0 && (
+      {queued.length > 0 && (
         <div className="group" style={{ "--i": 4 } as CSSProperties}>
-          {pending.map((ticket) => (
+          {queued.map((ticket) => (
             <div key={ticket.ticket} className="flow-line">
               <span className={`pill ${ticket.error ? "failed" : "running"}`}>
-                {ticket.error ? "did not start" : "queued"}
+                {ticket.error ? "did not start" : ticket.runId ? "starting" : "queued"}
               </span>
               <div className="grow">
                 <div className="name">{ticket.flowName}</div>

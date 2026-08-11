@@ -1,6 +1,7 @@
 # Take an issue, write the fix, and let a second step prove it.
 name: bugfix
 workspace: { kind: git, path: . }
+budget: 10
 takes:
   type: object
   required: [issue]

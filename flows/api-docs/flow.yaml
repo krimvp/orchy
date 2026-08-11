@@ -2,6 +2,7 @@ name: api-docs
 workspace:
   kind: git
   path: .
+budget: 15
 steps:
   - id: list
     kind: call

@@ -2,6 +2,7 @@
 # only its own file.
 name: security-sweep
 workspace: { kind: git, path: . }
+budget: 10
 parallel: 3
 
 steps:

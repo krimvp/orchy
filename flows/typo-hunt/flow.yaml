@@ -2,6 +2,7 @@
 # The fixer reaches only the documents, so the code cannot drift.
 name: typo-hunt
 workspace: { kind: git, path: . }
+budget: 5
 
 steps:
   - id: hunt

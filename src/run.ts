@@ -143,7 +143,8 @@ export interface RunState {
   flow: Flow;
   /** The values this run supplies for what the flow takes. Every step reads them. */
   with?: Record<string, unknown>;
-  status: "running" | "waiting" | "done" | "failed";
+  /** `stopped` is what a person or a dead daemon leaves; a run never writes it itself. */
+  status: "running" | "waiting" | "done" | "failed" | "stopped";
   /** Why the run failed, when the fault belongs to the run and not to one step. */
   error?: string;
   waitingFor?: string;

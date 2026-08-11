@@ -3,8 +3,8 @@ import { type IncomingMessage, type Server, type ServerResponse, createServer } 
 import type { AddressInfo } from "node:net";
 import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import type { Daemon } from "./daemon.ts";
-import { type Flow, OPERATORS, validate } from "./flow.ts";
-import { ADAPTERS, TOOLS } from "./harness.ts";
+import { type Flow, OPERATORS, type Step, validate } from "./flow.ts";
+import { ADAPTERS, MODELS, TOOLS } from "./harness.ts";
 import { loadFlow, readFlow } from "./load.ts";
 import { formatFlow } from "./yaml.ts";
 
@@ -44,10 +44,117 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
         adapters: ADAPTERS,
         tools: TOOLS,
         operators: OPERATORS.map(({ name, reads }) => ({ name, reads })),
+        // What a model name looks like for each harness, so the editor hints
+        // instead of leaving a free field to guesswork.
+        models: Object.fromEntries(ADAPTERS.map((name) => [name, MODELS[name].write])),
       }),
     ],
 
-    ["GET", "/api/flows", () => daemon.store.flows()],
+    // Each row carries what a person needs to choose a flow: the one-line
+    // description its file starts with, what its last run cost, and whether
+    // it runs by itself.
+    [
+      "GET",
+      "/api/flows",
+      () => {
+        const runs = daemon.store.runs();
+        return daemon.store.flows().map((row) => {
+          const schedule = daemon.store.schedule(row.id);
+          return {
+            ...row,
+            description: descriptionOf(row.path),
+            lastRun: runs.find((run) => run.path === row.path) ?? null,
+            schedule: schedule ? { everyMinutes: schedule.everyMinutes, lastAt: schedule.lastAt } : null,
+          };
+        });
+      },
+    ],
+
+    // A flow that runs by itself. The first run starts at the next beat, and
+    // each one after when the interval has passed. The values ride along the
+    // way they would from the run form.
+    [
+      "PUT",
+      "/api/flows/:id/schedule",
+      async (parameters, body) => {
+        const row = flowRow(daemon, parameters.id as string);
+        const everyMinutes = Number(body.everyMinutes);
+        // A tighter loop than this is a runaway spend, not a schedule.
+        if (!Number.isFinite(everyMinutes) || everyMinutes < 15) {
+          throw new Error("a schedule fires at most every 15 minutes");
+        }
+        const flow = await readFlow(row.path);
+        const values = body.with as Record<string, unknown> | undefined;
+        const needed = ((flow.takes?.required as string[] | undefined) ?? []).filter(
+          (key) => values?.[key] === undefined || values[key] === "",
+        );
+        if (needed.length > 0) {
+          throw new Error(`the flow takes values, so the schedule needs: ${needed.join(", ")}`);
+        }
+        daemon.store.setSchedule(row.id, Math.round(everyMinutes), values);
+        return { scheduled: true, everyMinutes: Math.round(everyMinutes) };
+      },
+    ],
+
+    [
+      "DELETE",
+      "/api/flows/:id/schedule",
+      (parameters) => {
+        daemon.store.clearSchedule(Number(parameters.id));
+        return { removed: true };
+      },
+    ],
+
+    // A new flow starts here: one file, one prompt, and a row in the store.
+    // The editor is the surface that shapes it from there.
+    [
+      "POST",
+      "/api/flows/new",
+      async (_p, body) => {
+        const root = resolve(daemon.root);
+        const name = String(body.name ?? "").trim();
+        const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+        const given = String(body.path ?? "").trim();
+        if (!slug && !given) throw new Error("give the new flow a name");
+        const path = resolve(root, given || join("flows", slug, "flow.yaml"));
+        if (!under(root, path)) {
+          throw new Error(`the flow at "${path}" is outside the root "${root}". Put the flow file under the root.`);
+        }
+        if (!/\.ya?ml$/.test(path)) throw new Error(`a new flow is a YAML file, so its path ends with .yaml`);
+        if (existsSync(path)) throw new Error(`there is already a file at "${path}". Register it instead.`);
+        const harness = adapterOf(body.harness);
+        const flow: Flow = {
+          name: name || slug || "new-flow",
+          workspace: { kind: "git", path: "." },
+          budget: 5,
+          steps: [
+            {
+              id: "work",
+              kind: "agent",
+              needs: [],
+              prompt: "prompts/work.md",
+              tools: ["read", "grep", "find", "ls"],
+              changes: "nothing",
+              returns: {
+                type: "object",
+                required: ["summary"],
+                properties: { summary: { type: "string" } },
+              },
+            } as unknown as Step,
+          ],
+        };
+        mkdirSync(join(dirname(path), "prompts"), { recursive: true });
+        writeFileSync(path, formatFlow(flow));
+        const prompt = join(dirname(path), "prompts", "work.md");
+        if (!existsSync(prompt)) {
+          writeFileSync(
+            prompt,
+            "Say what this step should do, in plain words.\n\nAnswer with a short summary of what you did.\n",
+          );
+        }
+        return daemon.store.addFlow(path, flow.name, harness);
+      },
+    ],
 
     [
       "POST",
@@ -72,7 +179,13 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
       async (parameters) => {
         const row = flowRow(daemon, parameters.id as string);
         const flow = await readFlow(row.path);
-        return { row, flow, problems: validate(flow), editable: /\.ya?ml$/.test(row.path) };
+        return {
+          row,
+          flow,
+          problems: validate(flow),
+          warnings: missing(flow, row.path),
+          editable: /\.ya?ml$/.test(row.path),
+        };
       },
     ],
 
@@ -148,6 +261,9 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
         const flow = await loadFlow(row.path, daemon.root);
         const problems = validate(flow);
         if (problems.length > 0) throw new Error(`the flow is not valid:\n- ${problems.join("\n- ")}`);
+        // A file the flow names must be there before a step spends money on it.
+        const gone = missing(await readFlow(row.path), row.path);
+        if (gone.length > 0) throw new Error(`the flow names files that are not there:\n- ${gone.join("\n- ")}`);
         // The daemon adds no rule: it passes the values on, and the child checks them.
         return daemon.start({
           path: row.path,
@@ -158,7 +274,18 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
       },
     ],
 
-    ["POST", "/api/validate", (_p, body) => ({ problems: validate(body.flow as Flow) })],
+    // `path` rides along when the editor knows the file, so the answer also
+    // says which named files are not there. Those are warnings, not problems:
+    // the editor writes a missing prompt in one click, so they block no save.
+    [
+      "POST",
+      "/api/validate",
+      (_p, body) => {
+        const flow = body.flow as Flow;
+        const path = typeof body.path === "string" ? body.path : undefined;
+        return { problems: validate(flow), warnings: path ? missing(flow, path) : [] };
+      },
+    ],
 
     ["GET", "/api/runs", () => daemon.store.runs()],
 
@@ -193,7 +320,24 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
       },
     ],
 
-    ["POST", "/api/runs/:id/stop", (parameters) => ({ stopped: daemon.stop(parameters.id as string) })],
+    // A live child hears a signal. A run with no child — one that waits at a
+    // gate, or one a dead daemon left — is marked stopped where it stands.
+    // Never hide a failure: a run this daemon cannot stop says why.
+    [
+      "POST",
+      "/api/runs/:id/stop",
+      (parameters) => {
+        const runId = parameters.id as string;
+        if (daemon.stop(runId)) return { stopped: true };
+        if (daemon.abandon(runId)) return { stopped: true, abandoned: true };
+        const row = daemon.store.run(runId);
+        throw new Error(
+          row
+            ? `the run is already ${row.status}, so there is nothing to stop`
+            : `this daemon holds no run ${runId}`,
+        );
+      },
+    ],
 
     ["GET", "/api/queue", () => daemon.pending()],
 
@@ -352,8 +496,11 @@ function stream(daemon: Daemon, response: ServerResponse, request: IncomingMessa
   const write = (value: unknown) => response.write(`data: ${JSON.stringify(value)}\n\n`);
 
   if (runId) {
-    // What the run did and what it said, back in the order it happened.
-    const past = [...daemon.store.events(runId), ...daemon.notes(runId)].sort((a, b) => a.at.localeCompare(b.at));
+    // What the run did and what it said, back in the order it happened. The
+    // clock sorts them, and the order of receipt breaks a same-millisecond tie.
+    const past = [...daemon.store.events(runId), ...daemon.notes(runId)].sort(
+      (a, b) => a.at.localeCompare(b.at) || (a.seq ?? 0) - (b.seq ?? 0),
+    );
     for (const event of past) write({ kind: "event", runId, event });
   }
   write({ kind: "queue", pending: daemon.pending() });
@@ -401,4 +548,52 @@ function harnessOfRun(daemon: Daemon, runId: string): string {
   const run = daemon.store.run(runId);
   const flow = run?.path ? daemon.store.flowAt(run.path) : undefined;
   return flow?.harness ?? "pi";
+}
+
+/**
+ * The one-line description a flow file starts with: its leading comment. The
+ * file already says what the flow does there, so the list repeats no one.
+ */
+function descriptionOf(path: string): string {
+  try {
+    const lines = readFileSync(path, "utf8").split("\n");
+    const said: string[] = [];
+    for (const line of lines) {
+      const match = /^\s*(?:#|\/\/)\s?(.*)$/.exec(line);
+      if (!match) break;
+      said.push((match[1] as string).trim());
+    }
+    return said.join(" ").trim();
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * The files a flow names that are not there: a prompt, a module, an inner
+ * flow. Each path is relative to the flow file, the way the run resolves it.
+ */
+function missing(flow: Flow, flowPath: string): string[] {
+  const base = dirname(resolve(flowPath));
+  const gone: string[] = [];
+  const check = (step: string, kind: string, path?: string) => {
+    if (!path || isAbsolute(path)) return;
+    if (!existsSync(resolve(base, path))) {
+      gone.push(`the step "${step}" names a ${kind} that is not there: ${path}`);
+    }
+  };
+  // The union of step kinds narrows each field away; this check reads them loosely.
+  type Named = { id: string; prompt?: string; module?: string; flow?: string; fanout?: unknown };
+  for (const step of (flow.steps ?? []) as unknown as Named[]) {
+    check(step.id, "prompt", step.prompt);
+    check(step.id, "module", step.module);
+    check(step.id, "flow file", step.flow);
+    if (Array.isArray(step.fanout)) {
+      for (const member of step.fanout as Array<{ name: string; prompt?: string; module?: string }>) {
+        check(`${step.id}/${member.name}`, "prompt", member.prompt);
+        check(`${step.id}/${member.name}`, "module", member.module);
+      }
+    }
+  }
+  return gone;
 }

@@ -2,6 +2,7 @@
 # A deterministic step reads git, so no model spends tokens on it.
 name: standup
 workspace: { kind: git, path: . }
+budget: 2
 
 steps:
   - id: log

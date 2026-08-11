@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { RunEvent, RunState } from "./run.ts";
@@ -37,6 +37,12 @@ create table if not exists event (
   json text not null
 );
 create index if not exists event_of_run on event(runId, id);
+create table if not exists schedule (
+  flowId integer primary key,
+  everyMinutes integer not null,
+  withJson text,
+  lastAt text
+);
 `;
 
 export interface FlowRow {
@@ -60,7 +66,28 @@ export interface RunRow {
   tokens: number | null;
 }
 
-export type StoredEvent = RunEvent & { at: string };
+/**
+ * `seq` holds the order of receipt: two events can land in the same
+ * millisecond, and a clock alone cannot put them back in line.
+ */
+export type StoredEvent = RunEvent & { at: string; seq?: number };
+
+/** A flow that runs by itself: how often, and with which values. */
+export interface ScheduleRow {
+  flowId: number;
+  everyMinutes: number;
+  withJson: string | null;
+  lastAt: string | null;
+}
+
+/**
+ * A schedule that has never fired is due now — that is what scheduling it
+ * asked for. After that, it is due when its interval has passed.
+ */
+export function due(schedule: Pick<ScheduleRow, "everyMinutes" | "lastAt">, now: Date): boolean {
+  if (!schedule.lastAt) return true;
+  return now.getTime() - Date.parse(schedule.lastAt) >= schedule.everyMinutes * 60_000;
+}
 
 /**
  * How many runs the index holds. The list gives back this many rows, so a run
@@ -99,7 +126,30 @@ export function open(file: string) {
       return one<FlowRow>("select * from flow where path = ?", path) as FlowRow;
     },
 
-    removeFlow: (id: number): void => void db.prepare("delete from flow where id = ?").run(id),
+    removeFlow(id: number): void {
+      db.prepare("delete from flow where id = ?").run(id);
+      // A schedule without its flow would fire nothing, so it goes with it.
+      db.prepare("delete from schedule where flowId = ?").run(id);
+    },
+
+    schedules: (): ScheduleRow[] => all<ScheduleRow>("select * from schedule"),
+
+    schedule: (flowId: number): ScheduleRow | undefined =>
+      one<ScheduleRow>("select * from schedule where flowId = ?", flowId),
+
+    /** Keeps `lastAt`: a change of pace is not a reason to fire right now. */
+    setSchedule(flowId: number, everyMinutes: number, values?: Record<string, unknown>): void {
+      db.prepare(
+        `insert into schedule (flowId, everyMinutes, withJson) values (?, ?, ?)
+         on conflict(flowId) do update set everyMinutes = excluded.everyMinutes, withJson = excluded.withJson`,
+      ).run(flowId, everyMinutes, values ? JSON.stringify(values) : null);
+    },
+
+    clearSchedule: (flowId: number): void =>
+      void db.prepare("delete from schedule where flowId = ?").run(flowId),
+
+    markScheduled: (flowId: number, at: string): void =>
+      void db.prepare("update schedule set lastAt = ? where flowId = ?").run(at, flowId),
 
     runs: (limit = KEPT): RunRow[] => all<RunRow>("select * from run order by startedAt desc limit ?", limit),
 
@@ -126,8 +176,8 @@ export function open(file: string) {
       );
     },
 
-    addEvent(runId: string, event: RunEvent): StoredEvent {
-      const stored = { ...event, at: new Date().toISOString() };
+    addEvent(runId: string, event: RunEvent, seq?: number): StoredEvent {
+      const stored: StoredEvent = { ...event, at: new Date().toISOString(), seq };
       db.prepare("insert into event (runId, at, type, json) values (?, ?, ?, ?)").run(
         runId,
         stored.at,
@@ -160,9 +210,14 @@ export function open(file: string) {
       for (const runId of directories(runs)) {
         const state = stateAt(join(runs, runId, "state.json"));
         if (!state) continue;
-        const row = rowOf(state, this.run(runId)?.path ?? null, metricsAt(join(runs, runId, "trajectory.json")));
         // The daemon starts here and drives no run yet, so nothing is running.
-        if (row.status === "running") row.status = "stopped";
+        // The state on disk is the run, so the truth goes there, not only in
+        // this index — a page that reads the state must hear the same status.
+        if (state.status === "running") {
+          state.status = "stopped";
+          writeFileSync(join(runs, runId, "state.json"), JSON.stringify(state, null, 2));
+        }
+        const row = rowOf(state, this.run(runId)?.path ?? null, metricsAt(join(runs, runId, "trajectory.json")));
         this.saveRun(row);
         found += 1;
       }

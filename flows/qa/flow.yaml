@@ -2,6 +2,7 @@
 # The flow promises to change nothing, so the workspace checks every step.
 name: codebase-qa
 workspace: { kind: git, path: . }
+budget: 5
 changes: nothing
 takes:
   type: object

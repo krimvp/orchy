@@ -1,8 +1,8 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { type RunEvent, read } from "./run.ts";
-import { type Store, type StoredEvent, metricsAt, open, rowOf } from "./store.ts";
+import { type Store, type StoredEvent, due, metricsAt, open, rowOf } from "./store.ts";
 
 /**
  * How many runs the daemon starts at the same time. A run is a process that
@@ -72,6 +72,8 @@ export function daemon(root: string) {
   const listeners = new Set<(notice: Notice) => void>();
   let running = 0;
   let tickets = 0;
+  // The order of receipt. Two events in one millisecond still line up by it.
+  let order = 0;
   // A child ends after the daemon closes, so every handler stops here first.
   let closed = false;
 
@@ -111,7 +113,7 @@ export function daemon(root: string) {
     // The output of a step is a view, so it stays in memory and out of the index.
     if (event.type === "output") {
       const held = notes.get(job.runId) ?? [];
-      const note = { ...event, at: new Date().toISOString() };
+      const note = { ...event, at: new Date().toISOString(), seq: (order += 1) };
       held.push(note);
       if (held.length > NOTES) held.splice(0, held.length - NOTES);
       notes.set(job.runId, held);
@@ -121,7 +123,7 @@ export function daemon(root: string) {
       return;
     }
 
-    const stored = store.addEvent(job.runId, event);
+    const stored = store.addEvent(job.runId, event, (order += 1));
     if (event.type !== "step_start") record(job);
     tell({ kind: "event", runId: job.runId, event: stored });
   };
@@ -159,20 +161,48 @@ export function daemon(root: string) {
     }
   };
 
+  /** Puts a run in the queue. It starts when a slot is free. */
+  const start = (order: Order): Ticket => {
+    tickets += 1;
+    const job: Job = { ...order, ticket: tickets, queuedAt: new Date().toISOString(), stderr: "" };
+    jobs.set(job.ticket, job);
+    queue.push(job);
+    pump();
+    told();
+    return ticketOf(job);
+  };
+
+  /**
+   * Fires every schedule that is due, through the same door a person uses. A
+   * flow whose last scheduled run still works is skipped — runs must not stack
+   * behind a slow one — and it fires when that run has gone.
+   */
+  const fire = () => {
+    if (closed) return;
+    for (const held of store.schedules()) {
+      const row = store.flow(held.flowId);
+      if (!row) {
+        store.clearSchedule(held.flowId);
+        continue;
+      }
+      if (!due(held, new Date())) continue;
+      if ([...jobs.values()].some((job) => job.path === row.path)) continue;
+      store.markScheduled(held.flowId, new Date().toISOString());
+      start({
+        path: row.path,
+        flowName: row.name,
+        harness: row.harness,
+        with: held.withJson ? (JSON.parse(held.withJson) as Record<string, unknown>) : undefined,
+      });
+    }
+  };
+  const beat = setInterval(fire, 30_000);
+
   return {
     store,
     root,
 
-    /** Puts a run in the queue. It starts when a slot is free. */
-    start(order: Order): Ticket {
-      tickets += 1;
-      const job: Job = { ...order, ticket: tickets, queuedAt: new Date().toISOString(), stderr: "" };
-      jobs.set(job.ticket, job);
-      queue.push(job);
-      pump();
-      told();
-      return ticketOf(job);
-    },
+    start,
 
     /** Answers the gate of a run that waits. The child checks the value again. */
     resume(runId: string, value: unknown, harness: string): Ticket {
@@ -205,6 +235,24 @@ export function daemon(root: string) {
       return true;
     },
 
+    /**
+     * Ends a run that no child drives: one that waits at a gate, or one that a
+     * dead daemon left behind. The state on disk is the run, so the truth goes
+     * there, and the row and the listeners hear the same status.
+     */
+    abandon(runId: string): boolean {
+      const state = stateOf(root, runId);
+      if (!state || (state.status !== "waiting" && state.status !== "running")) return false;
+      state.status = "stopped";
+      delete state.waitingFor;
+      delete state.question;
+      writeFileSync(join(runs, runId, "state.json"), JSON.stringify(state, null, 2));
+      const path = store.run(runId)?.path ?? null;
+      store.saveRun(rowOf(state, path, metricsAt(join(runs, runId, "trajectory.json"))));
+      tell({ kind: "event", runId, event: store.addEvent(runId, { type: "run_end", status: "stopped" }) });
+      return true;
+    },
+
     /** What the steps of a run said while they worked, as far back as memory holds. */
     notes: (runId: string): StoredEvent[] => notes.get(runId) ?? [],
 
@@ -230,8 +278,12 @@ export function daemon(root: string) {
       return () => void listeners.delete(listener);
     },
 
+    /** Checks the schedules now, so a test does not wait for the clock. */
+    fire,
+
     close(): void {
       closed = true;
+      clearInterval(beat);
       for (const job of jobs.values()) job.child?.kill("SIGTERM");
       listeners.clear();
       store.close();

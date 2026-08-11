@@ -10,8 +10,10 @@ import {
   type Step,
   api,
   computedOf,
+  follow,
   membersOf,
   operatorOf,
+  unsaved,
   useLoad,
 } from "./api";
 import { type Edge, Graph } from "./Graph";
@@ -63,6 +65,7 @@ export function Editor({ id }: { id: number }) {
   /** The file that stands open in the drawer on the right. */
   const [fileOf, setFileOf] = useState<{ path: string; label: string }>();
   const [problems, setProblems] = useState<string[]>([]);
+  const [warnings, setWarnings] = useState<string[]>([]);
   const [note, setNote] = useState<string>();
   const [fault, setFault] = useState<string>();
   const [starting, setStarting] = useState(false);
@@ -71,20 +74,41 @@ export function Editor({ id }: { id: number }) {
     if (loaded.value) {
       setFlow(loaded.value.flow);
       setProblems(loaded.value.problems);
+      setWarnings(loaded.value.warnings ?? []);
     }
   }, [loaded.value]);
+
+  /** The flow differs from the file, so leaving without Save loses the change. */
+  const dirty = Boolean(flow && loaded.value && JSON.stringify(flow) !== JSON.stringify(loaded.value.flow));
+
+  // A change that never reached the file deserves one word before the tab
+  // goes — and the router reads the same flag before a link leaves this page.
+  useEffect(() => {
+    unsaved.here = dirty;
+    if (!dirty) return;
+    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
+    addEventListener("beforeunload", warn);
+    return () => {
+      unsaved.here = false;
+      removeEventListener("beforeunload", warn);
+    };
+  }, [dirty]);
 
   // The runner owns the rules, so the editor asks it rather than repeating them.
   useEffect(() => {
     if (!flow) return;
     const timer = setTimeout(() => {
       void api
-        .validate(flow)
-        .then((answer) => setProblems(answer.problems))
+        .validate(flow, loaded.value?.row.path)
+        .then((answer) => {
+          setProblems(answer.problems);
+          setWarnings(answer.warnings ?? []);
+        })
         .catch(() => undefined);
     }, 300);
     return () => clearTimeout(timer);
-  }, [flow]);
+  }, [flow, loaded.value?.row.path]);
+
 
   if (loaded.error) return <p className="bad">{loaded.error}</p>;
   if (!flow || !loaded.value) return <Loading lines={4} />;
@@ -115,7 +139,10 @@ export function Editor({ id }: { id: number }) {
   const add = (kind: Step["kind"]) => {
     const name = free(flow, kind);
     const seed = { id: name, kind, needs: [] } as unknown as Step;
-    setFlow({ ...flow, steps: [...flow.steps, clean({ ...seed, ...retype(seed, kind) })] });
+    const shaped = clean({ ...seed, ...retype(seed, kind) });
+    // Each new step gets its own prompt file, so two steps never share one by accident.
+    if (kind === "agent") shaped.prompt = `prompts/${name}.md`;
+    setFlow({ ...flow, steps: [...flow.steps, shaped] });
     setChosen(name);
   };
 
@@ -204,18 +231,33 @@ export function Editor({ id }: { id: number }) {
   const start = (values?: Record<string, unknown>) =>
     api
       .startFlow(id, values)
-      .then(() => (setStarting(false), setFault(undefined), setNote("The run is in the queue.")))
+      .then((ticket) => {
+        setStarting(false);
+        setFault(undefined);
+        setNote("Starting the run…");
+        return follow(ticket);
+      })
       .catch((problem: Error) => (setNote(undefined), setFault(problem.message)));
 
-  const save = () =>
+  const save = (): Promise<boolean> =>
     api
       .saveFlow(id, flow)
       .then((answer) => {
         setProblems(answer.problems);
         setNote(answer.saved ? "Saved to the file." : undefined);
         setFault(answer.saved ? undefined : "The flow is not valid, so nothing was written.");
+        // The file holds the flow now, so the page reads it back and stands clean.
+        if (answer.saved) loaded.again();
+        return answer.saved;
       })
-      .catch((problem: Error) => (setNote(undefined), setFault(problem.message)));
+      .catch((problem: Error) => (setNote(undefined), setFault(problem.message), false));
+
+  // A run reads the file, not this page — so a run of unsaved work saves first.
+  const run = () => {
+    const open = () => (flow.takes ? setStarting(true) : void start());
+    if (dirty && editable) void save().then((saved) => saved && open());
+    else open();
+  };
 
   return (
     <section className="stagger">
@@ -226,10 +268,17 @@ export function Editor({ id }: { id: number }) {
 
       {/* The toolbox: what the flow does, and what a person adds to it. */}
       <div className="bar-actions toolbox" style={{ "--i": 2 } as CSSProperties}>
-        <button className="go" disabled={!editable || problems.length > 0} onClick={() => void save()}>
-          Save
+        <button className="go" disabled={!editable || problems.length > 0 || !dirty} onClick={() => void save()}>
+          {dirty ? "Save" : "Saved"}
         </button>
-        <button onClick={() => (flow.takes ? setStarting(true) : void start())}>Run</button>
+        <button title={dirty && editable ? "A run reads the file, so this saves first." : undefined} onClick={run}>
+          {dirty && editable ? "Save and run" : "Run"}
+        </button>
+        {dirty && (
+          <span className="dim small" title="The file still holds the old flow until you save.">
+            not saved yet
+          </span>
+        )}
         {editable && (
           <>
             <span className="rule" />
@@ -252,7 +301,12 @@ export function Editor({ id }: { id: number }) {
             </button>
           </>
         )}
-        <span style={{ marginLeft: "auto" }}>
+        <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+          {problems.length === 0 && warnings.length > 0 && (
+            <span className="pill waiting" title={warnings.join("\n")}>
+              {warnings.length} missing file{warnings.length === 1 ? "" : "s"}
+            </span>
+          )}
           {problems.length === 0 ? (
             <span className="pill done">valid</span>
           ) : (
@@ -281,6 +335,15 @@ export function Editor({ id }: { id: number }) {
         <ul className="bad list">
           {problems.map((problem) => (
             <li key={problem}>{problem}</li>
+          ))}
+        </ul>
+      )}
+      {/* A missing file blocks no save — the file drawer writes it in one click —
+          but a run would spend money on it, so it stands here in plain sight. */}
+      {problems.length === 0 && warnings.length > 0 && (
+        <ul className="warn list">
+          {warnings.map((warning) => (
+            <li key={warning}>{warning} — open it from its step and save it.</li>
           ))}
         </ul>
       )}
@@ -375,7 +438,7 @@ export function Editor({ id }: { id: number }) {
                 onChange={(e) => setFlow({ ...flow, model: e.target.value || undefined })}
               />
             </label>
-            <label className="field">
+            <label className="field" title="How many steps of this flow may run at the same time.">
               <span>Steps at once</span>
               <input
                 type="number"
@@ -394,6 +457,11 @@ export function Editor({ id }: { id: number }) {
                 value={flow.budget ?? ""}
                 onChange={(e) => setFlow({ ...flow, budget: e.target.value === "" ? undefined : Number(e.target.value) })}
               />
+              {flow.budget === undefined && (
+                <span className="warn small">
+                  Without a budget, a run can spend without limit. A run stops before the step that would pass it.
+                </span>
+              )}
             </label>
 
             <ChangesFields
@@ -425,12 +493,16 @@ export function Editor({ id }: { id: number }) {
           )}
           {step && (
             <StepFields
-              key={step.id}
+              // The key is the place of the step, not its id: a rename keeps
+              // the panel mounted, so the Id field keeps focus while a person
+              // types. An id key remounted it every keystroke and ate them.
+              key={flow.steps.indexOf(step)}
               flow={flow}
               step={step}
               tools={health.value?.tools ?? []}
               adapters={health.value?.adapters ?? []}
               operators={health.value?.operators ?? []}
+              models={health.value?.models ?? {}}
               onChange={(patch) => change(step.id, patch)}
               onRename={(to) => rename(step.id, to)}
               onRemove={() => remove(step.id)}
@@ -503,6 +575,7 @@ function StepFields({
   tools,
   adapters,
   operators,
+  models,
   onChange,
   onRename,
   onRemove,
@@ -514,6 +587,7 @@ function StepFields({
   tools: string[];
   adapters: string[];
   operators: Operator[];
+  models: Record<string, string>;
   onChange: (patch: Partial<Step>) => void;
   onRename: (to: string) => void;
   onRemove: () => void;
@@ -521,6 +595,8 @@ function StepFields({
   onOpenFile: (relativePath: string | undefined, label: string) => void;
 }) {
   const others = flow.steps.filter((one) => one.id !== step.id);
+  // The hint of the harness this step runs under: its own, or the flow's.
+  const modelHint = models[step.harness ?? flow.harness ?? ""] ?? "the harness chooses";
   return (
     <div className="panel">
       <label className="field">
@@ -569,7 +645,7 @@ function StepFields({
               </button>
             </div>
           </div>
-          <label className="field">
+          <label className="field" title="The harness is the agent program that runs this step.">
             <span>Harness</span>
             <select value={step.harness ?? ""} onChange={(e) => onChange({ harness: e.target.value || undefined })}>
               <option value="">the default of the run</option>
@@ -578,10 +654,10 @@ function StepFields({
               ))}
             </select>
           </label>
-          <label className="field">
+          <label className="field" title={modelHint}>
             <span>Model</span>
             <input
-              placeholder="the harness chooses"
+              placeholder={modelHint}
               value={step.model ?? ""}
               onChange={(e) => onChange({ model: e.target.value || undefined })}
             />
@@ -1271,7 +1347,8 @@ function MatchFields({
         const at = (key: string, value: unknown) =>
           write(entries.map((one, place) => (place === index ? [key, value] : one)));
         return (
-          <div key={row.key} className="member">
+          // The key is the place of the row: a renamed key keeps its input mounted.
+          <div key={index} className="member">
             {keys ? (
               <select value={row.key} onChange={(e) => at(e.target.value, { [operator.name]: argument })}>
                 {[row.key, ...free].map((key) => (

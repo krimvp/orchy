@@ -8,7 +8,7 @@ import test from "node:test";
 import { daemon } from "../src/daemon.ts";
 import { OPERATORS } from "../src/flow.ts";
 import { serve } from "../src/server.ts";
-import { KEPT, open, rowOf } from "../src/store.ts";
+import { KEPT, due, open, rowOf } from "../src/store.ts";
 import { formatFlow, parseFlow } from "../src/yaml.ts";
 
 const COUNT = `export default (inputs: Record<string, unknown>) => ({ count: Object.keys(inputs).length });\n`;
@@ -533,6 +533,86 @@ test("the daemon adds no rule of its own, so the child refuses a run with no val
     const [ticket] = (await site.call("/api/queue")).body as Array<{ error: string }>;
     assert.match(ticket?.error as string, /takes values, and this run supplies none/);
     assert.deepEqual((await site.call("/api/runs")).body, []);
+  } finally {
+    await site.close();
+  }
+});
+
+test("a schedule is due at once, and again only when its interval has passed", () => {
+  const now = new Date("2026-08-11T12:00:00Z");
+  assert.equal(due({ everyMinutes: 60, lastAt: null }, now), true);
+  assert.equal(due({ everyMinutes: 60, lastAt: "2026-08-11T11:30:00Z" }, now), false);
+  assert.equal(due({ everyMinutes: 60, lastAt: "2026-08-11T11:00:00Z" }, now), true);
+  assert.equal(due({ everyMinutes: 15, lastAt: "2026-08-11T11:46:00Z" }, now), false);
+});
+
+test("a scheduled flow runs by itself, and does not run again before its time", async () => {
+  const solo = {
+    name: "solo",
+    steps: [{ id: "work", kind: "call", module: "count.ts", returns: NUMBER }],
+  };
+  const site = await running(project(solo));
+  try {
+    await site.call("/api/flows", { method: "POST", body: JSON.stringify({ path: "flow.yaml" }) });
+
+    // A pace tighter than 15 minutes is a runaway spend, so the server refuses it.
+    const tight = await site.call("/api/flows/1/schedule", {
+      method: "PUT",
+      body: JSON.stringify({ everyMinutes: 1 }),
+    });
+    assert.equal(tight.code, 400);
+
+    const set = await site.call("/api/flows/1/schedule", {
+      method: "PUT",
+      body: JSON.stringify({ everyMinutes: 60 }),
+    });
+    assert.equal(set.code, 200);
+
+    // The beat fires the schedule with no person in the loop.
+    site.engine.fire();
+    await until(async () =>
+      ((await site.call("/api/runs")).body as Array<{ status: string }>).some((run) => run.status === "done"),
+    );
+
+    // The next beat comes before the hour has, so nothing else starts.
+    site.engine.fire();
+    const runs = (await site.call("/api/runs")).body as unknown[];
+    assert.equal(runs.length, 1);
+
+    // The row says how the flow runs, so the list can too.
+    const [row] = (await site.call("/api/flows")).body as Array<{ schedule: { everyMinutes: number } | null }>;
+    assert.equal(row?.schedule?.everyMinutes, 60);
+
+    await site.call("/api/flows/1/schedule", { method: "DELETE" });
+    const [bare] = (await site.call("/api/flows")).body as Array<{ schedule: unknown }>;
+    assert.equal(bare?.schedule, null);
+  } finally {
+    await site.close();
+  }
+});
+
+test("a schedule for a flow that takes values must carry them", async () => {
+  const site = await running(project(TAKING));
+  try {
+    await site.call("/api/flows", { method: "POST", body: JSON.stringify({ path: "flow.yaml" }) });
+
+    const bare = await site.call("/api/flows/1/schedule", {
+      method: "PUT",
+      body: JSON.stringify({ everyMinutes: 60 }),
+    });
+    assert.equal(bare.code, 400);
+    assert.match((bare.body as { error: string }).error, /the schedule needs: issue/);
+
+    const held = await site.call("/api/flows/1/schedule", {
+      method: "PUT",
+      body: JSON.stringify({ everyMinutes: 60, with: { issue: 412 } }),
+    });
+    assert.equal(held.code, 200);
+
+    site.engine.fire();
+    await until(async () =>
+      ((await site.call("/api/runs")).body as Array<{ status: string }>).some((run) => run.status === "done"),
+    );
   } finally {
     await site.close();
   }

@@ -2,6 +2,7 @@
 # The writer may touch the test directory and nothing else.
 name: test-writer
 workspace: { kind: git, path: . }
+budget: 10
 
 steps:
   - id: survey

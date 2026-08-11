@@ -1,5 +1,16 @@
 import { type CSSProperties, useEffect, useRef, useState } from "react";
-import { type RunEvent, type RunState, type Schema, type Step, type StepRecord, api, useLoad, useNotices } from "./api";
+import {
+  type Change,
+  type RunEvent,
+  type RunState,
+  type Schema,
+  type Step,
+  type StepRecord,
+  api,
+  follow as followTicket,
+  useLoad,
+  useNotices,
+} from "./api";
 import { Graph, type Mark } from "./Graph";
 import { Loading, length, said, when } from "./Runs";
 import { Trajectory } from "./Trajectory";
@@ -21,8 +32,9 @@ export function Run({ runId }: { runId: string }) {
     again();
   }, [events.length, again]);
 
-  // The elapsed times move while the run does.
-  useTick(value?.state.status === "running");
+  // The elapsed times move while the run does. A run whose row says otherwise
+  // has no live process, so its clock stands still.
+  useTick(value?.state.status === "running" && (!value.row || value.row.status === "running"));
 
   // The page follows the run: the step that acts is the step that shows.
   const follow = value ? followed(value.state, live) : undefined;
@@ -33,7 +45,11 @@ export function Run({ runId }: { runId: string }) {
   if (error) return <p className="bad">{error}</p>;
   if (!value) return <Loading lines={4} />;
 
-  const { state, row } = value;
+  const { state: held, row } = value;
+  // A daemon that died mid-run leaves a state that still says running. The
+  // index reconciles at boot, and this guard holds the same line meanwhile.
+  const state: RunState =
+    held.status === "running" && row && row.status !== "running" ? { ...held, status: row.status } : held;
   const step = state.flow.steps.find((one) => one.id === chosen);
   const record = chosen ? state.steps[chosen] : undefined;
   const gate = state.waitingFor ? state.flow.steps.find((one) => one.id === state.waitingFor) : undefined;
@@ -110,7 +126,7 @@ export function Run({ runId }: { runId: string }) {
       {state.with && (
         <details>
           <summary>The values this run takes</summary>
-          <pre>{JSON.stringify(state.with, null, 2)}</pre>
+          <Value value={state.with} />
         </details>
       )}
 
@@ -118,9 +134,35 @@ export function Run({ runId }: { runId: string }) {
         <a className="button" href={`/api/runs/${runId}/trajectory`} target="_blank" rel="noreferrer">
           Read the trajectory
         </a>
-        {state.status === "running" && (
-          <button className="danger" onClick={() => void api.stop(runId).then(again)}>
+        {/* A person leaves a run at any point before it ends — even at a gate. */}
+        {(state.status === "running" || state.status === "waiting") && (
+          <button
+            className="danger"
+            onClick={() =>
+              void api
+                .stop(runId)
+                .then(() => (setFault(undefined), again()))
+                .catch((problem: Error) => setFault(problem.message))
+            }
+          >
             Stop this run
+          </button>
+        )}
+        {(state.status === "done" || state.status === "failed" || state.status === "stopped") && row?.path && (
+          <button
+            className="button"
+            onClick={() =>
+              void api
+                .flows()
+                .then((flows) => {
+                  const found = flows.find((one) => one.path === row.path);
+                  if (!found) throw new Error("This flow is not registered any more, so register it first.");
+                  return api.startFlow(found.id, state.with).then(followTicket);
+                })
+                .catch((problem: Error) => setFault(problem.message))
+            }
+          >
+            Run it again{state.with ? ", with the same values" : ""}
           </button>
         )}
       </div>
@@ -187,11 +229,18 @@ function Hero({
   onOpen: (id: string) => void;
 }) {
   if (state.status === "waiting" && gate) {
+    // The question reads the steps before it, so their answers stand right here.
+    const evidence = gate.needs
+      .map((need) => ({ need, record: state.steps[need] }))
+      .filter((one) => one.record && "value" in one.record);
     return (
       <div className="hero waiting" style={{ "--i": 1 } as CSSProperties}>
         <span className="badge">Your turn</span>
         <h2>This run waits for you</h2>
         <p className="ask">{state.question ?? gate.question}</p>
+        {evidence.map(({ need, record }) => (
+          <Value key={need} label={`What ${need} answered`} value={record?.value} />
+        ))}
         <Contract schema={gate.returns ?? {}} label="Answer and continue" onSend={onAnswer} />
       </div>
     );
@@ -240,6 +289,7 @@ function Hero({
             {record.error && <pre className="bad clamp">{record.error}</pre>}
           </>
         )}
+        <Leavings state={state} />
       </div>
     );
   }
@@ -253,11 +303,9 @@ function Hero({
         {value === undefined ? (
           <p>Every step passed. Choose one in the drawing to read what it answered.</p>
         ) : (
-          <>
-            <p>It returned this value:</p>
-            <pre className="clamp">{JSON.stringify(value, null, 2)}</pre>
-          </>
+          <Value label="It returned this value" value={value} />
         )}
+        <Leavings state={state} />
       </div>
     );
   }
@@ -328,17 +376,20 @@ function Activity({ events, output, live }: { events: RunEvent[]; output: RunEve
   const rows = [
     ...events.map((event) => ({
       at: event.at,
+      seq: Number(event.seq ?? 0),
       step: event.step ? String(event.step) : "",
       kind: kindOf(event),
       text: say(event),
     })),
     ...output.map((note) => ({
       at: note.at,
+      seq: Number(note.seq ?? 0),
       step: String(note.step),
       kind: String(note.kind),
       text: String(note.text),
     })),
-  ].sort((a, b) => a.at.localeCompare(b.at));
+    // The clock orders the feed, and the order of receipt breaks a tie.
+  ].sort((a, b) => a.at.localeCompare(b.at) || a.seq - b.seq);
 
   useEffect(() => {
     if (live) foot.current?.scrollIntoView({ block: "nearest" });
@@ -350,7 +401,17 @@ function Activity({ events, output, live }: { events: RunEvent[]; output: RunEve
         <div key={index} className={`note ${row.kind}`}>
           <time>{new Date(row.at).toLocaleTimeString()}</time>
           <span className="step">{row.step}</span>
-          <span className="text">{row.text}</span>
+          {/* A whole file in the feed drowns the story, so a long note folds. */}
+          {row.text.length > 600 ? (
+            <details className="text long">
+              <summary>
+                {row.text.slice(0, 160).replaceAll("\n", " ")}… <em>({row.text.length.toLocaleString()} chars)</em>
+              </summary>
+              {row.text}
+            </details>
+          ) : (
+            <span className="text">{row.text}</span>
+          )}
         </div>
       ))}
       {rows.length === 0 && <p className="empty" style={{ padding: "8px 16px" }}>Nothing yet.</p>}
@@ -476,12 +537,7 @@ function Detail({
           <pre className="bad">{record.error}</pre>
         </>
       )}
-      {record && "value" in record && (
-        <>
-          <h4 className="part">What it answered</h4>
-          <pre>{JSON.stringify(record.value, null, 2)}</pre>
-        </>
-      )}
+      {record && "value" in record && <Value label="What it answered" value={record.value} />}
       {!record && <p className="empty">This step has not ended yet.</p>}
       {history.length > 0 && (
         <details>
@@ -500,8 +556,76 @@ function Detail({
 }
 
 /**
+ * A value a step answered or a run returned, readable first: prose wraps, JSON
+ * pretty-prints and wraps, and one button copies the whole of it.
+ */
+export function Value({ value, label }: { value: unknown; label?: string }) {
+  const [copied, setCopied] = useState(false);
+  const prose = proseOf(value);
+  const copy = () => {
+    const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+    void navigator.clipboard?.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+
+  return (
+    <div className="value">
+      <div className="value-head">
+        {label && <span className="dim small">{label}</span>}
+        <button className="quiet small" onClick={copy}>
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+      {prose !== undefined ? (
+        <p className="prose">{prose}</p>
+      ) : (
+        <pre className="wrap">{JSON.stringify(value, null, 2)}</pre>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The words a value holds, when it is words: a plain string, or an object with
+ * one string field. A standup note reads as a note, not as the JSON around it.
+ */
+function proseOf(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.length === 1 && typeof entries[0]?.[1] === "string") return entries[0][1];
+  }
+  return undefined;
+}
+
+/**
+ * What the run left in the workspace, rolled up across its steps. The files sit
+ * uncommitted in the working tree, so the run says so instead of going quiet.
+ */
+function Leavings({ state }: { state: RunState }) {
+  const changed: Change[] = [
+    ...Object.values(state.steps),
+    ...(state.history ?? []).map((one) => one.record),
+  ].flatMap((record) => record.changed ?? []);
+  if (changed.length === 0) return null;
+  return (
+    <details className="leavings">
+      <summary>
+        It changed {changed.length} {changed.length === 1 ? "path" : "paths"} in the workspace — they sit
+        uncommitted
+      </summary>
+      <pre className="wrap small">{said(changed)}</pre>
+    </details>
+  );
+}
+
+/**
  * A form for a contract, so a person writes no JSON. A gate reads its own
- * contract, and a run that takes values reads what the flow takes.
+ * contract, and a run that takes values reads what the flow takes. A field the
+ * contract needs must hold something before the form sends — a run costs
+ * money, and a model asked about nothing answers with nothing.
  */
 export function Contract({
   schema,
@@ -517,8 +641,26 @@ export function Contract({
   const [value, setValue] = useState<Record<string, unknown>>(() => blank(properties));
   const [raw, setRaw] = useState(false);
   const [text, setText] = useState(() => JSON.stringify(blank(properties), null, 2));
+  const [need, setNeed] = useState<string>();
 
-  const set = (key: string, next: unknown) => setValue((held) => ({ ...held, [key]: next }));
+  const set = (key: string, next: unknown) => {
+    setNeed(undefined);
+    setValue((held) => ({ ...held, [key]: next }));
+  };
+
+  const send = () => {
+    if (raw) return onSend(JSON.parse(text));
+    const empty = required.filter((key) => {
+      const held = value[key];
+      return held === undefined || held === "" || (Array.isArray(held) && held.length === 0);
+    });
+    if (empty.length > 0) {
+      return setNeed(
+        `Fill in ${empty.join(", ")} first — the flow needs ${empty.length === 1 ? "it" : "them"}.`,
+      );
+    }
+    onSend(value);
+  };
 
   return (
     <>
@@ -533,7 +675,11 @@ export function Contract({
               {required.includes(key) && <em className="need"> · needed</em>}
             </span>
             {(field.type === "number" || field.type === "integer") && (
-              <input type="number" value={String(value[key] ?? 0)} onChange={(e) => set(key, Number(e.target.value))} />
+              <input
+                type="number"
+                value={value[key] === undefined ? "" : String(value[key])}
+                onChange={(e) => set(key, e.target.value === "" ? undefined : Number(e.target.value))}
+              />
             )}
             {field.type === "string" && (
               <input value={String(value[key] ?? "")} onChange={(e) => set(key, e.target.value)} />
@@ -549,8 +695,9 @@ export function Contract({
           </label>
         ))}
       {raw && <textarea rows={8} value={text} onChange={(e) => setText(e.target.value)} />}
+      {need && <p className="bad small">{need}</p>}
       <div className="row" style={{ marginBottom: 0 }}>
-        <button className="go" onClick={() => onSend(raw ? JSON.parse(text) : value)}>
+        <button className="go" onClick={send}>
           {label}
         </button>
         <button
@@ -558,6 +705,7 @@ export function Contract({
           onClick={() => {
             if (!raw) setText(JSON.stringify(value, null, 2));
             setRaw(!raw);
+            setNeed(undefined);
           }}
         >
           {raw ? "Use the form" : "Write JSON"}
@@ -578,7 +726,8 @@ function blank(properties: Record<string, Schema>): Record<string, unknown> {
   const value: Record<string, unknown> = {};
   for (const [key, field] of Object.entries(properties)) {
     if (field.type === "boolean") value[key] = false;
-    else if (field.type === "number" || field.type === "integer") value[key] = 0;
+    // A number stays empty: a pre-filled 0 is an answer no one gave.
+    else if (field.type === "number" || field.type === "integer") value[key] = undefined;
     else if (field.type === "array") value[key] = [];
     else if (field.type === "object") value[key] = {};
     else value[key] = "";
