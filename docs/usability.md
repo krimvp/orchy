@@ -615,6 +615,10 @@ findings stay as they were written.
 | 8 — no help, one exit code | `--help` and `--version` write to the output stream and end with 0. `orchy runs` lists the runs. A wrong command ends with 2, a failed run with 1, and a waiting run with 3. |
 | 9 — the value a flow returns | `state.value` holds it. |
 | 10 — cost | A Claude trajectory keeps no per-step zero. A busy port, a bad `--port`, a missing file, a missing prompt, a missing module and an unknown run id all say what to do. The Claude adapter closes the input stream it never writes to, which takes about 2.5 s off every step. |
+| 6 — `--with` accepts a key the flow does not take | It is refused, and the message names the key. |
+| 6 — only the first voter cycles | A voter that has spent its own limit lets the next one take its turn. |
+| 10 — a failed pi step keeps no trajectory | The record rides on the error, so the step a reader most wants to read has its session. |
+| 11 — the SQLite warning on every run | The daemon loads `node:sqlite` when a person asks for the daemon, so a run prints nothing. |
 | the shipped flows | Every flow names a harness and a model. A `budget` stays only where the harness reports a cost. The prompts carry their own rules. The git modules take values instead of reading the environment. `examples/research` declares what it takes. |
 
 **Still open.** The rejection that Pi writes still does not name the values a

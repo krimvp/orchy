@@ -252,7 +252,14 @@ export function takesProblem(flow: Flow, values: Record<string, unknown> | undef
     return `the flow "${flow.name}" takes values, and ${who} supplies none. Supply the values that "takes" names.`;
   }
   const problem = schemaProblem(flow.takes, values);
-  return problem && `the values ${who} supplies break what the flow "${flow.name}" takes ${problem}`;
+  if (problem) return `the values ${who} supplies break what the flow "${flow.name}" takes ${problem}`;
+  // A value that the flow does not take reaches no step and no prompt, so it is
+  // a mistake that runs to the end in silence. JSON Schema allows it, and this
+  // does not: `docs/running.md` states the rule and the shape check keeps it.
+  const named = Object.keys((flow.takes as { properties?: Record<string, unknown> }).properties ?? {});
+  const spare = Object.keys(values).filter((key) => !named.includes(key));
+  if (spare.length === 0) return undefined;
+  return `the flow "${flow.name}" does not take ${spare.join(", ")}, and ${who} supplies ${spare.length === 1 ? "it" : "them"}. Add ${spare.length === 1 ? "the name" : "the names"} to "takes", or leave ${spare.length === 1 ? "it" : "them"} out.`;
 }
 
 /** The steps that no step needs. A flow that returns a value ends in one of them. */

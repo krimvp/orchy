@@ -174,8 +174,9 @@ that passed keep their work, and the record of a step that runs again goes to
 history first, so its cost still counts.
 
 `--with` takes one JSON object. Orchy checks it against what the flow takes
-before the first step spends a token, and it refuses a value that the flow does
-not take.
+before the first step spends a token. It refuses a value that breaks the schema,
+and a name the flow does not take: a value that reaches no step and no prompt is
+a mistake that would otherwise run to the end in silence.
 
 The command prints the events to the error stream and the run state to the
 output stream. It ends with 0 when the run finishes or waits, and 1 when the

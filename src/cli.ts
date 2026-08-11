@@ -3,12 +3,10 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { claude } from "./claude.ts";
-import { daemon } from "./daemon.ts";
 import { type AdapterName, ADAPTERS, type Harness } from "./harness.ts";
 import { loadFlow } from "./load.ts";
 import { pi } from "./pi.ts";
 import { type RunEvent, type RunState, list, resume, run } from "./run.ts";
-import { serve } from "./server.ts";
 
 const VERSION = String(createRequire(import.meta.url)("../package.json").version);
 
@@ -226,6 +224,10 @@ try {
   }
 
   if (command === "daemon") {
+    // The daemon keeps its index with `node:sqlite`, and Node calls that
+    // experimental and says so. A run needs no index, so it loads only here.
+    const { daemon } = await import("./daemon.ts");
+    const { serve } = await import("./server.ts");
     const engine = daemon(process.cwd());
     await serve(engine, port ?? PORT);
     // The daemon runs an agent on this machine, so it listens on this machine only.

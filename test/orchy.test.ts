@@ -421,6 +421,46 @@ test("a step that fails says why in its event, so a parent process reports it", 
   assert.match(String(over && "error" in over ? over.error : ""), /step "one" failed/);
 });
 
+test("a run refuses a value that the flow does not take", async () => {
+  const cwd = workspace();
+
+  await assert.rejects(
+    () =>
+      run(
+        flow("narrow", {
+          takes: Type.Object({ issue: Type.Number() }),
+          steps: [agent({ id: "one", prompt: "step.md", tools: ["read"], returns: Summary })],
+        }),
+        { cwd, with: { issue: 1, spare: "x" }, harness: fakeHarness({ summary: "v" }) },
+      ),
+    /does not take spare/,
+  );
+});
+
+test("a second step that votes to cycle takes its turn when the first has spent its limit", async () => {
+  const cwd = workspace();
+  const votes = { approved: false };
+  const reviewer = (id: string) =>
+    agent({
+      id,
+      needs: ["code"],
+      prompt: "step.md",
+      tools: ["read"],
+      returns: Verdict,
+      cycle: { to: "code", when: { approved: false }, limit: 1, policy: "accept" },
+    });
+
+  const state = await run(
+    flow("two-reviewers", {
+      steps: [agent({ id: "code", prompt: "step.md", tools: ["read"], returns: Summary }), reviewer("b"), reviewer("c")],
+    }),
+    { cwd, harness: fakeHarness({ summary: "v" }, votes, votes) },
+  );
+
+  // The first voter must not starve the second: each one spends its own limit.
+  assert.deepEqual(state.cycles, { "b->code": 1, "c->code": 1 });
+});
+
 test("a resume names the run again, so a parent process follows it", async () => {
   const cwd = workspace();
   const events: string[] = [];

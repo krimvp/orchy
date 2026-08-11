@@ -114,7 +114,11 @@ export const pi: Harness = {
     }
 
     const file = sessionManager.getSessionFile();
-    if (value === undefined) throw new Error(refused(request, file, refusals));
+    if (value === undefined) {
+      // The session is on disk either way, and a step that failed is the one a
+      // reader most wants to read. So the trajectory rides on the error.
+      throw Object.assign(new Error(refused(request, file, refusals)), { trajectory: file });
+    }
     return { value, trajectory: file, cost: costOf(file) };
   },
 

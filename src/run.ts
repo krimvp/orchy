@@ -518,11 +518,15 @@ async function execute(state: RunState, cwd: string, options: RunOptions, answer
     // One wave settles one cycle. A second would fight the first for the same
     // steps, so the run goes back to the earliest target and runs the rest again.
     const place = (step: Step) => sorted.findIndex((one) => one.id === (cycleOf(step) as Cycle).to);
-    const [turning] = [...voters].sort((one, other) => place(one) - place(other));
+    const waiting = [...voters].sort((one, other) => place(one) - place(other));
 
-    if (turning) {
+    // The earliest target wins the wave. A step that has spent its own limit
+    // wins nothing, so the next voter takes its turn: otherwise the first voter
+    // starves every other one, and a run of reviewers who all disagree ends
+    // `done`.
+    for (const turning of waiting) {
       // A vote the run does not act on is still information, so the record holds it.
-      for (const other of voters) {
+      for (const other of waiting) {
         if (other !== turning) (state.steps[other.id] as StepRecord).votedToCycle = (cycleOf(other) as Cycle).to;
       }
       const cycle = cycleOf(turning) as Cycle;
@@ -530,6 +534,9 @@ async function execute(state: RunState, cwd: string, options: RunOptions, answer
       if (goBack(turning, state, sorted, emit)) {
         return stop(state, turning.id, questionFor(turning, cycle, record), close, emit);
       }
+      // This step has spent its own limit, and the policy took its disagreement.
+      // The next voter still has a turn, so the first one starves no other.
+      if (record.disagreement !== "accepted") break;
     }
 
     save();
@@ -835,7 +842,10 @@ async function runStep(
     // The message, and not the word "Error" in front of it. A reader of a
     // console reads the reason, not the class of the object that carried it.
     const why = error instanceof Error ? error.message : String(error);
-    return { ...at(), status: "failed", error: why, ...(prompt ? { prompt } : {}) };
+    // A harness that wrote a record before it failed hands it over here, so the
+    // step a reader most wants to read is not the one with nothing in it.
+    const held = (error as { trajectory?: string }).trajectory;
+    return { ...at(), status: "failed", error: why, ...(held ? { trajectory: held } : {}), ...(prompt ? { prompt } : {}) };
   }
 
   // Invariant 5: what the step really did, not what it says it did.
