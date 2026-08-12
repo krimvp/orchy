@@ -36,7 +36,7 @@ run.
 
   | Route | What it does |
   | --- | --- |
-  | `GET /api/health` | The daemon's `root`, the `adapters` and `tools` of the harness, the `operators` with what each reads, and `models` — what a model name looks like for each harness — so the editor never holds a copy that falls behind the runner. |
+  | `GET /api/health` | The daemon's `root`, the `adapters` and `tools` of the harness, the `operators` with what each reads, `models` — what a model name looks like for each harness — and `components`, the `orchy:` names Orchy ships, so the editor never holds a copy that falls behind the runner. |
   | `GET /api/flows` | Every registered flow, each row carrying what a person needs to choose one: the `description` its file starts with (the leading comment), its `lastRun`, its `schedule` (`{ everyMinutes, lastAt }` or `null`), and its webhook `hook` token or `null`. |
   | `POST /api/flows` | Registers the flow file at `body.path`, under `body.harness` (default `"pi"`). The path must name an existing file under the daemon's root. |
   | `POST /api/flows/new` | Creates a new flow from `body.name` (or an explicit `body.path` ending in `.yaml`): writes a one-step starter flow and its prompt under the root, then registers it. Refuses a path where a file already exists — register that instead. |
@@ -54,6 +54,7 @@ run.
   | `POST /api/validate` | `{ problems, warnings }` for the flow in `body.flow`, without touching the flow file. `warnings` names missing files and unfilled brace names; the files are only checked when `body.path` says where the flow lives. A warning blocks no save, since the editor mends one in a click — but `start` refuses both kinds, so none reaches a run. |
   | `GET /api/runs` | Every run the index holds. |
   | `GET /api/runs/:id` | The run's row and its `RunState` from disk. |
+  | `GET /api/runs/:id/children` | The runs the steps of this run started, every one — not a page. The page draws a run's family from here. |
   | `GET /api/runs/:id/trajectory` | The run's parsed `trajectory.json`, or an error while it has written none. |
   | `POST /api/runs/:id/resume` | Continues a run and returns a fresh `Ticket`. `body.value` answers the gate of a waiting run; `body.from` names the step to go back to. Without `body.harness` it uses the harness of the flow the run came from, falling back to `"pi"`. |
   | `POST /api/runs/:id/stop` | `{ stopped: true }` when a live child heard the signal, `{ stopped: true, abandoned: true }` when no child drove the run — one waiting at a gate, or one a dead daemon left — and it was marked stopped where it stands. A run that is already over answers with the reason instead. |

@@ -7,7 +7,7 @@ import { type AdapterName, ADAPTERS, type Harness } from "./harness.ts";
 import { validate } from "./flow.ts";
 import { loadFlow } from "./load.ts";
 import { pi } from "./pi.ts";
-import { type RunEvent, type RunState, list, resume, run } from "./run.ts";
+import { type RunEvent, type RunState, keep, list, resume, run } from "./run.ts";
 
 const VERSION = String(createRequire(import.meta.url)("../package.json").version);
 
@@ -292,7 +292,9 @@ try {
     // says which run asked, so the runs it starts record it. ADR 0025.
     mcp(engine, chosen, process.stdin, process.stdout, starterOf(process.env.ORCHY_STARTED_BY));
     const leave = () => {
-      engine.close();
+      // The runs this door started live on: each is its own process, and its
+      // state is on disk. A dispatcher's runs must outlive the step's door.
+      engine.close(false);
       process.exit(EXIT.done);
     };
     // The client owns the conversation: when it closes stdin, the door closes.
@@ -360,11 +362,11 @@ function watchForSignals(runId?: string): void {
 
 function stopRun(cwd: string, runId: string): void {
   try {
-    const file = join(cwd, ".orchy", "runs", runId, "state.json");
-    const state = JSON.parse(readFileSync(file, "utf8")) as RunState;
+    const directory = join(cwd, ".orchy", "runs", runId);
+    const state = JSON.parse(readFileSync(join(directory, "state.json"), "utf8")) as RunState;
     if (state.status !== "running") return;
     state.status = "stopped";
-    writeFileSync(file, JSON.stringify(state, null, 2));
+    keep(directory, state);
   } catch {
     // A run with no state on disk yet has nothing to mark.
   }

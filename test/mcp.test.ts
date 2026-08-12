@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -176,9 +176,62 @@ test("the door refuses a flow file outside the root, and names the root", async 
     const refused = await site.call("write_flow", { path: "../escape.yaml", yaml: formatFlow(GATED as never) });
     assert.match(refused.refused as string, /outside the root/);
     assert.ok((refused.refused as string).includes(root), `the message names no root: ${refused.refused}`);
+
+    // A refusal writes nothing: every prompt path is checked before any lands.
+    const leak = await site.call("write_flow", {
+      path: "flows/leak/flow.yaml",
+      yaml: formatFlow(GATED as never),
+      prompts: { "good.md": "fine", "../../../evil.md": "evil" },
+    });
+    assert.match(leak.refused as string, /outside the root/);
+    assert.equal(existsSync(join(root, "flows", "leak", "good.md")), false);
   } finally {
     site.close();
   }
+});
+
+test("a root too long to name in the guide is pointed at instead, so the guide is never cut", async () => {
+  const root = join(project(), "a-very-long-directory-name".repeat(6));
+  mkdirSync(root, { recursive: true });
+  const site = talking(root);
+  try {
+    const opened = (await site.send("initialize", { protocolVersion: "2025-06-18" })) as {
+      result: { instructions: string };
+    };
+    assert.ok(
+      opened.result.instructions.length < 2048,
+      `the guide holds ${opened.result.instructions.length} characters, and a client cuts it at 2048`,
+    );
+    assert.match(opened.result.instructions, /list_flows names it in full/);
+  } finally {
+    site.close();
+  }
+});
+
+test("the door leaves the runs it started to finish", async () => {
+  const root = project();
+  writeFileSync(
+    join(root, "naps.ts"),
+    "export default async () => { await new Promise((rest) => setTimeout(rest, 1500)); return { count: 1 }; };\n",
+  );
+  const site = talking(root);
+  const slow = { name: "slow", steps: [{ id: "wait", kind: "call", module: "naps.ts", returns: NUMBER }] };
+  await site.call("write_flow", { path: "slow.yaml", yaml: formatFlow(slow as never) });
+  const started = (await site.call("run_flow", { path: "slow.yaml" })).body as { runId: string };
+
+  // The door goes. The run is its own process and its state is on disk, so a
+  // dispatcher's runs outlive the step that started them. ADR 0025.
+  site.engine.close(false);
+  await until(async () => {
+    try {
+      const state = JSON.parse(
+        readFileSync(join(root, ".orchy", "runs", started.runId, "state.json"), "utf8"),
+      ) as { status: string };
+      return state.status === "done";
+    } catch {
+      return false;
+    }
+  });
 });
 
 test("a missing prompt is a warning the write answers, and run_flow refuses the flow until it is there", async () => {
@@ -370,6 +423,15 @@ test("check_flow reads a prompt before it is written, and names the hole in it",
     ).body as { problems: string[]; warnings: string[] };
     assert.deepEqual(checked.problems, []);
     assert.match(checked.warnings[0] as string, /nothing supplies "ghost"/);
+
+    // A dotted spelling of the same path finds the same prompt.
+    const dotted = (
+      await site.call("check_flow", {
+        yaml: formatFlow(prompted as never),
+        prompts: { "./prompts/work.md": "Fix issue {{ ghost }}.\n" },
+      })
+    ).body as { warnings: string[] };
+    assert.match(dotted.warnings[0] as string, /nothing supplies "ghost"/);
   } finally {
     site.close();
   }
@@ -425,6 +487,10 @@ test("an agent writes a flow, runs it, answers the gate, and reads the value of 
     const listed = (await site.call("list_runs")).body as { runs: Array<{ runId: string; status: string }> };
     assert.equal(listed.runs[0]?.runId, runId);
     assert.equal(listed.runs[0]?.status, "done");
+
+    // A refusal the child writes answers the resume itself, not only the queue.
+    const wrong = await site.call("resume_run", { runId, from: "nope" });
+    assert.match(wrong.refused as string, /no step "nope"/);
   } finally {
     site.close();
   }

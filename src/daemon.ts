@@ -2,7 +2,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { schemaProblem } from "./flow.ts";
-import { type RunEvent, read, standing } from "./run.ts";
+import { type RunEvent, keep, read, standing } from "./run.ts";
 import { type Store, type StoredEvent, due, metricsAt, open, rowOf } from "./store.ts";
 
 /**
@@ -292,7 +292,14 @@ export function daemon(root: string, beats = true) {
         const problem = answerProblem(root, runId, value, step);
         if (problem) throw new Error(problem);
       }
-      if ([...jobs.values()].some((job) => job.runId === runId && !job.settled && !job.done)) {
+      // The state on disk can say waiting before the pipe delivers the word,
+      // and an answer given in that moment used to be refused here. The state
+      // is the run (ADR 0005), so only a run it says is running is on its
+      // way; the queue holds a resume until the child before it has gone.
+      if (
+        [...jobs.values()].some((job) => job.runId === runId && !job.settled && !job.done) &&
+        stateOf(root, runId)?.status === "running"
+      ) {
         throw new Error(`the run ${runId} is already on its way`);
       }
       tickets += 1;
@@ -339,7 +346,7 @@ export function daemon(root: string, beats = true) {
       state.status = "stopped";
       delete state.waitingFor;
       delete state.question;
-      writeFileSync(join(runs, runId, "state.json"), JSON.stringify(state, null, 2));
+      keep(join(runs, runId), state);
       const path = store.run(runId)?.path ?? null;
       store.saveRun(rowOf(state, path, metricsAt(join(runs, runId, "trajectory.json"))));
       tell({ kind: "event", runId, event: store.addEvent(runId, { type: "run_end", status: "stopped" }) });
@@ -378,10 +385,16 @@ export function daemon(root: string, beats = true) {
     /** Checks the schedules now, so a test does not wait for the clock. */
     fire,
 
-    close(): void {
+    /**
+     * `kill` says what happens to the children. The long daemon takes its
+     * runs down with it. The MCP door leaves them to finish: a run is its own
+     * process and its state is on disk, so a dispatcher's runs outlive the
+     * step that started them. ADR 0025.
+     */
+    close(kill = true): void {
       closed = true;
       clearInterval(beat);
-      for (const job of jobs.values()) job.child?.kill("SIGTERM");
+      if (kill) for (const job of jobs.values()) job.child?.kill("SIGTERM");
       listeners.clear();
       store.close();
     },

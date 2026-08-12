@@ -506,6 +506,7 @@ export function Editor({ id }: { id: number }) {
               adapters={health.value?.adapters ?? []}
               operators={health.value?.operators ?? []}
               models={health.value?.models ?? {}}
+              components={health.value?.components ?? []}
               onChange={(patch) => change(step.id, patch)}
               onRename={(to) => rename(step.id, to)}
               onRemove={() => remove(step.id)}
@@ -579,6 +580,7 @@ function StepFields({
   adapters,
   operators,
   models,
+  components,
   onChange,
   onRename,
   onRemove,
@@ -591,6 +593,7 @@ function StepFields({
   adapters: string[];
   operators: Operator[];
   models: Record<string, string>;
+  components: string[];
   onChange: (patch: Partial<Step>) => void;
   onRename: (to: string) => void;
   onRemove: () => void;
@@ -678,6 +681,8 @@ function StepFields({
                         tools: e.target.checked
                           ? [...(step.tools ?? []), name]
                           : (step.tools ?? []).filter((tool) => tool !== name),
+                        // A bound that nothing reads is refused, so it goes with the tool.
+                        ...(name === "orchy" && !e.target.checked ? { starts: undefined } : {}),
                       })
                     }
                   />
@@ -686,19 +691,72 @@ function StepFields({
               ))}
             </div>
           </div>
+          {step.tools?.includes("orchy") && (
+            <>
+              {/* ADR 0027: what this step may start. The door enforces it. */}
+              <label className="field" title="The flow files this step may start, one path for each line. Empty bounds nothing.">
+                <span>Starts only</span>
+                <textarea
+                  key={step.id}
+                  rows={2}
+                  placeholder="every flow"
+                  defaultValue={(step.starts?.flows ?? []).join("\n")}
+                  onBlur={(e) => onChange(bound(step.starts, { flows: e.target.value }))}
+                />
+              </label>
+              <label className="field" title="How many runs this step may start. Every run counts, including one that failed.">
+                <span>Starts at most</span>
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  placeholder="any number of runs"
+                  value={step.starts?.most ?? ""}
+                  onChange={(e) => onChange(bound(step.starts, { most: e.target.value }))}
+                />
+              </label>
+            </>
+          )}
         </>
       )}
 
       {step.kind === "call" && (
-        <div className="field">
-          <span>Module</span>
-          <div className="with-open">
-            <input value={step.module ?? ""} onChange={(e) => onChange({ module: e.target.value })} />
-            <button className="quiet" title="Open the module" onClick={() => onOpenFile(step.module, "module")}>
-              <FileIcon />
-            </button>
+        <>
+          {/* A call step runs a module or a command, and exactly one, so
+              filling one field empties the other. ADR 0026. */}
+          <div className="field">
+            <span>Module</span>
+            <div className="with-open">
+              <input
+                list={`components-${flow.steps.indexOf(step)}`}
+                placeholder={step.command ? "a command runs instead" : "step.ts, or orchy:check"}
+                value={step.module ?? ""}
+                onChange={(e) => onChange({ module: e.target.value || undefined, command: undefined })}
+              />
+              <datalist id={`components-${flow.steps.indexOf(step)}`}>
+                {components.map((name) => (
+                  <option key={name} value={name} />
+                ))}
+              </datalist>
+              {step.module && !step.module.startsWith("orchy:") && (
+                <button className="quiet" title="Open the module" onClick={() => onOpenFile(step.module, "module")}>
+                  <FileIcon />
+                </button>
+              )}
+            </div>
           </div>
-        </div>
+          <label
+            className="field"
+            title="A program in any language, run where the steps act. It takes { values, steps } as JSON on stdin, answers JSON on stdout, and reports on stderr."
+          >
+            <span>Command</span>
+            <input
+              placeholder={step.module ? "a module runs instead" : "./check.py"}
+              value={step.command ?? ""}
+              onChange={(e) => onChange({ command: e.target.value || undefined, module: undefined })}
+            />
+          </label>
+        </>
       )}
 
       {step.kind === "gate" && (
@@ -1698,6 +1756,27 @@ function retype(step: Step, kind: Step["kind"]): Partial<Step> {
 function clean(step: Step): Step {
   const kept = Object.entries(step).filter(([, value]) => value !== undefined);
   return Object.fromEntries(kept) as unknown as Step;
+}
+
+/**
+ * The bound of a step that starts runs, patched one field at a time. An empty
+ * field drops, and a bound with nothing left drops whole, because a `starts`
+ * with no bound in it is refused. ADR 0027.
+ */
+function bound(starts: Step["starts"], patch: { flows?: string; most?: string }): Partial<Step> {
+  const flows =
+    patch.flows !== undefined
+      ? patch.flows
+          .split("\n")
+          .map((one) => one.trim())
+          .filter(Boolean)
+      : (starts?.flows ?? []);
+  const most =
+    patch.most !== undefined ? (patch.most === "" ? undefined : Number(patch.most)) : starts?.most;
+  const held: { flows?: string[]; most?: number } = {};
+  if (flows.length > 0) held.flows = flows;
+  if (most !== undefined) held.most = most;
+  return { starts: Object.keys(held).length > 0 ? held : undefined };
 }
 
 function free(flow: Flow, stem: string): string {

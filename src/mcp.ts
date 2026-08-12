@@ -38,9 +38,16 @@ const PATIENCE = 55;
  *
  * A client shows the first 2048 characters and cuts the rest — a tryout read
  * a guide that ended mid-word — so the guide stays under that, with room for
- * a long root path. A test holds it there.
+ * a long root path, and a root too long to fit is pointed at instead of
+ * named. A test holds both.
  */
-const guideFor = (root: string): string => `Orchy runs agent flows declared as YAML: it runs the steps, enforces the
+const guideFor = (root: string): string => {
+  const whole = guideAt(root);
+  if (whole.length < 2040) return whole;
+  return guideAt("the directory this server started in — every path of list_flows names it in full");
+};
+
+const guideAt = (root: string): string => `Orchy runs agent flows declared as YAML: it runs the steps, enforces the
 rules, and records what each step did.
 
 The loop: draft the flow, hear every problem from check_flow, write it with
@@ -191,8 +198,12 @@ export function mcp(
         const flow = parseFlow(String(args.yaml ?? ""), path);
         const problems = validate(flow, harness);
         if (problems.length > 0) throw new Error(`the flow is not valid:\n- ${problems.join("\n- ")}`);
-        for (const [name, text] of Object.entries((args.prompts ?? {}) as Record<string, unknown>)) {
-          const at = within(resolve(dirname(path), name));
+        // Every path is checked before anything is written, so a refusal
+        // leaves no file behind it.
+        const prompts = Object.entries((args.prompts ?? {}) as Record<string, unknown>).map(
+          ([name, text]) => [within(resolve(dirname(path), name)), text] as const,
+        );
+        for (const [at, text] of prompts) {
           mkdirSync(dirname(at), { recursive: true });
           writeFileSync(at, String(text));
         }
@@ -382,7 +393,8 @@ export function mcp(
         }
         const from = typeof args.from === "string" && args.from !== "" ? args.from : undefined;
         const step = typeof args.step === "string" && args.step !== "" ? args.step : undefined;
-        return daemon.resume(runId, value, harnessOfRun(daemon, runId), from, step);
+        const ticket = daemon.resume(runId, value, harnessOfRun(daemon, runId), from, step);
+        return resumed(daemon, ticket, runId);
       },
     },
 
@@ -517,6 +529,42 @@ function deepOf(root: string, startedBy: { runId: string; step: string }): numbe
 }
 
 /**
+ * The ticket of a resume, once the child took the work or refused it. A
+ * refusal the child wrote — a step "--from" does not name, a contract the
+ * details broke — left its reason in the queue alone, and an agent that
+ * follows a resume with read_run never reads the queue. So the reason
+ * answers the resume itself. A resume that was taken keeps working, and the
+ * wait ends when the run moves or the patience does.
+ */
+function resumed(daemon: Daemon, ticket: Ticket, runId: string): Promise<Ticket> {
+  const was = daemon.store.run(runId)?.status;
+  return new Promise((done, refuse) => {
+    const finish = () => {
+      stop();
+      clearTimeout(patience);
+    };
+    const look = () => {
+      const held = daemon.pending().find((one) => one.ticket === ticket.ticket);
+      if (held?.error) {
+        finish();
+        return refuse(new Error(held.error));
+      }
+      // The run moved, or the job finished without a reason: the resume took.
+      if (daemon.store.run(runId)?.status !== was || (!held && ticket.runId)) {
+        finish();
+        done(held ?? ticket);
+      }
+    };
+    const stop = daemon.watch(() => look());
+    const patience = setTimeout(() => {
+      stop();
+      done(daemon.pending().find((one) => one.ticket === ticket.ticket) ?? ticket);
+    }, 15_000);
+    look();
+  });
+}
+
+/**
  * The bound of the step that asked, read from the state of its run. The flow
  * in that state already went through `validate()` and `resolvePaths`, so the
  * bound is well formed and its flow paths are absolute. ADR 0027.
@@ -530,17 +578,14 @@ function boundOf(root: string, startedBy: { runId: string; step: string }): { fl
   }
 }
 
-/** The runs the steps of this run started, read from the index. */
+/** The runs the steps of this run started, every one, read from the index. */
 function childrenOf(daemon: Daemon, runId: string): Array<{ runId: string; step: string; status: string; cost: number | null }> {
-  return daemon.store.runs().flatMap((one) => {
-    if (!one.startedByJson) return [];
-    try {
-      const by = JSON.parse(one.startedByJson) as { runId: string; step: string };
-      return by.runId === runId ? [{ runId: one.runId, step: by.step, status: one.status, cost: one.cost }] : [];
-    } catch {
-      return [];
-    }
-  });
+  return daemon.store.children(runId).map((one) => ({
+    runId: one.runId,
+    step: (JSON.parse(one.startedByJson as string) as { step: string }).step,
+    status: one.status,
+    cost: one.cost,
+  }));
 }
 
 /** The files a flow names that are there, each under the path the flow uses for it. */

@@ -45,9 +45,10 @@ nothing reads is a rule that looks enforced and is not.
 - `flows` names files, relative to the flow file like every path a flow
   holds. A path is the identity of a flow (ADR 0024), so the bound compares
   paths, not names.
-- `most` counts the children of one step of one run, from the index. A
-  resume of the same run keeps the count, because the children keep their
-  rows.
+- `most` counts the children of one step of one run, from the whole index
+  and not from a page of it — a bound that two hundred newer runs could
+  push off a page would lift in silence. A resume of the same run keeps the
+  count, because the children keep their rows.
 - The bound reaches `run_flow` only. Reading runs, writing flows, and
   answering gates stay open to the step; each is its own authority, and a
   bound for one waits for a real flow that needs it.

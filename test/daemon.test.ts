@@ -327,7 +327,11 @@ test("the health answer names every operator that a match holds, and what each o
   try {
     const health = (await site.call("/api/health")).body as {
       operators: Array<{ name: string; reads: string }>;
+      components: string[];
     };
+
+    // The editor hints the shipped components from here, so it holds no copy.
+    assert.deepEqual(health.components, ["orchy:check"]);
 
     // The editor draws the list from here, so a copy in the page cannot fall behind.
     assert.deepEqual(

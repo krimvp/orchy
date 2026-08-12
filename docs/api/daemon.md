@@ -67,7 +67,9 @@ and the daemon marks the row `stopped`.
     function.
   - `fire()` — checks the schedules now, so a test does not wait for the
     thirty-second clock.
-  - `close()` — stops the schedule clock, kills every child, drops the
+  - `close(kill = true)` — stops the schedule clock, kills every child
+    (`kill: false` leaves them to finish — the MCP door closes this way, so
+    a dispatcher's runs outlive the step's door), drops the
     listeners, and closes the store. Nothing is delivered after this.
   - `store` and `root` — the open `Store` and the root path, exposed for
     callers like the server that answer queries directly.

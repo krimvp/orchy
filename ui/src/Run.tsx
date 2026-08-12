@@ -20,6 +20,8 @@ export function Run({ runId }: { runId: string }) {
   const { value, error, again } = useLoad(() => api.run(runId), [runId]);
   // The flow this run came from, so the other runs of it are one click away.
   const flows = useLoad(() => api.flows(), []);
+  // The runs a step of this run started, every one, so they are a click away.
+  const rows = useLoad(() => api.children(runId), [runId]);
   const [chosen, setChosen] = useState<string>();
   // Once a person picks a step, the page stops following the run for them.
   const picked = useRef(false);
@@ -56,6 +58,15 @@ export function Run({ runId }: { runId: string }) {
   const step = state.flow.steps.find((one) => one.id === chosen);
   const record = chosen ? state.steps[chosen] : undefined;
   const gate = state.waitingFor ? state.flow.steps.find((one) => one.id === state.waitingFor) : undefined;
+  // The row of a child names the step that started it.
+  const children = (rows.value ?? []).flatMap((one) => {
+    try {
+      const by = JSON.parse(one.startedByJson ?? "") as { step: string };
+      return [{ ...one, step: by.step }];
+    } catch {
+      return [];
+    }
+  });
   const marks = marksOf(state, events);
   const pick = (id: string) => {
     picked.current = true;
@@ -138,6 +149,27 @@ export function Run({ runId }: { runId: string }) {
           <dd>{row?.tokens ? row.tokens.toLocaleString() : "—"}</dd>
         </div>
       </dl>
+
+      {state.startedBy && (
+        <p className="dim small">
+          A step started this run:{" "}
+          <a href={`#/runs/${state.startedBy.runId}`}>run {state.startedBy.runId.slice(0, 8)}</a>, step "
+          {state.startedBy.step}".
+        </p>
+      )}
+
+      {children.length > 0 && (
+        <details open>
+          <summary>The runs the steps of this run started</summary>
+          {children.map((child) => (
+            <p key={child.runId} className="small">
+              <a href={`#/runs/${child.runId}`}>{child.flowName}</a> from step "{child.step}"{" "}
+              <span className={`pill ${child.status}`}>{child.status}</span>
+              {child.cost ? <span className="dim"> ${child.cost.toFixed(4)}</span> : null}
+            </p>
+          ))}
+        </details>
+      )}
 
       {state.with && (
         <details>

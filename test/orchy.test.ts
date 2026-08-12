@@ -4454,6 +4454,21 @@ test("the orchy tool is refused where the harness cannot supply it", () => {
   assert.deepEqual(validate(doored, "claude"), []);
 });
 
+test("a resume takes a value or a step to go back to, not both", async () => {
+  const cwd = workspace();
+  const gated = flow("gated", {
+    steps: [gate({ id: "confirm", question: "Ship it?", returns: Verdict })],
+  });
+  const stopped = await run(gated, { cwd });
+
+  // The value would answer the gate, and "--from" would go back: one taken in
+  // silence over the other sent a run forward when a person meant to go back.
+  await assert.rejects(
+    () => resume(stopped.runId, { approved: true }, { cwd, from: "confirm" }),
+    /a value and a step/,
+  );
+});
+
 test("the question of a gate carries the values of the steps it needs", async () => {
   const cwd = workspace();
   const harness = fakeHarness({ summary: "looks fine" });

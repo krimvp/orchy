@@ -60,7 +60,9 @@ of every run stay on disk regardless (ADR 0009).
 
 - A `RunRow` also carries `startedByJson` — the run and the step that
   started this run, when a step did (ADR 0025) — so the door lists the
-  children of a run from the index alone.
+  children of a run from the index alone. `children(runId)` gives them
+  every one, unbounded by the page `runs()` shows, because the `starts`
+  bound counts from it (ADR 0027).
 - `rowOf(state, path, spend?)` — builds a `RunRow` from a `RunState`: the
   start time is the earliest step start, the end time is the latest step end
   (counting attempts a cycle or resume dropped to `history`) but only once

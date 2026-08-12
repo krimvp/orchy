@@ -54,3 +54,6 @@ which expands into its parent and spends the parent's budget.
 - The step and its door are two processes. The parent's record does not
   name the runs its step started; the children name the parent, and the
   index serves the question both ways.
+- The door of a step closes with the step, and the runs it started live
+  on: each is its own process, and its state is on disk. The long daemon
+  still takes its runs down with it when it closes.

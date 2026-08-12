@@ -3,9 +3,9 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, extname, isAbsolute, join, normalize, relative, resolve } from "node:path";
 import type { Daemon } from "./daemon.ts";
-import { type Flow, OPERATORS, type Step, validate } from "./flow.ts";
+import { COMPONENTS, type Flow, OPERATORS, type Step, validate } from "./flow.ts";
 import { ADAPTERS, MODELS, TOOLS } from "./harness.ts";
 import { loadFlow, readFlow } from "./load.ts";
 import { formatFlow, parseFlow } from "./yaml.ts";
@@ -49,6 +49,8 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
         // What a model name looks like for each harness, so the editor hints
         // instead of leaving a free field to guesswork.
         models: Object.fromEntries(ADAPTERS.map((name) => [name, MODELS[name].write])),
+        // The components Orchy ships, so the editor hints and holds no copy.
+        components: COMPONENTS.map((name) => `orchy:${name}`),
       }),
     ],
 
@@ -363,6 +365,14 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
         if (!state) throw new Error(`there is no run ${runId}`);
         return { row: daemon.store.run(runId), state };
       },
+    ],
+
+    // The runs the steps of one run started, every one. The page draws the
+    // family of a run from here, and counts no page-bounded copy of its own.
+    [
+      "GET",
+      "/api/runs/:id/children",
+      (parameters) => daemon.store.children(parameters.id as string),
     ],
 
     [
@@ -736,11 +746,13 @@ export function unfilled(flow: Flow, flowPath?: string, texts?: Record<string, s
     }
   };
   const base = flowPath ? dirname(resolve(flowPath)) : undefined;
+  // A text given by the caller stands in for the file, so a prompt is checked
+  // before anything is written. The keys normalize, so "./a.md" finds "a.md".
+  const held =
+    texts && Object.fromEntries(Object.entries(texts).map(([key, text]) => [normalize(key), text]));
   const readAt = (path?: string): string | undefined => {
     if (!path) return undefined;
-    // A text given by the caller stands in for the file, so a prompt is
-    // checked before anything is written.
-    if (texts && Object.hasOwn(texts, path)) return texts[path];
+    if (held && Object.hasOwn(held, normalize(path))) return held[normalize(path)];
     if (!base || isAbsolute(path)) return undefined;
     try {
       return readFileSync(resolve(base, path), "utf8");

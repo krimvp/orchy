@@ -129,6 +129,8 @@ export interface RunRow {
   tokens: number | null;
   /** The values the run took, as JSON. Two runs of one flow read apart by these. */
   withJson: string | null;
+  /** The run and the step that started this run, as JSON, when a step did. */
+  startedByJson?: string | null;
 }
 
 export interface Ticket {
@@ -165,6 +167,8 @@ export interface RunState {
   flow: Flow;
   /** The values this run supplies for what the flow takes. */
   with?: Record<string, unknown>;
+  /** The run and the step that started this run, when a step did. */
+  startedBy?: { runId: string; step: string };
   status: string;
   /** Why the run failed, when the fault belongs to the run and not to one step. */
   error?: string;
@@ -239,6 +243,8 @@ export interface Health {
   operators: Operator[];
   /** What a model name looks like, for each harness. The editor hints with it. */
   models?: Record<string, string>;
+  /** The components Orchy ships, as `orchy:` names. The editor hints with them. */
+  components?: string[];
 }
 
 /**
@@ -317,6 +323,9 @@ export const api = {
   writeFile: (path: string, content: string) =>
     call<{ written: boolean; path: string }>("/api/file", { method: "PUT", body: JSON.stringify({ path, content }) }),
   runs: () => call<RunRow[]>("/api/runs"),
+
+  /** The runs the steps of one run started, every one. */
+  children: (runId: string) => call<RunRow[]>(`/api/runs/${runId}/children`),
   /** The runs of one flow, newest first. */
   flowRuns: (id: number) => call<RunRow[]>(`/api/flows/${id}/runs`),
   run: (runId: string) => call<{ row: RunRow | null; state: RunState }>(`/api/runs/${runId}`),

@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { alive, type RunEvent, type RunState } from "./run.ts";
+import { alive, keep, type RunEvent, type RunState } from "./run.ts";
 
 /**
  * ADR 0008: the state on disk is the run. This database is an index of it, and
@@ -200,6 +200,21 @@ export function open(file: string) {
 
     run: (runId: string): RunRow | undefined => one<RunRow>("select * from run where runId = ?", runId),
 
+    /**
+     * The runs the steps of one run started, every one. The list of runs
+     * shows a page, and a bound counted from a page lifts in silence when
+     * enough newer runs push the children off it. ADR 0027 counts from here.
+     */
+    children(runId: string): RunRow[] {
+      return all<RunRow>("select * from run where startedByJson is not null order by startedAt desc").filter((row) => {
+        try {
+          return (JSON.parse(row.startedByJson as string) as { runId?: string }).runId === runId;
+        } catch {
+          return false;
+        }
+      });
+    },
+
     saveRun(row: RunRow): void {
       db.prepare(
         `insert into run (runId, flowName, path, status, startedAt, endedAt, waitingFor, question, cost, tokens, withJson, startedByJson)
@@ -276,7 +291,7 @@ export function open(file: string) {
         // ADR 0008.
         if (state.status === "running" && !alive(state.pid)) {
           state.status = "stopped";
-          writeFileSync(join(runs, runId, "state.json"), JSON.stringify(state, null, 2));
+          keep(join(runs, runId), state);
         }
         const row = rowOf(state, this.run(runId)?.path ?? null, metricsAt(join(runs, runId, "trajectory.json")));
         this.saveRun(row);

@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
@@ -267,6 +267,14 @@ export async function resume(
   const cwd = resolve(options.cwd ?? process.cwd());
   const state = read(cwd, runId);
 
+  // The two ways in exclude each other, and one taken in silence over the
+  // other sent a run forward when a person meant to send it back.
+  if (value !== undefined && options.from) {
+    throw new Error(
+      `the resume holds a value and a step. A value answers the gate where the run waits, and "--from" goes back with none. Give one of the two.`,
+    );
+  }
+
   if (value !== undefined) {
     if (state.status !== "waiting" || !state.waitingFor) {
       throw new Error(`the run ${runId} is ${state.status}, so it takes no value`);
@@ -389,6 +397,18 @@ export function read(cwd: string, runId: string): RunState {
   }
 }
 
+/**
+ * ADR 0005: the state on disk is the run, so no reader may see half of it. A
+ * plain write truncates the file first, and a door that read that moment took
+ * a broken answer for a healthy run. The write lands whole, by a rename.
+ */
+export function keep(directory: string, state: RunState): void {
+  const file = join(directory, "state.json");
+  const temp = `${file}.writing`;
+  writeFileSync(temp, JSON.stringify(state, null, 2));
+  renameSync(temp, file);
+}
+
 function directoryOf(cwd: string, runId: string): string {
   return join(cwd, ".orchy", "runs", runId);
 }
@@ -397,10 +417,10 @@ async function execute(state: RunState, cwd: string, options: RunOptions, answer
   const harness = options.harness ?? pi;
   const emit = options.onEvent ?? (() => {});
   // ADR 0005: the state on disk is the run. A gate and a crash recover the same way.
-  const file = join(directoryOf(cwd, state.runId), "state.json");
+  const directory = directoryOf(cwd, state.runId);
   // The pid rides with the state, so a reader knows a live run from a dead one.
   state.pid = process.pid;
-  const save = () => writeFileSync(file, JSON.stringify(state, null, 2));
+  const save = () => keep(directory, state);
   // Each step may use a different harness, so each trajectory is read by its own.
   const convert = (id: string, handle: string, trajectoryId: string, at: string) => {
     const step = state.flow.steps.find((candidate) => candidate.id === id);
