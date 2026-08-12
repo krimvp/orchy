@@ -16,6 +16,7 @@ const USAGE = `use: orchy run <flow file> [--with <json>] [--harness pi|claude] 
      orchy resume <run id> [json value] [--from <step>] [--harness pi|claude] [--events]
      orchy runs [--events]
      orchy daemon [--port 4000]
+     orchy mcp [--harness pi|claude]
      orchy --help | --version
 
 A flow file is TypeScript or YAML.
@@ -29,6 +30,9 @@ orchy check reads a flow, and every flow it holds, and says what is wrong with
 it. It runs nothing and spends nothing.
 
 orchy runs lists the runs of this directory, newest first.
+
+orchy mcp serves the Model Context Protocol on stdin and stdout, so an agent
+writes flows and runs them here. It fires no schedule; the daemon does.
 
 The command writes the events to the error stream and the run state to the
 output stream. It ends with 0 when a run finishes, 1 when a run fails, 2 when
@@ -252,7 +256,21 @@ try {
     process.exit(EXIT.done);
   }
 
-  if (command === "daemon") {
+  if (command === "mcp") {
+    const { daemon } = await import("./daemon.ts");
+    const { mcp } = await import("./mcp.ts");
+    // ADR 0024: the long daemon fires the schedules, so this one does not, and
+    // the two can stand over one root without firing one schedule twice.
+    const engine = daemon(process.cwd(), false);
+    mcp(engine, chosen);
+    const leave = () => {
+      engine.close();
+      process.exit(EXIT.done);
+    };
+    // The client owns the conversation: when it closes stdin, the door closes.
+    process.stdin.on("end", leave);
+    for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, leave);
+  } else if (command === "daemon") {
     // The daemon keeps its index with `node:sqlite`, and Node calls that
     // experimental and says so. A run needs no index, so it loads only here.
     const { daemon } = await import("./daemon.ts");

@@ -40,6 +40,7 @@ export { loadFlow, readFlow } from "./load.ts";
 export { daemon } from "./daemon.ts";
 export type { Daemon, Notice, Order, Ticket } from "./daemon.ts";
 export { serve } from "./server.ts";
+export { mcp } from "./mcp.ts";
 export { metricsAt, open, rowOf } from "./store.ts";
 export type { FlowRow, RunRow, Store, StoredEvent } from "./store.ts";
 export { SCHEMA_VERSION, toAtif } from "./atif.ts";

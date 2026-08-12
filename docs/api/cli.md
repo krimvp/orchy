@@ -7,7 +7,7 @@ end of a run into an exit code. Everything it does, it does by calling the
 other modules — `loadFlow` from `src/load.ts`, `run` and `resume` from
 `src/run.ts`, `daemon` and `serve` from `src/daemon.ts` and `src/server.ts`.
 
-Three commands exist:
+Four commands exist:
 
 - `orchy run <flow file>` — load a flow (TypeScript or YAML) and run it.
   `--with <json>` supplies the values the flow takes, as one JSON object —
@@ -22,6 +22,10 @@ Three commands exist:
   current directory and serve its HTTP API. The daemon runs an agent on this
   machine, so it listens on `127.0.0.1` only, and it closes cleanly on
   `SIGINT` or `SIGTERM`.
+- `orchy mcp` — serve the Model Context Protocol on stdin and stdout, so an
+  agent writes flows and runs them here. See `src/mcp.ts`. The engine behind
+  it fires no schedule — the long daemon does — so the two stand over one
+  root together. The door closes when the client closes stdin.
 
 `run` and `resume` share two more flags. `--harness pi|claude` picks the
 adapter (default `pi`); the table of adapters is typed by `AdapterName`, so an

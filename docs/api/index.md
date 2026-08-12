@@ -35,8 +35,8 @@ Grouped by the module each name comes from:
   each a ready `Harness` value to pass to `run`.
 - **`workspace.ts` — what a step may change.** `take` and `changed`. Types:
   `Workspace`, `Snapshot`, `Change`.
-- **`daemon.ts` and `server.ts` — the long-running side.** `daemon` and
-  `serve`. Types: `Daemon`, `Order`, `Ticket`, `Notice`.
+- **`daemon.ts`, `server.ts`, and `mcp.ts` — the long-running side.**
+  `daemon`, `serve`, and `mcp`. Types: `Daemon`, `Order`, `Ticket`, `Notice`.
 - **`store.ts` — the run record.** `open`, `rowOf`, and `metricsAt`. Types:
   `Store`, `FlowRow`, `RunRow`, `StoredEvent`.
 - **`atif.ts` — trajectories.** `toAtif` and `SCHEMA_VERSION`. Type:

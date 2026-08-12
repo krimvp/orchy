@@ -165,6 +165,7 @@ orchy resume <run id> '{"approved":true}'  # answer a gate
 orchy resume <run id>                      # continue a run that ended
 orchy resume <run id> --from <step>        # go back to a step, and run again
 orchy daemon                               # a queue, an API, and a page
+orchy mcp                                  # the same engine, for an agent
 ```
 
 A resume with no value continues a run that ended: a failed run goes back to
@@ -186,6 +187,11 @@ the daemon reads a run.
 
 `orchy check <flow file>` reads a flow, and every flow it holds, and says what
 is wrong with it. It runs nothing and spends nothing.
+
+`orchy mcp` serves the Model Context Protocol on stdin and stdout, so a coding
+agent writes flows, hears every problem from `validate()`, runs them, and
+answers a gate. Register it with `claude mcp add orchy -- npx orchy mcp`. See
+[docs/running.md](./docs/running.md#drive-orchy-from-an-agent).
 
 A `prompt` path and a `module` path are relative to the flow file. The working
 directory is where the steps act, so run the command from the directory you want

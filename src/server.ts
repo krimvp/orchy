@@ -530,7 +530,7 @@ function originOf(host: string): string {
 }
 
 /** A path is under the root when it reaches it with no step back. */
-function under(root: string, path: string): boolean {
+export function under(root: string, path: string): boolean {
   const step = relative(root, path);
   return step !== "" && !step.startsWith("..") && !isAbsolute(step);
 }
@@ -617,7 +617,7 @@ function adapterOf(value: unknown): string {
  * costs a line, and the alternative is a list that says the wrong thing about
  * every flow that names its own.
  */
-function harnessInFile(path: string): string | undefined {
+export function harnessInFile(path: string): string | undefined {
   try {
     const named = parseFlow(readFileSync(path, "utf8"), path).harness;
     return typeof named === "string" && named !== "" ? named : undefined;
@@ -646,10 +646,10 @@ function flowRow(daemon: Daemon, id: string) {
 /**
  * Starts a run, checked. A flow that cannot run must say so here, not in the
  * log of a child, and a file the flow names must be there before a step spends
- * money on it. The button, the schedule route, and the hook all come through
- * this one door.
+ * money on it. The button, the schedule route, the hook, and the MCP door all
+ * come through this one function.
  */
-async function start(
+export async function start(
   daemon: Daemon,
   row: { id: number; path: string; harness: string },
   values: Record<string, unknown> | undefined,
@@ -665,7 +665,7 @@ async function start(
 }
 
 /** A run keeps the file it came from, so a resume uses the harness of that flow. */
-function harnessOfRun(daemon: Daemon, runId: string): string {
+export function harnessOfRun(daemon: Daemon, runId: string): string {
   const run = daemon.store.run(runId);
   const flow = run?.path ? daemon.store.flowAt(run.path) : undefined;
   return flow?.harness ?? "pi";
@@ -675,7 +675,7 @@ function harnessOfRun(daemon: Daemon, runId: string): string {
  * The one-line description a flow file starts with: its leading comment. The
  * file already says what the flow does there, so the list repeats no one.
  */
-function descriptionOf(path: string): string {
+export function descriptionOf(path: string): string {
   try {
     const lines = readFileSync(path, "utf8").split("\n");
     const said: string[] = [];
@@ -694,7 +694,7 @@ function descriptionOf(path: string): string {
  * The files a flow names that are not there: a prompt, a module, an inner
  * flow. Each path is relative to the flow file, the way the run resolves it.
  */
-function missing(flow: Flow, flowPath: string): string[] {
+export function missing(flow: Flow, flowPath: string): string[] {
   const base = dirname(resolve(flowPath));
   const gone: string[] = [];
   const check = (step: string, kind: string, path?: string) => {

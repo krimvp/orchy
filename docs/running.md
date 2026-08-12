@@ -596,3 +596,30 @@ no daemon, and `orchy run` on its own stays the same command.
 The daemon indexes every run it finds under `.orchy/runs` when it starts, so a
 run from the command line shows up on the page. It keeps that index in
 `.orchy/index.db`. Deleting the index costs the events of past runs, and no run.
+
+## Drive Orchy from an agent
+
+`orchy mcp` serves the Model Context Protocol on stdin and stdout, so a coding
+agent holds Orchy as a set of tools. Register it from the directory the flows
+live in — that directory is the root, as it is for the daemon:
+
+```bash
+claude mcp add orchy -- npx orchy mcp
+```
+
+The agent gets ten tools and a guide. The loop: it writes a flow as YAML,
+hears every problem from `check_flow`, corrects it, writes it with
+`write_flow`, starts it with `run_flow`, and follows it with `read_run`. A
+flow that does not validate is refused at the write, with every problem named,
+so a broken flow never runs. A run that waits at a gate holds a question, and
+the agent answers it with `resume_run` — the contract of the gate checks the
+answer at the door, the same way it checks a person.
+
+The engine behind `orchy mcp` fires no schedule; the long daemon does. So the
+two stand over one root together, and each shows the runs the other started,
+because every run is on disk.
+
+An agent that writes and runs a flow runs code on this machine, with your
+authority. That is the same trust the command line gives, and no more — but
+give the door only to an agent you would give a shell to. See [ADR
+0024](./adr/0024-an-agent-authors-a-flow-through-mcp.md).

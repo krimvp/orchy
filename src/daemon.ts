@@ -71,7 +71,12 @@ interface Job extends Ticket {
 
 export type Daemon = ReturnType<typeof daemon>;
 
-export function daemon(root: string) {
+/**
+ * `beats` says whether this daemon fires the schedules. The long daemon does.
+ * A second one over the same root — the MCP door, see ADR 0024 — must not,
+ * because two beats would fire one schedule twice.
+ */
+export function daemon(root: string, beats = true) {
   const directory = join(resolve(root), ".orchy");
   const runs = join(directory, "runs");
   mkdirSync(runs, { recursive: true });
@@ -235,7 +240,7 @@ export function daemon(root: string) {
       });
     }
   };
-  const beat = setInterval(fire, 30_000);
+  const beat = beats ? setInterval(fire, 30_000) : undefined;
 
   return {
     store,

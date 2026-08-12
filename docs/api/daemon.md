@@ -29,9 +29,12 @@ and the daemon marks the row `stopped`.
 
 ## Exports
 
-- `daemon(root: string)` — builds and returns a daemon rooted at `root`. It
-  creates `<root>/.orchy/runs`, opens the index, and re-indexes what is
-  already there. The returned object has:
+- `daemon(root: string, beats = true)` — builds and returns a daemon rooted
+  at `root`. It creates `<root>/.orchy/runs`, opens the index, and re-indexes
+  what is already there. `beats` says whether this daemon fires the schedules
+  every thirty seconds; the long daemon does, and a second one over the same
+  root — the MCP door — must not, because two beats would fire one schedule
+  twice. The returned object has:
 
   - `start(order)` — queues a run and returns its `Ticket`. The `Order`
     names the flow file (`path`), the flow (`flowName`), the harness, and
