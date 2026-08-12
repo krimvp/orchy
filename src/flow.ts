@@ -9,7 +9,13 @@ import type { Workspace } from "./workspace.ts";
  * that has been through a file, a resume, or a graphical editor is data, and it
  * no longer carries the symbols that TypeBox needs.
  */
-const ajv = new Ajv2020({ strict: false });
+/**
+ * Strict, because a contract that Ajv reads loosely is a contract that checks
+ * nothing and says nothing: `requires` for `required`, or `minimum` beside a
+ * string, loaded clean and let every value through. Strict mode turns each of
+ * those into a fault of the flow, which `schemaFault()` reports before the run.
+ */
+const ajv = new Ajv2020({ strict: true });
 
 /**
  * Where a value breaks a schema, or nothing when it holds. Invariant 2 checks a
@@ -786,8 +792,19 @@ function computedShape(step: Step, fanout: Computed): string[] {
 /**
  * A flow from a file or a graphical editor carries no types, so every flow
  * passes through here before it runs.
+ *
+ * `harness` is the one the run will use for a step that names none — the
+ * `--harness` of the command, or the harness the daemon holds for the flow.
+ * Without it the tool check and the model check had nothing to read, so the
+ * flows that name no harness, which is what the README tells a person to
+ * write, were the flows that got no check at all.
+ *
+ * `adapters` names every harness this run can reach. It is the two Orchy
+ * supplies, and, for a run driven through the SDK, whatever else that run
+ * carries. A name outside it is a typo, and a typo used to turn both checks
+ * off in silence.
  */
-export function validate(flow: Flow): string[] {
+export function validate(flow: Flow, harness?: string, adapters: readonly string[] = ADAPTERS): string[] {
   // Every check below reads a field, so the shape comes first and alone.
   const shape = shapeProblems(flow);
   if (shape.length > 0) return shape;
@@ -861,8 +878,9 @@ export function validate(flow: Flow): string[] {
   if (problems.length > 0) return problems;
 
   for (const step of flow.steps) {
-    problems.push(...toolProblems(flow, step));
-    problems.push(...modelProblems(flow, step));
+    problems.push(...harnessProblems(step, adapters));
+    problems.push(...toolProblems(flow, step, harness));
+    problems.push(...modelProblems(flow, step, harness));
     problems.push(...takenProblems(flow, step));
     problems.push(...conditionProblems(flow, step));
   }
@@ -913,14 +931,13 @@ export function validate(flow: Flow): string[] {
  * Invariant 1 speaks one vocabulary, and each harness speaks its own. A flow
  * that names its harness gets the answer here, before the run spends a token.
  */
-function toolProblems(flow: Flow, step: Step): string[] {
+function toolProblems(flow: Flow, step: Step, fallback?: string): string[] {
+  const of = (one: Step) => harnessOf(flow, one) ?? fallback;
   const wanted =
-    step.kind === "agent"
-      ? [{ who: `step "${step.id}"`, harness: harnessOf(flow, step), tools: step.tools }]
-      : [];
+    step.kind === "agent" ? [{ who: `step "${step.id}"`, harness: of(step), tools: step.tools }] : [];
   for (const member of membersOf(step) ?? []) {
     if (!member.tools) continue;
-    const harness = member.harness ?? harnessOf(flow, step);
+    const harness = member.harness ?? of(step);
     wanted.push({ who: `member "${member.name}" of "${step.id}"`, harness, tools: member.tools });
   }
 
@@ -943,23 +960,48 @@ function toolProblems(flow: Flow, step: Step): string[] {
  * earlier step spent its tokens. `MODELS` in `harness.ts` names what each
  * adapter reads, so the answer comes before the run. See ADR 0019.
  */
-function modelProblems(flow: Flow, step: Step): string[] {
+function modelProblems(flow: Flow, step: Step, fallback?: string): string[] {
   const model = modelOf(flow, step);
+  const of = (one: Step) => harnessOf(flow, one) ?? fallback;
   const wanted =
-    step.kind === "agent" ? [{ who: `step "${step.id}"`, harness: harnessOf(flow, step), model }] : [];
+    step.kind === "agent" ? [{ who: `step "${step.id}"`, harness: of(step), model }] : [];
   for (const member of membersOf(step) ?? []) {
     // A member that overrides neither reads the same as its step, which the
     // line above already answers.
     if (!member.model && !member.harness) continue;
-    const harness = member.harness ?? harnessOf(flow, step);
+    const harness = member.harness ?? of(step);
     wanted.push({ who: `member "${member.name}" of "${step.id}"`, harness, model: member.model ?? model });
   }
 
   return wanted.flatMap(({ who, harness, model: named }) => {
+    if (named === undefined) return [];
+    // A name of nothing is not the default. It read as one, and a step that
+    // wrote it paid for a model it never chose.
+    if (named.trim() === "") return [`${who} names the model "${named}", which names no model. Leave it out to take the default of the harness.`];
     const reads = ADAPTERS.includes(harness as AdapterName) ? MODELS[harness as AdapterName] : undefined;
-    if (!named || !reads || reads.reads.test(named)) return [];
+    if (!reads || reads.reads.test(named)) return [];
     return [`${who} names the model "${named}", which the harness "${harness}" cannot read. ${reads.write}`];
   });
+}
+
+/**
+ * A harness that does not exist. Both checks above read the name to find what
+ * the harness supplies, so a name they cannot place turned both of them off:
+ * `harness: clade` with a tool pi lacks and a model it cannot read reported a
+ * clean flow, and the run learned all three the expensive way.
+ */
+function harnessProblems(step: Step, adapters: readonly string[]): string[] {
+  const named: Array<{ who: string; harness: string | undefined }> = [
+    { who: `step "${step.id}"`, harness: step.kind === "agent" ? step.harness : undefined },
+  ];
+  for (const member of membersOf(step) ?? []) {
+    named.push({ who: `member "${member.name}" of "${step.id}"`, harness: member.harness });
+  }
+  return named.flatMap(({ who, harness }) =>
+    harness === undefined || adapters.includes(harness)
+      ? []
+      : [`${who} names the harness "${harness}", which does not exist. Use one of: ${adapters.join(", ")}`],
+  );
 }
 
 /**

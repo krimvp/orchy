@@ -4160,3 +4160,81 @@ test("an inner flow that returns a value under its own contract is refused, not 
 
   await assert.rejects(() => loadFlow(join(cwd, "outer.yaml")), /would drop it/);
 });
+
+test("validate refuses a harness that does not exist, so a typo cannot turn the checks off", () => {
+  const named = (harness: string) =>
+    validate({
+      name: "typo",
+      harness: "claude",
+      steps: [
+        {
+          id: "a",
+          kind: "agent",
+          needs: [],
+          harness,
+          model: "openai/gpt-5",
+          prompt: "step.md",
+          tools: ["web"],
+          returns: Summary,
+        },
+      ],
+    } as unknown as Flow);
+
+  // `clade` placed no harness, so the tool check and the model check both read
+  // nothing and said nothing: three faults, one clean flow. The name itself is
+  // the fault to report, and the flow is refused for it.
+  assert.deepEqual(named("clade"), [
+    'step "a" names the harness "clade", which does not exist. Use one of: pi, claude',
+  ]);
+  assert.ok(named("").some((p) => p.includes('names the harness ""')));
+  // A harness that is real gets read: pi has no web tool, and says so.
+  const onPi = named("pi");
+  assert.ok(!onPi.some((p) => p.includes("does not exist")));
+  assert.ok(onPi.some((p) => p.includes('asks for the tool "web", and the harness "pi" has none')));
+});
+
+test("validate reads the tools and the model against the harness the run will use", () => {
+  const flowWithNoHarness = {
+    name: "unnamed",
+    steps: [
+      { id: "a", kind: "agent", needs: [], prompt: "step.md", tools: ["web"], model: "haiku", returns: Summary },
+    ],
+  } as unknown as Flow;
+
+  // A flow that names no harness is what the README tells a person to write,
+  // and it was the flow that got no check at all: `--harness pi` has no web
+  // tool and cannot read a plain model name.
+  assert.deepEqual(validate(flowWithNoHarness, "claude"), []);
+  const onPi = validate(flowWithNoHarness, "pi");
+  assert.ok(onPi.some((p) => p.includes('asks for the tool "web", and the harness "pi" has none')));
+  assert.ok(onPi.some((p) => p.includes('names the model "haiku"')));
+});
+
+test("validate refuses a model named as nothing, which quietly took the default", () => {
+  const problems = validate({
+    name: "empty-model",
+    harness: "claude",
+    steps: [{ id: "a", kind: "agent", needs: [], model: "", prompt: "step.md", tools: ["read"], returns: Summary }],
+  } as unknown as Flow);
+
+  assert.ok(problems.some((p) => p.includes("which names no model")));
+});
+
+test("validate refuses a contract whose keyword is a typo, which used to check nothing", () => {
+  const problems = validate({
+    name: "typo",
+    steps: [
+      {
+        id: "a",
+        kind: "call",
+        needs: [],
+        module: "m.ts",
+        // `requires` is not `required`, and Ajv read the whole contract loosely:
+        // every value passed, and nothing said a word.
+        returns: { type: "object", requires: ["n"], properties: { n: { type: "number" } } },
+      },
+    ],
+  } as unknown as Flow);
+
+  assert.ok(problems.some((p) => p.includes("unknown keyword")));
+});

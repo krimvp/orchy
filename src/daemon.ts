@@ -1,6 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { schemaProblem } from "./flow.ts";
 import { type RunEvent, read } from "./run.ts";
 import { type Store, type StoredEvent, due, metricsAt, open, rowOf } from "./store.ts";
 
@@ -260,6 +261,15 @@ export function daemon(root: string) {
       if (value === undefined && !from && row.status === "done") {
         throw new Error(`the run ${runId} is done. Name the step to run again.`);
       }
+      // The contract of the gate is checked here, at the door, and not later in
+      // a child. A queued answer that the contract refuses answered 200 with a
+      // ticket, redrew the same form, and left its reason on another page under
+      // the words "did not start". The command line refused it at once, and now
+      // both surfaces say the same thing at the same moment.
+      if (value !== undefined) {
+        const problem = answerProblem(root, runId, value);
+        if (problem) throw new Error(problem);
+      }
       if ([...jobs.values()].some((job) => job.runId === runId && !job.settled && !job.done)) {
         throw new Error(`the run ${runId} is already on its way`);
       }
@@ -287,6 +297,11 @@ export function daemon(root: string) {
     stop(runId: string): boolean {
       const job = [...jobs.values()].find((one) => one.runId === runId);
       if (!job?.child) return false;
+      // A stop is an end a person asked for, so the child that answers it did
+      // not fail to start. Without this the SIGTERM read as a start that never
+      // happened, and the run sat in the queue for ever as "did not start",
+      // quoting whatever its child had last written to stderr.
+      job.settled = true;
       job.child.kill("SIGTERM");
       return true;
     },
@@ -352,6 +367,21 @@ function ticketOf(job: Job): Ticket {
   if (job.runId) ticket.runId = job.runId;
   if (job.error) ticket.error = job.error;
   return ticket;
+}
+
+/**
+ * Why the gate of a waiting run refuses this answer, or nothing when it takes
+ * it. The state on disk is the run, so the contract comes from there — the same
+ * schema the child would check the value against, read at the same moment the
+ * person presses the button.
+ */
+function answerProblem(root: string, runId: string, value: unknown): string | undefined {
+  const state = stateOf(root, runId);
+  if (!state?.waitingFor) return undefined;
+  const step = state.flow.steps.find((one) => one.id === state.waitingFor);
+  if (!step || step.kind === "flow") return undefined;
+  const problem = schemaProblem(step.returns, value);
+  return problem && `the value of "${step.id}" breaks the contract ${problem}`;
 }
 
 function stateOf(root: string, runId: string) {

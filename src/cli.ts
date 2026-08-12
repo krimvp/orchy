@@ -195,7 +195,7 @@ if (!harness) wrong(`unknown harness "${chosen}". Use one of: ${ADAPTERS.join(",
 try {
   if (command === "run") {
     if (!first) throw new Wrong(`orchy run wants a flow file.\n\n${USAGE}`);
-    const options = { onEvent: emit, harness, harnesses: HARNESSES, with: valuesOf(given) };
+    const options = { onEvent: emit, harness, harnessName: chosen, harnesses: HARNESSES, with: valuesOf(given) };
     const flow = await loadFlow(first);
     watchForSignals();
     finish(await run(flow, options));
@@ -203,7 +203,7 @@ try {
 
   if (command === "resume") {
     if (!first) throw new Wrong(`orchy resume wants a run id.\n\n${USAGE}`);
-    const options = { onEvent: emit, harness, harnesses: HARNESSES, from };
+    const options = { onEvent: emit, harness, harnessName: chosen, harnesses: HARNESSES, from };
     let value: unknown;
     if (second !== undefined) {
       try {

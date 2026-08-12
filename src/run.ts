@@ -29,7 +29,7 @@ import {
   takesProblem,
   validate,
 } from "./flow.ts";
-import type { Harness, Note } from "./harness.ts";
+import { ADAPTERS, type Harness, type Note } from "./harness.ts";
 import { pi } from "./pi.ts";
 import { attempts, toAtif } from "./atif.ts";
 import { type Change, type Snapshot, changed, take } from "./workspace.ts";
@@ -200,6 +200,8 @@ export interface RunOptions {
   with?: Record<string, unknown>;
   /** The harness for a step that names none. */
   harness?: Harness;
+  /** The name of that harness, so the checks read what it supplies. */
+  harnessName?: string;
   /** The adapters a step can name. */
   harnesses?: Record<string, Harness>;
   onEvent?: (event: RunEvent) => void;
@@ -207,7 +209,8 @@ export interface RunOptions {
 
 export async function run(input: Flow, options: RunOptions = {}): Promise<RunState> {
   // The members go before the expansion does, so check the flow a user wrote first.
-  refuse(validate(input));
+  const adapters = [...ADAPTERS, ...Object.keys(options.harnesses ?? {})];
+  refuse(validate(input, options.harnessName, adapters));
   // The values come before the first step, so a value that no step can use costs
   // no token.
   const takes = takesProblem(input, options.with, "this run");
@@ -218,7 +221,7 @@ export async function run(input: Flow, options: RunOptions = {}): Promise<RunSta
   const nested = flow.steps.find((step) => step.kind === "flow");
   if (nested) throw new Error(`step "${nested.id}" holds a flow, and only loading a file expands one`);
 
-  refuse(validate(flow));
+  refuse(validate(flow, options.harnessName, adapters));
 
   for (const step of flow.steps) harnessFor(flow, step, options.harness ?? pi, options.harnesses);
 

@@ -29,7 +29,17 @@ const ISSUE = `export default (
 ) => ({ count: Number(values.issue) });
 `;
 
+/** A component that takes long enough for a person to stop the run it is in. */
+const SLEEPS = `export default async () => {
+  await new Promise((rest) => setTimeout(rest, 5000));
+  return { count: 1 };
+};
+`;
+
 const NUMBER = { type: "object", required: ["count"], properties: { count: { type: "number" } } };
+
+/** A flow with one slow step, so a test can stop a run that is really running. */
+const SLOW = { name: "slow", steps: [{ id: "wait", kind: "call", module: "sleeps.ts", returns: NUMBER }] };
 
 /** A flow that takes one value, so a test proves the whole chain of a run. */
 const TAKING = {
@@ -59,6 +69,7 @@ function project(flow: unknown = FLOW): string {
   writeFileSync(join(root, "count.ts"), COUNT);
   writeFileSync(join(root, "tells.ts"), TELLS);
   writeFileSync(join(root, "issue.ts"), ISSUE);
+  writeFileSync(join(root, "sleeps.ts"), SLEEPS);
   writeFileSync(join(root, "flow.yaml"), formatFlow(flow as never));
   return root;
 }
@@ -769,6 +780,51 @@ test("the daemon gives back the runs of one flow, and not the runs of another", 
       mine.map((run) => run.flowName),
       ["other"],
     );
+  } finally {
+    await site.close();
+  }
+});
+
+test("a run that a person stops leaves no ticket saying it did not start", async () => {
+  const site = await running(project(SLOW));
+  try {
+    await site.call("/api/flows", { method: "POST", body: JSON.stringify({ path: "flow.yaml" }) });
+    await site.call("/api/flows/1/runs", { method: "POST", body: "{}" });
+    await until(async () => ((await site.call("/api/runs")).body as Array<{ status: string }>)[0]?.status === "running");
+
+    const [row] = (await site.call("/api/runs")).body as Array<{ runId: string }>;
+    const stopped = await site.call(`/api/runs/${row?.runId}/stop`, { method: "POST" });
+    assert.equal(stopped.code, 200);
+
+    // The queue is for work that has not begun. A run a person ended is not that.
+    await until(async () => ((await site.call("/api/runs")).body as Array<{ status: string }>)[0]?.status !== "running");
+    const pending = (await site.call("/api/queue")).body as Array<{ error?: string }>;
+    assert.deepEqual(pending, []);
+  } finally {
+    await site.close();
+  }
+});
+
+test("an answer the gate refuses is refused at the door, not in a child", async () => {
+  const site = await running(project());
+  try {
+    await site.call("/api/flows", { method: "POST", body: JSON.stringify({ path: "flow.yaml" }) });
+    await site.call("/api/flows/1/runs", { method: "POST", body: "{}" });
+    await until(async () => ((await site.call("/api/runs")).body as Array<{ status: string }>)[0]?.status === "waiting");
+    const [row] = (await site.call("/api/runs")).body as Array<{ runId: string }>;
+
+    // The contract wants a boolean. A queued answer used to be taken with a 200
+    // and refused later, on another page, under the words "did not start".
+    const refused = await site.call(`/api/runs/${row?.runId}/resume`, {
+      method: "POST",
+      body: JSON.stringify({ value: { approved: "yes please" } }),
+    });
+
+    assert.equal(refused.code, 400);
+    assert.match((refused.body as { error: string }).error, /breaks the contract/);
+    // The run still waits for the person, and the queue holds nothing.
+    assert.equal(((await site.call("/api/runs")).body as Array<{ status: string }>)[0]?.status, "waiting");
+    assert.deepEqual((await site.call("/api/queue")).body, []);
   } finally {
     await site.close();
   }

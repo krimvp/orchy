@@ -308,7 +308,10 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
       (_p, body) => {
         const flow = body.flow as Flow;
         const path = typeof body.path === "string" ? body.path : undefined;
-        return { problems: validate(flow), warnings: path ? missing(flow, path) : [] };
+        // A flow that names no harness runs on the one the daemon holds for its
+        // file, so that is the harness the page is answered for.
+        const held = path ? daemon.store.flowAt(resolve(daemon.root, path))?.harness : undefined;
+        return { problems: validate(flow, held), warnings: path ? missing(flow, path) : [] };
       },
     ],
 
@@ -599,7 +602,7 @@ async function start(
   harness?: string,
 ) {
   const flow = await loadFlow(row.path, daemon.root);
-  const problems = validate(flow);
+  const problems = validate(flow, harness ?? row.harness);
   if (problems.length > 0) throw new Error(`the flow is not valid:\n- ${problems.join("\n- ")}`);
   const gone = missing(await readFlow(row.path), row.path);
   if (gone.length > 0) throw new Error(`the flow names files that are not there:\n- ${gone.join("\n- ")}`);
