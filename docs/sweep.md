@@ -26,8 +26,12 @@ commands and the output they quote.
 
 ## What is closed
 
-Twenty-eight of these are fixed, each with a test that fails without the fix.
-In the order they were closed:
+Of the twenty-two root causes behind the high findings, **sixteen are closed,
+three are half closed, and three are open**. About a dozen of the 129 medium and
+low findings are closed with them; the rest stand. Every fix carries a test that
+fails without it.
+
+Closed, in the order they were closed:
 
 - **Nothing hangs a machine.** A cycle with no limit is refused; a cycle states
   its whole shape. A flow that holds itself, or a chain that comes back to one it
@@ -63,20 +67,36 @@ In the order they were closed:
   spending nothing. A file that will not load ends the command with 2, and the
   documented exit codes are the ones the command really uses.
 
-What is still open, and worth its own decision: a budget cannot stop a wave in
-the middle of itself, because no one knows what a step costs before it runs; a
-promise is judged on the net diff, so a step that puts a file back passes; "I
-checked and nothing moved" and "I never looked" are still one record; a run
-cannot hand its values to a sub-flow; a wave is a barrier, so a ready branch
-waits for an unrelated one; a flow with two ends returns one of them by file
-order; `policy: accept` ends a run with no event of its own; a cycle to a fanout
-step still retargets the last member; and every command still pays 1.5 seconds
-to import the Pi SDK.
+Half closed, and honest about which half:
+
+- **A budget never stops the first step.** `budget: 0` now stops the first step
+  that would spend. A budget smaller than what the first step really costs still
+  cannot, because no one knows that cost until it is spent, and a wave of paid
+  steps still passes a budget together.
+- **What a run has spent, while it runs.** The cost lands when the trajectory is
+  written, so a run waiting at a gate now reports what it spent. Between two
+  steps of a working run it is still `null`.
+- **The reason a dead child leaves.** A run a person stopped no longer reads as
+  one that never started. A child that dies some other way still hands its raw
+  stderr over as the reason, so a Node warning can still stand in for one.
+
+Open, and each wanting a decision rather than only work: a promise is judged on
+the net diff, so a step that puts a file back passes; "I checked and nothing
+moved" and "I never looked" are still one record; a run cannot hand its values
+to a sub-flow; and a cycle to a fanout step still retargets the last member.
+
+The medium and low findings that stand are led by the page (19), the engine
+(11), the developer's first hour (11) and conditions (11): a wave is a barrier,
+so a ready branch waits for an unrelated one; a flow with two ends returns one of
+them by file order; `policy: accept` ends a run with no event of its own; a skip
+never names the value it judged; and every command still pays 1.5 seconds to
+import the Pi SDK.
 
 ## The faults that must close first
 
-Twenty root causes carry the 38 high findings. Where more than one agent found
-the same thing by a different road, the count says so.
+Twenty-two root causes carry the 38 high findings. Where more than one agent
+found the same thing by a different road, the count says so. This part is the
+record as the sweep wrote it, before any of it was fixed.
 
 ### A flow step is never checked at all — 4 agents
 
