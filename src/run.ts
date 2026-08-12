@@ -32,7 +32,7 @@ import {
 import type { Harness, Note } from "./harness.ts";
 import { pi } from "./pi.ts";
 import { attempts, toAtif } from "./atif.ts";
-import { type Change, changed, take } from "./workspace.ts";
+import { type Change, type Snapshot, changed, take } from "./workspace.ts";
 
 const version = String(createRequire(import.meta.url)("../package.json").version);
 
@@ -91,8 +91,13 @@ function returnProblem(state: RunState): string | undefined {
  * A cost that no harness reported is not a cost of zero. A budget that reads it
  * as zero is a budget that looks enforced and is not, so the run says so and
  * stops. Only an agent step spends, so a call step and a gate report nothing.
+ *
+ * What a budget cannot do: no one knows what a step will cost before it runs,
+ * so a budget stops the run between waves and never in the middle of one. A
+ * wave of paid steps can pass it together. `budget: 0` is the one budget that
+ * stops a step before it spends, because nothing needs to be measured first.
  */
-function budgetProblem(state: RunState): string | undefined {
+function budgetProblem(state: RunState, ready: Step[]): string | undefined {
   const budget = state.flow.budget;
   if (budget === undefined) return undefined;
   const kinds = new Map(state.flow.steps.map((step) => [step.id, step.kind]));
@@ -107,6 +112,11 @@ function budgetProblem(state: RunState): string | undefined {
   }
 
   if (spent < budget) return undefined;
+  // Nothing has been spent yet, so nothing has been passed: this is a budget of
+  // nothing meeting a wave. A wave that cannot spend is not what such a budget
+  // refuses, so a flow of free steps under `budget: 0` runs, and the first step
+  // that would spend does not.
+  if (spent === 0 && !ready.some((step) => step.kind === "agent")) return undefined;
   return `the run reached the budget of the flow "${state.flow.name}": it spent ${money(spent)} of ${money(budget)}. It stops before the next step.`;
 }
 
@@ -213,6 +223,11 @@ export async function run(input: Flow, options: RunOptions = {}): Promise<RunSta
   for (const step of flow.steps) harnessFor(flow, step, options.harness ?? pi, options.harnesses);
 
   const cwd = resolve(options.cwd ?? process.cwd());
+  // The workspace belongs to the flow, not to one step, so a workspace Orchy
+  // cannot read stops the run here — before a run directory exists, and before
+  // a step spends anything. A workspace that goes wrong later is a fault of the
+  // step that met it, and the step records it.
+  take(flow.workspace, cwd);
   const state: RunState = { runId: randomUUID(), flow, status: "running", steps: {}, cycles: {} };
   // ADR 0005: the state on disk is the run, so a resume reads the values again.
   if (options.with) state.with = options.with;
@@ -394,7 +409,7 @@ async function execute(state: RunState, cwd: string, options: RunOptions, answer
 
     // The run settles here, so a run that reached its budget stops before it
     // starts more work. A run whose last wave ended inside the budget is done.
-    const budget = budgetProblem(state);
+    const budget = budgetProblem(state, ready);
     if (budget) return fail(state, budget, close, emit);
 
     const ruled = ready.map((step) => [step, skipOf(step, state)] as const).filter(([, why]) => why !== undefined);
@@ -813,11 +828,13 @@ async function runStep(
   const taken = takenProblem(step, values);
   if (taken) return { ...at(), status: "failed", error: taken };
 
-  const before = take(state.flow.workspace, cwd);
-
   let result: { value: unknown; trajectory?: string; cost?: number };
   let prompt: string | undefined;
+  let before: Snapshot | undefined;
   try {
+    // Reading the workspace is part of the step. Outside this block it threw
+    // past `fail()` and `close()`, and the run stayed at "running" for ever.
+    before = take(state.flow.workspace, cwd);
     if (step.kind === "agent") {
       prompt = buildPrompt(step, inputs, cwd, values, state.with);
       // The prompt is the whole of what the step was asked, and it lives in a
@@ -845,7 +862,17 @@ async function runStep(
     // A harness that wrote a record before it failed hands it over here, so the
     // step a reader most wants to read is not the one with nothing in it.
     const held = (error as { trajectory?: string }).trajectory;
-    return { ...at(), status: "failed", error: why, ...(held ? { trajectory: held } : {}), ...(prompt ? { prompt } : {}) };
+    // A step that failed still spent what it spent. ADR 0019 counts it, so the
+    // harness hands the cost over on the error and the record keeps it.
+    const paid = (error as { cost?: number }).cost;
+    return {
+      ...at(),
+      status: "failed",
+      error: why,
+      ...(held ? { trajectory: held } : {}),
+      ...(paid === undefined ? {} : { cost: paid }),
+      ...(prompt ? { prompt } : {}),
+    };
   }
 
   // Invariant 5: what the step really did, not what it says it did.
@@ -906,8 +933,20 @@ function say(touched: Change[]): string {
 
 /** A path is the file itself, or anything under it as a directory. */
 function under(path: string, allowed: string): boolean {
-  const root = allowed.replace(/\/+$/, "");
-  return path === root || path.startsWith(`${root}/`);
+  const root = plain(allowed);
+  // A promise of "." names the workspace itself, and so holds every path in it.
+  if (root === "" || root === ".") return true;
+  return plain(path) === root || plain(path).startsWith(`${root}/`);
+}
+
+/**
+ * The name git would write: no "./" in front, no slash behind, no doubles. A
+ * promise is written by a person and a change is reported by git, so the two
+ * spellings of one path have to meet somewhere. They met nowhere, and
+ * `except: ["./src"]` allowed every write to `src`.
+ */
+function plain(path: string): string {
+  return path.replace(/\/{2,}/g, "/").replace(/^(\.\/)+/, "").replace(/\/+$/, "");
 }
 
 function buildPrompt(

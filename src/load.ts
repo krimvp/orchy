@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { type Flow, expandFlows, resolvePaths } from "./flow.ts";
+import { type Flow, expandFlows, resolvePaths, validate } from "./flow.ts";
 import { parseFlow } from "./yaml.ts";
 
 /**
@@ -28,10 +28,35 @@ export async function readFlow(file: string, from = process.cwd()): Promise<Flow
 /**
  * The flow that a run needs: every path resolved against its own file, and
  * every flow step replaced by the steps of the flow it names.
+ *
+ * Each file is checked before it is expanded, because expansion is what takes
+ * a flow step away: after it, no step of the kind `flow` is left for
+ * `validate()` to read, so every field on one — `when`, `tools`, `model`,
+ * `changes` — went through in silence. `chain` holds the files above this one,
+ * so a flow that names itself is refused instead of loading for ever.
  */
-export async function loadFlow(file: string, from = process.cwd()): Promise<Flow> {
+export async function loadFlow(file: string, from = process.cwd(), chain: string[] = []): Promise<Flow> {
   const path = resolve(from, file);
   const directory = dirname(path);
   const flow = await readFlow(path);
-  return expandFlows(resolvePaths(flow, directory), (inner) => loadFlow(inner, directory));
+  const seen = [...chain, path];
+  const resolved = resolvePaths(flow, directory);
+  refuse(resolved, path);
+  return expandFlows(resolved, (inner) => {
+    const at = resolve(directory, inner);
+    if (seen.includes(at)) {
+      throw new Error(
+        `the flow at "${at}" is open already: ${[...seen, at].join(" → ")}. A flow cannot hold itself, and a chain of flows cannot come back to one it holds.`,
+      );
+    }
+    return loadFlow(inner, directory, seen);
+  });
+}
+
+/** What a file's own flow gets wrong, named with the file, before it is expanded. */
+function refuse(flow: Flow, path: string): void {
+  const problems = validate(flow);
+  if (problems.length > 0) {
+    throw new Error(`the flow at "${path}" is not valid:\n- ${problems.join("\n- ")}`);
+  }
 }

@@ -90,7 +90,14 @@ export const claude: Harness = {
     } catch (error) {
       // A command that ends badly says why on its own streams. Node throws the
       // whole argument list instead, prompt and all, and names no reason.
-      throw new Error(`step "${request.step}" could not run the claude command: ${whyOf(error)}`);
+      // The transcript and the money are already real, so both ride out on the
+      // error: a step that failed is the step a reader most wants to read, and
+      // ADR 0019 counts what a failed attempt spent.
+      throw spent(
+        new Error(`step "${request.step}" could not run the claude command: ${whyOf(error)}`),
+        sessionId,
+        costOf((error as { stdout?: string }).stdout),
+      );
     } finally {
       stop?.();
     }
@@ -103,12 +110,20 @@ export const claude: Harness = {
     }
 
     if (answer.is_error || answer.subtype !== "success") {
-      throw new Error(
-        `step "${request.step}" ended as ${answer.subtype ?? "an error"}: ${String(answer.result).slice(0, 300)}`,
+      throw spent(
+        new Error(
+          `step "${request.step}" ended as ${answer.subtype ?? "an error"}: ${String(answer.result).slice(0, 300)}`,
+        ),
+        sessionId,
+        answer.total_cost_usd,
       );
     }
     if (answer.structured_output === undefined) {
-      throw new Error(`step "${request.step}" ended with no value for its contract`);
+      throw spent(
+        new Error(`step "${request.step}" ended with no value for its contract`),
+        sessionId,
+        answer.total_cost_usd,
+      );
     }
 
     // Claude writes no cost into its transcript, so take it from the answer.
@@ -129,6 +144,11 @@ export const claude: Harness = {
 
     const steps: Step[] = [];
     const metrics: Metrics[] = [];
+    // Claude writes one line for each block of a response, and every one of
+    // those lines carries the usage of the whole response. Counting each line
+    // multiplies the tokens of a step by the number of blocks it happened to
+    // take, so a response is counted once, by its id.
+    const counted = new Set<string>();
     let model = "unknown";
 
     for (const line of lines) {
@@ -144,7 +164,15 @@ export const claude: Harness = {
       const step = toStep(entry, steps.length + 1);
       if (!step) continue;
       if (message.model) model = message.model;
-      if (step.metrics) metrics.push(step.metrics);
+      const id = message.id;
+      if (step.metrics && (id === undefined || !counted.has(id))) {
+        if (id !== undefined) counted.add(id);
+        metrics.push(step.metrics);
+      } else {
+        // The response has already been counted, so this line reports no usage
+        // of its own. It is the same answer, written on.
+        step.metrics = undefined;
+      }
       steps.push(step);
     }
 
@@ -158,6 +186,25 @@ export const claude: Harness = {
     };
   },
 };
+
+/**
+ * The record and the money of a step that failed, carried on the error. The
+ * runner reads both off it, so a failure costs a person the value of the step
+ * and nothing else: not the transcript, and not the count of what it spent.
+ */
+function spent(error: Error, trajectory: string, cost: number | undefined): Error {
+  return Object.assign(error, { trajectory, ...(cost === undefined ? {} : { cost }) });
+}
+
+/** What the command said it spent, when it wrote an answer before it failed. */
+function costOf(stdout: string | undefined): number | undefined {
+  try {
+    const answer = JSON.parse(stdout ?? "") as Answer;
+    return typeof answer.total_cost_usd === "number" ? answer.total_cost_usd : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Why the command failed, in its own words. Node puts the whole argument list
@@ -226,10 +273,12 @@ interface Entry {
     role?: string;
     model?: string;
     content?: string | Block[];
+    id?: string;
     usage?: {
       input_tokens?: number;
       output_tokens?: number;
       cache_read_input_tokens?: number;
+      cache_creation_input_tokens?: number;
     };
   };
 }
@@ -284,7 +333,10 @@ function toStep(entry: Entry, id: number): Step | undefined {
     // Claude keeps no cost in its transcript. The adapter puts the cost of the
     // whole step on `final_metrics`, so a per-step zero here would read as free.
     metrics: {
-      prompt_tokens: message.usage?.input_tokens ?? 0,
+      // A cache write is an input token that a person paid for, so the count of
+      // what went in holds it. A cache read is the cheap half, and it has its
+      // own name.
+      prompt_tokens: (message.usage?.input_tokens ?? 0) + (message.usage?.cache_creation_input_tokens ?? 0),
       completion_tokens: message.usage?.output_tokens ?? 0,
       cached_tokens: message.usage?.cache_read_input_tokens ?? 0,
     },

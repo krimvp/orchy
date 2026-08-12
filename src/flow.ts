@@ -443,6 +443,13 @@ export async function expandFlows(flow: Flow, load: (path: string) => Promise<Fl
         `the flow at "${step.flow}" works in ${JSON.stringify(inner.workspace)}, and step "${step.id}" holds it. One run works in one workspace, so an inner flow names the same one or none.`,
       );
     }
+    // A contract that expansion drops is a rule that looks enforced and is not:
+    // the same flow refused its own value standing alone and passed as a step.
+    if (inner.returns !== undefined) {
+      throw new Error(
+        `the flow at "${step.flow}" returns a value under a contract of its own, and step "${step.id}" would drop it. Put that contract on the step the inner flow ends with.`,
+      );
+    }
     const takes = takesProblem(inner, step.with, `step "${step.id}"`);
     if (takes) throw new Error(takes);
 
@@ -567,8 +574,10 @@ function shapeProblems(flow: Flow): string[] {
   if (takesFault) problems.push(`the flow takes ${JSON.stringify(flow.takes)}, ${takesFault}`);
   const returnsFault = flow.returns === undefined ? undefined : schemaFault(flow.returns);
   if (returnsFault) problems.push(`the flow returns ${JSON.stringify(flow.returns)}, ${returnsFault}`);
-  if (flow.budget !== undefined && !(typeof flow.budget === "number" && flow.budget > 0)) {
-    problems.push(`the flow has a budget of ${JSON.stringify(flow.budget)}. A budget is a number of dollars above zero.`);
+  if (flow.budget !== undefined && !(typeof flow.budget === "number" && flow.budget >= 0)) {
+    problems.push(
+      `the flow has a budget of ${JSON.stringify(flow.budget)}. A budget is a number of dollars, and zero means that no step of it may spend.`,
+    );
   }
   if (!Array.isArray(flow.steps)) return [...problems, "the flow has no steps"];
 
@@ -601,7 +610,50 @@ function shapeProblems(flow: Flow): string[] {
     const takesWrong = takes === undefined ? undefined : schemaFault(takes);
     if (takesWrong) problems.push(`step "${step.id}" takes ${JSON.stringify(takes)}, ${takesWrong}`);
     problems.push(...changesProblems(`step "${step.id}"`, (step as AgentStep).changes));
+    problems.push(...cycleProblems(step));
     problems.push(...memberProblems(step));
+  }
+  return problems;
+}
+
+/** What a cycle holds. Everything here is read; nothing else is. */
+const CYCLE_HOLDS = ["to", "when", "limit", "policy"];
+
+const POLICIES = ["escalate", "accept"];
+
+/**
+ * The shape of a loop. A cycle had no shape check of its own, so a limit that
+ * was missing or was not a number read as "no limit at all" — `count > undefined`
+ * is never true — and the run went round for ever, against invariant 4. A policy
+ * of "banana" quietly meant "accept" the same way.
+ */
+function cycleProblems(step: Step): string[] {
+  const cycle = (step as { cycle?: unknown }).cycle;
+  if (cycle === undefined) return [];
+  const who = `step "${step.id}"`;
+  if (!isSchema(cycle)) return [`${who} cycles to "${JSON.stringify(cycle)}", which names no step to go back to`];
+
+  const held = cycle as unknown as Record<string, unknown>;
+  const problems = Object.keys(held)
+    .filter((key) => !CYCLE_HOLDS.includes(key))
+    .map((key) => `${who} cycles with "${key}", which is not a field of a cycle`);
+
+  if (typeof held.to !== "string" || held.to === "") {
+    problems.push(`${who} cycles to ${JSON.stringify(held.to)}. Write the id of the step to go back to.`);
+  }
+  if (held.when === undefined) {
+    problems.push(`${who} cycles, and says nothing about when. Write a match against its value, or "failed".`);
+  } else if (held.when !== "failed" && !isSchema(held.when)) {
+    problems.push(`${who} cycles when ${JSON.stringify(held.when)}. Write a match against its value, or "failed".`);
+  }
+  // The limit is the whole of invariant 4 for a loop: without it a run has no end.
+  if (!(typeof held.limit === "number" && Number.isInteger(held.limit) && held.limit >= 1)) {
+    problems.push(
+      `${who} cycles with the limit ${JSON.stringify(held.limit)}. A limit is a whole number of turns, one or more, and a cycle needs one.`,
+    );
+  }
+  if (held.policy !== undefined && !POLICIES.includes(String(held.policy))) {
+    problems.push(`${who} cycles with the policy "${String(held.policy)}". Use one of: ${POLICIES.join(", ")}`);
   }
   return problems;
 }
@@ -844,7 +896,6 @@ export function validate(flow: Flow): string[] {
       // A step cycles to itself, which is a retry. It never cycles forward.
       problems.push(`step "${step.id}" cycles to "${cycle.to}", which does not run before it`);
     }
-    if (cycle.limit < 1) problems.push(`step "${step.id}" sets a cycle limit below one`);
     // An escalation asks a person for the value of the step. A gate has one
     // already, so the same person would answer the same question without end.
     if (step.kind === "gate" && cycle.policy === "escalate") {

@@ -3580,7 +3580,7 @@ test("the cost of a step that breaks its contract counts against the budget", as
   assert.match(state.error ?? "", /it spent \$3 of \$2/);
 });
 
-test("validate refuses a budget that is not a number of dollars above zero", () => {
+test("validate takes a budget of nothing, and refuses one that is not a number of dollars", () => {
   const budgeted = (budget: unknown) =>
     validate({
       name: "b",
@@ -3588,9 +3588,11 @@ test("validate refuses a budget that is not a number of dollars above zero", () 
       steps: [agent({ id: "a", prompt: "p.md", tools: ["read"], returns: Summary })],
     } as unknown as Flow);
 
-  assert.ok(budgeted(0).some((p) => p.includes("A budget is a number of dollars above zero")));
-  assert.ok(budgeted("5").some((p) => p.includes("A budget is a number of dollars above zero")));
+  assert.ok(budgeted(-1).some((p) => p.includes("A budget is a number of dollars")));
+  assert.ok(budgeted("5").some((p) => p.includes("A budget is a number of dollars")));
   assert.deepEqual(budgeted(0.5), []);
+  // Nothing is a budget a run can keep: no step of it may spend.
+  assert.deepEqual(budgeted(0), []);
 });
 
 test("validate refuses a budget on a flow where no step spends", () => {
@@ -3933,4 +3935,228 @@ test("a file keeps what a step takes", () => {
   const parsed = parseFlow(text);
   assert.deepEqual(validate(parsed), []);
   assert.deepEqual(parseFlow(formatFlow(parsed)), parsed);
+});
+
+// -- What the sweep of 2026-08-11 found. See docs/sweep.md --
+
+test("validate refuses a cycle whose limit is missing, so no run goes round for ever", () => {
+  const cycled = (cycle: unknown) =>
+    validate({
+      name: "loop",
+      steps: [
+        { id: "a", kind: "call", needs: [], module: "m.ts", returns: Summary },
+        { id: "b", kind: "call", needs: ["a"], module: "m.ts", returns: Summary, cycle },
+      ],
+    } as unknown as Flow);
+
+  // `count > undefined` is never true, so a cycle with no limit never ends.
+  const missing = cycled({ to: "a", when: "failed" });
+  assert.ok(missing.some((p) => p.includes("A limit is a whole number of turns")));
+  assert.ok(cycled({ to: "a", when: "failed", limit: "3" }).some((p) => p.includes("A limit is a whole number")));
+  assert.ok(cycled({ to: "a", when: "failed", limit: 2.5 }).some((p) => p.includes("A limit is a whole number")));
+  assert.ok(cycled({ to: "a", when: "failed", limit: 0 }).some((p) => p.includes("A limit is a whole number")));
+  assert.deepEqual(cycled({ to: "a", when: "failed", limit: 2 }), []);
+});
+
+test("validate refuses a cycle that holds a policy or a field no one reads", () => {
+  const cycled = (cycle: unknown) =>
+    validate({
+      name: "loop",
+      steps: [
+        { id: "a", kind: "call", needs: [], module: "m.ts", returns: Summary },
+        { id: "b", kind: "call", needs: ["a"], module: "m.ts", returns: Summary, cycle },
+      ],
+    } as unknown as Flow);
+
+  assert.ok(
+    cycled({ to: "a", when: "failed", limit: 2, policy: "banana" }).some((p) => p.includes('the policy "banana"')),
+  );
+  assert.ok(
+    cycled({ to: "a", when: "failed", limit: 2, unless: "x" }).some((p) => p.includes('"unless", which is not a field')),
+  );
+  assert.ok(cycled({ to: "a", limit: 2 }).some((p) => p.includes("says nothing about when")));
+});
+
+test("a budget of nothing runs a step that cannot spend, and stops before one that can", async () => {
+  const cwd = workspace();
+  writeFileSync(join(cwd, "count.ts"), "export default () => ({ summary: 'free' });\n");
+
+  const state = await run(
+    flow("free-then-paid", {
+      budget: 0,
+      steps: [
+        call({ id: "free", module: "count.ts", returns: Summary }),
+        agent({ id: "paid", needs: ["free"], prompt: "step.md", tools: ["read"], returns: Summary }),
+      ],
+    }),
+    { cwd, harness: fakeHarness({ summary: "spent something" }) },
+  );
+
+  assert.equal(state.steps.free?.status, "done");
+  assert.equal(state.status, "failed");
+  assert.equal(state.steps.paid, undefined);
+  assert.match(state.error ?? "", /reached the budget/);
+});
+
+test("a step that failed keeps what it spent, and the budget counts it", async () => {
+  const cwd = workspace();
+  // A harness that spends and then fails hands the cost over on the error, the
+  // way the claude adapter does. ADR 0019 counts a failed attempt.
+  const burning: Harness = {
+    toTrajectory: () => undefined,
+    async run() {
+      throw Object.assign(new Error("it could not answer"), { trajectory: "session-1", cost: 0.02 });
+    },
+  };
+
+  const state = await run(
+    flow("burns", {
+      budget: 0.01,
+      steps: [agent({ id: "a", prompt: "step.md", tools: ["read"], returns: Summary })],
+    }),
+    { cwd, harness: burning },
+  );
+
+  assert.equal(state.steps.a?.status, "failed");
+  assert.equal(state.steps.a?.cost, 0.02);
+  assert.equal(state.steps.a?.trajectory, "session-1");
+});
+
+test("a promise reads a path the way git writes it, however the flow spells it", async () => {
+  const cwd = gitWorkspace();
+  mkdirSync(join(cwd, "src"), { recursive: true });
+
+  // `./src` and `src` are one path. They were two, and the promise allowed
+  // every write to the first spelling.
+  const state = await run(
+    flow("spelling", {
+      workspace: { kind: "git", path: "." },
+      steps: [
+        agent({
+          id: "a",
+          prompt: "step.md",
+          tools: ["write"],
+          returns: Summary,
+          changes: { except: ["./src/"] },
+        }),
+      ],
+    }),
+    { cwd, harness: writingHarness(cwd, join("src", "sneaky.ts"), { summary: "wrote where I promised not to" }) },
+  );
+
+  assert.equal(state.status, "failed");
+  assert.match(state.steps.a?.error ?? "", /promises to change nothing in \.\/src\/, but it added src\/sneaky\.ts/);
+});
+
+test("the Claude adapter counts one answer once, however many lines it takes", () => {
+  const home = mkdtempSync(join(tmpdir(), "orchy-claude-"));
+  const project = join(home, "projects", "-some-where");
+  mkdirSync(project, { recursive: true });
+
+  // Claude writes one line for each block of an answer, and every line repeats
+  // the usage of the whole answer. Counting each line multiplied the tokens of
+  // a step by the number of blocks it happened to take.
+  const sessionId = "99999999-8888-7777-6666-555555555555";
+  const usage = {
+    input_tokens: 9,
+    output_tokens: 143,
+    cache_read_input_tokens: 2,
+    cache_creation_input_tokens: 5115,
+  };
+  writeFileSync(
+    join(project, `${sessionId}.jsonl`),
+    [
+      JSON.stringify({
+        timestamp: "2026-01-01T00:00:01Z",
+        message: { role: "assistant", id: "msg_1", model: "claude-haiku-4-5", content: [{ type: "text", text: "one" }], usage },
+      }),
+      JSON.stringify({
+        timestamp: "2026-01-01T00:00:02Z",
+        message: {
+          role: "assistant",
+          id: "msg_1",
+          model: "claude-haiku-4-5",
+          content: [{ type: "tool_use", id: "toolu_1", name: "Read", input: {} }],
+          usage,
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-01-01T00:00:03Z",
+        message: { role: "assistant", id: "msg_2", model: "claude-haiku-4-5", content: [{ type: "text", text: "two" }], usage },
+      }),
+    ].join("\n"),
+  );
+
+  const previous = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = home;
+  try {
+    const trajectory = claude.toTrajectory(sessionId, "run:1:a", "0.0.0");
+    assert.ok(trajectory);
+    // Two answers, not three lines. A cache write is an input token a person
+    // paid for, so it counts with the others instead of vanishing.
+    assert.equal(trajectory.final_metrics.prompt_tokens, (9 + 5115) * 2);
+    assert.equal(trajectory.final_metrics.completion_tokens, 143 * 2);
+    assert.equal(trajectory.final_metrics.cached_tokens, 2 * 2);
+    assert.equal(trajectory.steps.length, 3);
+  } finally {
+    if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = previous;
+  }
+});
+
+test("loading a flow that holds itself is refused instead of never ending", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "orchy-self-"));
+  writeFileSync(
+    join(cwd, "self.yaml"),
+    "name: self\nsteps:\n  - id: again\n    kind: flow\n    needs: []\n    flow: self.yaml\n",
+  );
+
+  await assert.rejects(() => loadFlow(join(cwd, "self.yaml")), /is open already/);
+});
+
+test("loading a flow that two files hold in turn is refused as well", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "orchy-pair-"));
+  writeFileSync(join(cwd, "a.yaml"), "name: a\nsteps:\n  - id: b\n    kind: flow\n    needs: []\n    flow: b.yaml\n");
+  writeFileSync(join(cwd, "b.yaml"), "name: b\nsteps:\n  - id: a\n    kind: flow\n    needs: []\n    flow: a.yaml\n");
+
+  await assert.rejects(() => loadFlow(join(cwd, "a.yaml")), /is open already/);
+});
+
+test("a file is checked before it is expanded, so a field on a flow step cannot slip through", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "orchy-holds-"));
+  writeFileSync(join(cwd, "inner.yaml"), "name: inner\nsteps:\n  - id: one\n    kind: call\n    needs: []\n    module: m.ts\n    returns:\n      type: object\n");
+  // Expansion takes the flow step away, so `validate()` never saw one: a `when`
+  // it says it refuses went through in silence, and the inner steps ran anyway.
+  writeFileSync(
+    join(cwd, "outer.yaml"),
+    "name: outer\nsteps:\n  - id: sub\n    kind: flow\n    needs: []\n    flow: inner.yaml\n    when:\n      ghost:\n        is: 1\n",
+  );
+
+  await assert.rejects(() => loadFlow(join(cwd, "outer.yaml")), /holds "when", which a flow step cannot act on/);
+});
+
+test("an inner flow that returns a value under its own contract is refused, not quietly dropped", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "orchy-inner-returns-"));
+  writeFileSync(
+    join(cwd, "inner.yaml"),
+    [
+      "name: inner",
+      "returns:",
+      "  type: object",
+      "  required: [count]",
+      "  properties:",
+      "    count: { type: number }",
+      "steps:",
+      "  - id: one",
+      "    kind: call",
+      "    needs: []",
+      "    module: m.ts",
+      "    returns:",
+      "      type: object",
+      "",
+    ].join("\n"),
+  );
+  writeFileSync(join(cwd, "outer.yaml"), "name: outer\nsteps:\n  - id: sub\n    kind: flow\n    needs: []\n    flow: inner.yaml\n");
+
+  await assert.rejects(() => loadFlow(join(cwd, "outer.yaml")), /would drop it/);
 });
