@@ -56,7 +56,10 @@ A step of a flow reaches this door too, by declaring the `orchy` tool (ADR
 0025). The claude adapter opens the door with the run and the step in
 `ORCHY_STARTED_BY`, `mcp()` takes them as `startedBy`, and every run such a
 step starts records them in its state. The door refuses a chain that stands
-three runs deep, and names the `flow` step as the way that still runs.
+three runs deep, and names the `flow` step as the way that still runs. A
+step's `starts` bound is enforced here as well, read from the state of the
+run that asked: a flow outside `starts.flows` is refused with the list, and
+a start past `starts.most` is refused with the count (ADR 0027).
 
 ## Example
 

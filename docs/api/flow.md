@@ -14,7 +14,10 @@ harness, model, a `changes` promise, `takes`/`returns` schemas, a dollar
 
 - **agent** — runs a prompt under a harness with declared tools, and returns
   a value shaped by a JSON Schema.
-- **call** — runs a TypeScript module instead of an agent.
+- **call** — runs a component instead of an agent: a TypeScript `module`, a
+  `command` in any language (JSON on stdin and stdout, notes on stderr — ADR
+  0026), or a shipped component named as `orchy:check`. Exactly one of
+  `module` and `command`; `COMPONENTS` names what Orchy supplies.
 - **gate** — stops the run until a person answers a question.
 - **flow** — embeds a whole other flow as one step; expansion inlines it.
 
@@ -72,7 +75,9 @@ Expanding:
   the `load` callback), prefixing inner ids with the step id so two uses
   never collide. Throws when the inner flow carries a budget, takes values
   the step does not supply, or ends in more than one step.
-- `resolvePaths(flow, directory)` — makes prompt and module paths absolute
+- `resolvePaths(flow, directory)` — makes prompt, module, and `starts.flows`
+  paths absolute; a `command` and an `orchy:` name stay as they are; it also
+  makes other paths absolute
   relative to the flow file's directory. Call it after loading from a file.
 
 Reading:

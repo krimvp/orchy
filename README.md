@@ -92,7 +92,8 @@ no step reads never passes in silence.
 
 ## Compose a flow
 
-- **A step** runs an agent, a module of your own, or waits for a person.
+- **A step** runs an agent, a component of your own — a TypeScript module,
+  or a command in any language — or waits for a person.
 - **The values of a run** reach every step. A flow declares what it takes, a
   prompt reads `{{ issue }}`, and a component takes the same value as an
   argument.

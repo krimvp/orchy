@@ -299,6 +299,61 @@ test("a chain of runs stops at three, and the door names the way that still runs
   }
 });
 
+test("a step starts only the flows its bound names, and only so many", async () => {
+  const root = project();
+  const solo = { name: "solo", steps: [{ id: "work", kind: "call", module: "count.ts", returns: NUMBER }] };
+  const other = { name: "other", steps: [{ id: "work", kind: "call", module: "count.ts", returns: NUMBER }] };
+  // The run that asks holds a bound: one flow, one start. ADR 0027.
+  const allowed = join(root, "flows", "solo", "flow.yaml");
+  const boss = {
+    runId: "boss",
+    flow: {
+      name: "bossy",
+      steps: [
+        {
+          id: "dispatch",
+          kind: "agent",
+          needs: [],
+          prompt: "p.md",
+          tools: ["orchy"],
+          starts: { flows: [allowed], most: 1 },
+          returns: {},
+        },
+      ],
+    },
+    status: "waiting",
+    steps: {},
+    cycles: {},
+  };
+  mkdirSync(join(root, ".orchy", "runs", "boss"), { recursive: true });
+  writeFileSync(join(root, ".orchy", "runs", "boss", "state.json"), JSON.stringify(boss));
+
+  const site = talking(root, { runId: "boss", step: "dispatch" });
+  try {
+    await site.call("write_flow", { path: "flows/solo/flow.yaml", yaml: formatFlow(solo as never) });
+    await site.call("write_flow", { path: "flows/other/flow.yaml", yaml: formatFlow(other as never) });
+    writeFileSync(join(root, "flows", "solo", "count.ts"), COUNT);
+    writeFileSync(join(root, "flows", "other", "count.ts"), COUNT);
+
+    const outside = await site.call("run_flow", { path: "flows/other/flow.yaml" });
+    assert.match(outside.refused as string, /starts only/);
+    assert.ok((outside.refused as string).includes(allowed));
+
+    const first = (await site.call("run_flow", { path: "flows/solo/flow.yaml" })).body as { runId: string };
+    assert.ok(first.runId, "the allowed flow did not start");
+    await until(async () => {
+      const held = await site.call("read_run", { runId: first.runId, wait: 30 });
+      return !held.refused && (held.body as { row: { status: string } | null }).row?.status === "done";
+    });
+
+    const again = await site.call("run_flow", { path: "flows/solo/flow.yaml" });
+    assert.match(again.refused as string, /at most 1 run/);
+    assert.match(again.refused as string, /Every run counts/);
+  } finally {
+    site.close();
+  }
+});
+
 test("check_flow reads a prompt before it is written, and names the hole in it", async () => {
   const site = talking(project());
   try {

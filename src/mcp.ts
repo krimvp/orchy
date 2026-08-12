@@ -77,10 +77,10 @@ steps:
 "flow", a fourth kind, holds another flow file. The value of a step must
 match its "returns" schema.
 
-A call module is one default export: (inputs, say, values) => ({ ok: true }).
-"inputs" holds the values of the steps it needs, by step id. "say" reports a line to the
-live notes. "values" holds what the run takes. No
-type is checked.
+A call step holds "module" — a TypeScript default export (inputs, say,
+values) => value — or "command": any program. It takes { values, steps } as
+JSON on stdin, answers JSON on stdout, notes on stderr, and fails with a
+code that is not 0.
 
 {{ issue }} in a prompt or a gate question reads what the run takes, never a
 step value: those reach an agent prompt as an appended block and a call
@@ -263,6 +263,22 @@ export function mcp(
           throw new Error(
             `the run ${startedBy.runId} stands ${DEEP} runs deep, and a chain of runs stops at ${DEEP}. Use a "flow" step for work that runs inside this run.`,
           );
+        }
+        // ADR 0027: the flow declares what its step may start, and the door
+        // reads the bound from the state on disk, not from the model.
+        const bound = startedBy && boundOf(root, startedBy);
+        if (bound?.flows && !bound.flows.includes(path)) {
+          throw new Error(
+            `the step "${startedBy?.step}" starts only: ${bound.flows.join(", ")}. This flow is not one of them.`,
+          );
+        }
+        if (bound?.most !== undefined && startedBy) {
+          const already = childrenOf(daemon, startedBy.runId).filter((one) => one.step === startedBy.step).length;
+          if (already >= bound.most) {
+            throw new Error(
+              `the step "${startedBy.step}" starts at most ${bound.most} run${bound.most === 1 ? "" : "s"}, and it has started ${already}. Every run counts, including one that failed.`,
+            );
+          }
         }
         const row =
           daemon.store.flowAt(path) ??
@@ -498,6 +514,20 @@ function deepOf(root: string, startedBy: { runId: string; step: string }): numbe
     }
   }
   return seen.size;
+}
+
+/**
+ * The bound of the step that asked, read from the state of its run. The flow
+ * in that state already went through `validate()` and `resolvePaths`, so the
+ * bound is well formed and its flow paths are absolute. ADR 0027.
+ */
+function boundOf(root: string, startedBy: { runId: string; step: string }): { flows?: string[]; most?: number } | undefined {
+  try {
+    const step = read(root, startedBy.runId).flow.steps.find((one) => one.id === startedBy.step);
+    return step?.kind === "agent" ? step.starts : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** The runs the steps of this run started, read from the index. */

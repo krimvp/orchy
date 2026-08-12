@@ -119,6 +119,7 @@ export interface Member {
   prompt?: string;
   tools?: ToolName[];
   module?: string;
+  command?: string;
   /** The value that only this member holds. The step reads it. */
   with?: Record<string, unknown>;
 }
@@ -144,6 +145,12 @@ export interface AgentStep<S extends TSchema = TSchema> extends Common, Acts {
   fanout?: Fanout;
   prompt: string;
   tools: ToolName[];
+  /**
+   * What a step that holds the `orchy` tool may start: the flow files, and
+   * how many runs. The door of the run enforces it from the state on disk,
+   * so the model the step drives cannot talk its way past it. ADR 0027.
+   */
+  starts?: { flows?: string[]; most?: number };
   /** Names an adapter. The flow, and then the run, supply the default. */
   harness?: string;
   /** A string that only the harness reads. Pi wants `provider/model`. */
@@ -160,7 +167,15 @@ export interface CallStep<S extends TSchema = TSchema> extends Common, Acts {
   kind: "call";
   /** Runs this step once for each member. Orchy expands it before the run. */
   fanout?: Fanout;
-  module: string;
+  /** A TypeScript file, or `orchy:` and the name of a shipped component. */
+  module?: string;
+  /**
+   * A program in any language, run where the steps act. It takes the values
+   * as JSON on stdin, answers with its value as JSON on stdout, reports on
+   * stderr, and fails with a code that is not 0. A step holds a module or a
+   * command, and exactly one. ADR 0026.
+   */
+  command?: string;
   /** A value the step holds. The component takes it as its third argument. */
   with?: Record<string, unknown>;
   /** The values that must reach the component. Invariant 2 guards what goes in. */
@@ -299,7 +314,9 @@ export function changesOf(flow: Flow, step: Step): Changes | undefined {
  * thing. Call this after loading a flow from a file.
  */
 export function resolvePaths(flow: Flow, directory: string): Flow {
-  const at = (path: string) => (isAbsolute(path) ? path : resolve(directory, path));
+  // A shipped component is a name, not a file of the flow, so it stays as it
+  // is. A command acts where the steps act, so it is not a path to resolve.
+  const at = (path: string) => (isAbsolute(path) || path.startsWith("orchy:") ? path : resolve(directory, path));
   // A member overrides the prompt of its step, and that path came out of the
   // same file. One that stayed relative was read from the working directory
   // instead, so the flow only ran from its own directory.
@@ -317,8 +334,13 @@ export function resolvePaths(flow: Flow, directory: string): Flow {
   return {
     ...flow,
     steps: flow.steps.map((step) => {
-      if (step.kind === "agent") return { ...step, prompt: at(step.prompt), ...members(step) };
-      if (step.kind === "call") return { ...step, module: at(step.module), ...members(step) };
+      if (step.kind === "agent") {
+        const bounds = step.starts?.flows ? { starts: { ...step.starts, flows: step.starts.flows.map(at) } } : {};
+        return { ...step, prompt: at(step.prompt), ...bounds, ...members(step) };
+      }
+      if (step.kind === "call") {
+        return { ...step, ...(step.module === undefined ? {} : { module: at(step.module) }), ...members(step) };
+      }
       return step;
     }),
   };
@@ -533,9 +555,12 @@ const FLOW_HOLDS = [
 const HOLDS: Record<Step["kind"], { must: string[]; may: string[] }> = {
   agent: {
     must: ["prompt", "tools", "returns"],
-    may: ["needs", "when", "harness", "model", "with", "takes", "changes", "cycle", "fanout"],
+    may: ["needs", "when", "harness", "model", "with", "takes", "changes", "cycle", "fanout", "starts"],
   },
-  call: { must: ["module", "returns"], may: ["needs", "when", "with", "takes", "changes", "cycle", "fanout"] },
+  call: {
+    must: ["returns"],
+    may: ["needs", "when", "module", "command", "with", "takes", "changes", "cycle", "fanout"],
+  },
   gate: { must: ["question", "returns"], may: ["needs", "when", "cycle"] },
   flow: { must: ["flow"], may: ["needs", "with", "cycle"] },
 };
@@ -543,11 +568,72 @@ const HOLDS: Record<Step["kind"], { must: string[]; may: string[] }> = {
 /** The first name is the member itself. The rest are what it overrides. */
 const MEMBER_HOLDS: Record<"agent" | "call", string[]> = {
   agent: ["name", "harness", "model", "prompt", "tools", "with"],
-  call: ["name", "module", "with"],
+  call: ["name", "module", "command", "with"],
 };
 
 /** What a fanout holds when a step computes the list. See ADR 0017. */
 const FANOUT_HOLDS = ["step", "key"];
+
+/** The components Orchy supplies, as `orchy:` and the name. ADR 0026. */
+export const COMPONENTS = ["check"] as const;
+
+const STARTS_HOLDS = ["flows", "most"];
+
+/**
+ * What a call step runs: a module or a command, and exactly one. A member of
+ * a fanout overrides either, and the member that ends up with both, or with
+ * neither, is refused the same way. A shipped component must be one Orchy
+ * supplies, or the step learns it in the middle of a run.
+ */
+function componentProblems(step: Step): string[] {
+  if (step.kind !== "call") return [];
+  const problems: string[] = [];
+  const held = (who: string, module?: string, command?: string) => {
+    if (module !== undefined && command !== undefined) {
+      problems.push(`${who} holds a module and a command. A call step runs one of the two.`);
+    }
+    if (module === undefined && command === undefined) {
+      problems.push(`${who} holds no module and no command. A call step runs one of the two.`);
+    }
+    const name = module?.startsWith("orchy:") ? module.slice("orchy:".length) : undefined;
+    if (name !== undefined && !COMPONENTS.includes(name as (typeof COMPONENTS)[number])) {
+      problems.push(`${who} names the component "${module}", and Orchy supplies: ${COMPONENTS.map((one) => `orchy:${one}`).join(", ")}`);
+    }
+  };
+  held(`step "${step.id}"`, step.module, step.command);
+  for (const member of membersOf(step) ?? []) {
+    held(`member "${member.name}" of "${step.id}"`, member.module ?? step.module, member.command ?? step.command);
+  }
+  return problems;
+}
+
+/**
+ * The bounds of a step that starts runs. A bound only the door can read must
+ * still be well formed here, and one on a step with no `orchy` tool is a rule
+ * that looks enforced and is not, so it is refused. ADR 0027.
+ */
+function startsProblems(step: Step): string[] {
+  if (step.kind !== "agent" || step.starts === undefined) return [];
+  const problems: string[] = [];
+  const who = `step "${step.id}"`;
+  if (!step.tools.includes("orchy")) {
+    problems.push(`${who} declares "starts", and its tools hold no "orchy", so nothing reads the bound. Add the tool, or drop the field.`);
+  }
+  for (const key of Object.keys(step.starts).filter((one) => !STARTS_HOLDS.includes(one))) {
+    problems.push(`${who} holds "starts.${key}", which is not a field of a bound. A bound holds "flows" and "most".`);
+  }
+  const { flows, most } = step.starts;
+  if (flows !== undefined && (!Array.isArray(flows) || flows.length === 0 || flows.some((one) => typeof one !== "string" || one === ""))) {
+    problems.push(`${who} bounds its starts to "flows", which must name at least one flow file`);
+  }
+  if (most !== undefined && (!Number.isInteger(most) || most < 1)) {
+    problems.push(`${who} starts at most ${JSON.stringify(most)} runs. Write a whole number of one or more.`);
+  }
+  if (flows === undefined && most === undefined) {
+    problems.push(`${who} declares "starts" with no bound in it. Name "flows", "most", or both.`);
+  }
+  return problems;
+}
 
 const KINDS = Object.keys(HOLDS);
 
@@ -883,6 +969,8 @@ export function validate(flow: Flow, harness?: string, adapters: readonly string
     problems.push(...modelProblems(flow, step, harness));
     problems.push(...takenProblems(flow, step));
     problems.push(...conditionProblems(flow, step));
+    problems.push(...componentProblems(step));
+    problems.push(...startsProblems(step));
   }
 
   // A budget counts what a step spends, and only an agent step reports a cost.

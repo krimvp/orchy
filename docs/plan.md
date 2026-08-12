@@ -475,6 +475,17 @@ claude step now rides `--strict-mcp-config`, so no server of the user's own
 configuration exists for a step that declared none. See [ADR
 0025](./adr/0025-a-step-reaches-the-door-of-its-own-run.md).
 
+**M15 — a component is a process, and a step declares what it may start.
+Done.** A call step holds a `command` in any language — JSON on stdin and
+stdout, notes on stderr, a code that is not 0 fails the step — beside
+`module`, and exactly one of the two. Orchy ships its first component,
+`orchy:check`, which passes only when its command ends with 0, so a
+deterministic check composes with the cycle a flow already holds. An agent
+step that holds the `orchy` tool declares `starts` — the flows it may start,
+and how many runs — and the door enforces the bound from the state on disk.
+See [ADR 0026](./adr/0026-a-component-is-a-process.md) and [ADR
+0027](./adr/0027-a-step-declares-what-it-may-start.md).
+
 ## The proof flows
 
 Two flows prove the design, and they stress different parts.

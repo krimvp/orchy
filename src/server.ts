@@ -770,7 +770,8 @@ export function missing(flow: Flow, flowPath: string): string[] {
   const base = dirname(resolve(flowPath));
   const gone: string[] = [];
   const check = (step: string, kind: string, path?: string) => {
-    if (!path || isAbsolute(path)) return;
+    // A shipped component is a name Orchy answers for, not a file to find.
+    if (!path || isAbsolute(path) || path.startsWith("orchy:")) return;
     if (!existsSync(resolve(base, path))) {
       gone.push(`the step "${step}" names a ${kind} that is not there: ${path}`);
     }

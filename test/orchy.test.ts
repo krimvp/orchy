@@ -4347,6 +4347,103 @@ test("a gate asks its question with the names in it filled in", async () => {
   assert.equal(state.question, "Does ticket ORC-41 look right?");
 });
 
+test("a call step runs a command in any language, and reads its value from stdout", async () => {
+  const cwd = workspace();
+  const notes: string[] = [];
+
+  const state = await run(
+    flow("commanded", {
+      takes: Type.Object({ n: Type.Number() }),
+      steps: [
+        call({
+          id: "double",
+          command: `node -e 'const d=JSON.parse(require("fs").readFileSync(0,"utf8"));console.error("doubling");console.log(JSON.stringify({count:d.values.n*2}))'`,
+          returns: Type.Object({ count: Type.Number() }),
+        }),
+      ],
+    }),
+    { cwd, with: { n: 21 }, onEvent: (event) => event.type === "output" && notes.push(event.text) },
+  );
+
+  assert.equal(state.status, "done");
+  assert.deepEqual(state.steps.double?.value, { count: 42 });
+  // What the command wrote to stderr reached the notes; stdout stayed the value.
+  assert.ok(notes.includes("doubling"));
+});
+
+test("a command that ends badly fails the step with what it said", async () => {
+  const state = await run(
+    flow("breaking", {
+      steps: [
+        call({
+          id: "boom",
+          command: `node -e 'console.error("the disk is full");process.exit(3)'`,
+          returns: Type.Object({}),
+        }),
+      ],
+    }),
+    { cwd: workspace() },
+  );
+
+  assert.equal(state.status, "failed");
+  assert.match(state.steps.boom?.error ?? "", /the code 3/);
+  assert.match(state.steps.boom?.error ?? "", /the disk is full/);
+});
+
+test("a command that answers no JSON is told where notes go", async () => {
+  const state = await run(
+    flow("chatting", {
+      steps: [call({ id: "talk", command: "echo hello", returns: Type.Object({}) })],
+    }),
+    { cwd: workspace() },
+  );
+
+  assert.equal(state.status, "failed");
+  assert.match(state.steps.talk?.error ?? "", /notes to stderr/);
+});
+
+test("the orchy check passes on a clean exit, and fails with what the command said", async () => {
+  const Ok = Type.Object({ ok: Type.Boolean() });
+  const checked = (command: string) =>
+    flow("checked", {
+      steps: [call({ id: "verify", module: "orchy:check", with: { run: command }, returns: Ok })],
+    });
+
+  const good = await run(checked("node -e 'process.exit(0)'"), { cwd: workspace() });
+  assert.equal(good.status, "done");
+  assert.deepEqual(good.steps.verify?.value, { ok: true });
+
+  const bad = await run(checked(`node -e 'console.log("3 tests failed");process.exit(1)'`), { cwd: workspace() });
+  assert.equal(bad.status, "failed");
+  assert.match(bad.steps.verify?.error ?? "", /3 tests failed/);
+});
+
+test("a call step runs a module or a command, and exactly one", () => {
+  const shaped = (fields: Record<string, unknown>) =>
+    validate(flow("shaped", { steps: [{ kind: "call", id: "one", needs: [], returns: Type.Object({}), ...fields } as never] }));
+
+  assert.match(shaped({ module: "a.ts", command: "true" }).join("\n"), /holds a module and a command/);
+  assert.match(shaped({}).join("\n"), /no module and no command/);
+  assert.match(shaped({ module: "orchy:nope" }).join("\n"), /Orchy supplies: orchy:check/);
+  assert.deepEqual(shaped({ command: "true" }), []);
+});
+
+test("a bound on what a step starts must be readable, or it is refused", () => {
+  const bounded = (tools: string[], starts: unknown) =>
+    validate(
+      flow("bounded", {
+        steps: [agent({ id: "spawn", prompt: "step.md", tools: tools as never, starts: starts as never, returns: Summary })],
+      }),
+      "claude",
+    );
+
+  assert.match(bounded(["read"], { most: 2 }).join("\n"), /nothing reads the bound/);
+  assert.match(bounded(["orchy"], {}).join("\n"), /no bound in it/);
+  assert.match(bounded(["orchy"], { most: 0 }).join("\n"), /one or more/);
+  assert.match(bounded(["orchy"], { rate: 2 }).join("\n"), /not a field of a bound/);
+  assert.deepEqual(bounded(["orchy"], { most: 2 }), []);
+});
+
 test("the orchy tool is refused where the harness cannot supply it", () => {
   const doored = flow("doored", {
     steps: [agent({ id: "spawn", prompt: "step.md", tools: ["orchy"], returns: Summary })],

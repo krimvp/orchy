@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
@@ -960,7 +961,9 @@ async function runStep(
             },
             watch,
           )
-        : { value: await callModule(step as CallStep, inputs, cwd, watch, values) };
+        : (step as CallStep).command !== undefined
+          ? { value: await callCommand(step as CallStep, inputs, cwd, watch, values) }
+          : { value: await callModule(step as CallStep, inputs, cwd, watch, values) };
   } catch (error) {
     // The message, and not the word "Error" in front of it. A reader of a
     // console reads the reason, not the class of the object that carried it.
@@ -1122,7 +1125,11 @@ async function callModule(
   watch: (note: Note) => void,
   values: Record<string, unknown>,
 ): Promise<unknown> {
-  const path = resolve(cwd, step.module);
+  // A shipped component lives with Orchy, so its name is not a path. ADR 0026.
+  const named = String(step.module);
+  const path = named.startsWith("orchy:")
+    ? join(import.meta.dirname, "components", `${named.slice("orchy:".length)}.ts`)
+    : resolve(cwd, named);
   let module: { default?: unknown };
   try {
     module = await import(pathToFileURL(path).href);
@@ -1134,5 +1141,61 @@ async function callModule(
     throw new Error(`step "${step.id}" names the module "${path}", which exports no default function.`);
   }
   const say = (text: string) => watch({ kind: "text", text: String(text) });
-  return (module.default as (...args: unknown[]) => unknown)(inputs, say, values);
+  // `cwd` rides fourth, so a shipped component acts where the steps act. A
+  // component that wants none of the last three ignores them, as before.
+  return (module.default as (...args: unknown[]) => unknown)(inputs, say, values, cwd);
+}
+
+/**
+ * A component in any language: a program. It takes `{ values, steps }` as
+ * JSON on stdin — the values of the run, and the values of the steps it
+ * needs, by step id. It answers with its value as JSON on stdout, and the
+ * contract checks it the same as any step. Each line of stderr is a live
+ * note, and a code that is not 0 fails the step with what stderr said.
+ * ADR 0026.
+ */
+function callCommand(
+  step: CallStep,
+  inputs: Record<string, unknown>,
+  cwd: string,
+  watch: (note: Note) => void,
+  values: Record<string, unknown>,
+): Promise<unknown> {
+  return new Promise((keep, refuse) => {
+    const child = spawn(String(step.command), { cwd, shell: true, stdio: ["pipe", "pipe", "pipe"] });
+    let out = "";
+    let said = "";
+    let rest = "";
+    child.stdout.on("data", (chunk: Buffer) => (out += chunk.toString()));
+    child.stderr.on("data", (chunk: Buffer) => {
+      said = `${said}${chunk.toString()}`.slice(-4000);
+      const parts = `${rest}${chunk.toString()}`.split("\n");
+      rest = parts.pop() ?? "";
+      for (const line of parts) if (line.trim()) watch({ kind: "text", text: line });
+    });
+    child.on("error", (error) => {
+      refuse(new Error(`step "${step.id}" could not run its command: ${error.message}`));
+    });
+    child.on("close", (code) => {
+      if (rest.trim()) watch({ kind: "text", text: rest });
+      if (code !== 0) {
+        const why = said.trim() || out.trim().slice(-1000) || "and said nothing";
+        return refuse(new Error(`step "${step.id}" ended with the code ${code}: ${why}`));
+      }
+      try {
+        keep(JSON.parse(out));
+      } catch {
+        refuse(
+          new Error(
+            `step "${step.id}" answered something that is not JSON: ${out.trim().slice(0, 300) || "nothing"}. The command writes its value to stdout and its notes to stderr.`,
+          ),
+        );
+      }
+    });
+    // A command that reads no input ends before the write, and the pipe says
+    // EPIPE. That says nothing about the step, so it is not a failure.
+    child.stdin.on("error", () => undefined);
+    child.stdin.write(JSON.stringify({ values, steps: inputs }));
+    child.stdin.end();
+  });
 }

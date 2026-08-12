@@ -379,6 +379,14 @@ that had no shape:
 - **A promise on the flow, and a promise with an exception.** A flow of
   read-only steps says it once. The record names what each change did to a
   path, and not only the path.
+- **A call step holds a command.** A component in any language: JSON on
+  stdin and stdout, notes on stderr, a module or a command and exactly one.
+  Orchy ships `orchy:check`. See [ADR
+  0026](./adr/0026-a-component-is-a-process.md).
+- **A step declares what it may start.** `starts` on a step that holds the
+  `orchy` tool, enforced by the door from the state on disk, refused where
+  nothing reads it. See [ADR
+  0027](./adr/0027-a-step-declares-what-it-may-start.md).
 
 One shape is refused, and not open: **a bounded tool**, such as a `bash` that
 names the commands it may run. Orchy does not intercept a tool call, so only a

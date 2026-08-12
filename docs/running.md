@@ -643,3 +643,49 @@ stops at three. The budget of a run does not count its children, and a step
 that starts a run must not wait for it — work that runs inside this run is a
 `flow` step. Only the claude harness supplies the tool. See [ADR
 0025](./adr/0025-a-step-reaches-the-door-of-its-own-run.md).
+
+`starts` bounds such a step: the flow files it may start, and how many runs.
+The door enforces the bound from the state on disk, so the model cannot talk
+its way past it, and `validate()` refuses a bound on a step with no `orchy`
+tool. See [ADR 0027](./adr/0027-a-step-declares-what-it-may-start.md).
+
+```yaml
+- id: dispatch
+  kind: agent
+  prompt: prompts/dispatch.md
+  tools: [read, orchy]
+  starts: { flows: [flows/bugfix/flow.yaml], most: 5 }
+```
+
+## Write a component in any language
+
+A call step runs a `module` — a TypeScript default export — or a `command`:
+a program in any language, run where the steps act. The program takes
+`{ values, steps }` as JSON on stdin, answers with its value as JSON on
+stdout, and the contract checks it like any step. Notes go to stderr, one
+line at a time, and a code that is not 0 fails the step with what stderr
+said. See [ADR 0026](./adr/0026-a-component-is-a-process.md).
+
+```yaml
+- id: classify
+  kind: call
+  command: ./classify.py
+  returns: { type: object, required: [severity], properties: { severity: { type: string } } }
+```
+
+## Check a step deterministically
+
+Orchy ships `orchy:check`: a component that runs a command and passes only
+when it ends with 0 — the tests, a linter, a build, in any language. Its
+output rides as live notes, and a failure carries the last of what the
+command said, so a cycle sends the reason back to the step it checks.
+
+```yaml
+- id: verify
+  kind: call
+  needs: [code]
+  module: orchy:check
+  with: { run: "npm test" }
+  returns: { type: object, required: [ok], properties: { ok: { type: boolean } } }
+  cycle: { to: code, when: "failed", limit: 2, policy: escalate }
+```

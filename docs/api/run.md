@@ -14,7 +14,11 @@ from the same file — no process needs to stay alive while a run waits.
 
 Along the way the runner enforces the flow's contracts. A step's value is
 checked against its `returns` schema, and the values that reach a component
-against its `takes`. A condition (`when`) rules a step out and skips it, and
+against its `takes`. A component is a TypeScript module — its default export
+called as `(inputs, say, values, cwd)` — or a command in any language, run
+where the steps act with `{ values, steps }` as JSON on stdin, its value as
+JSON on stdout, and each stderr line as a live note (ADR 0026). A `module`
+of the form `orchy:check` names a component Orchy ships. A condition (`when`) rules a step out and skips it, and
 every step that needs a skipped step is skipped too. A computed fanout is
 expanded mid-run, once the step it reads has produced its list. A step that
 votes to cycle sends the run back to an earlier step (carrying its value as

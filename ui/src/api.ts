@@ -9,6 +9,7 @@ export interface Member {
   prompt?: string;
   tools?: string[];
   module?: string;
+  command?: string;
   with?: Record<string, unknown>;
 }
 
@@ -52,11 +53,14 @@ export interface Step {
   when?: Record<string, Record<string, unknown>>;
   prompt?: string;
   module?: string;
+  command?: string;
   question?: string;
   flow?: string;
   tools?: string[];
   harness?: string;
   model?: string;
+  /** What a step that holds the `orchy` tool may start. The door enforces it. */
+  starts?: { flows?: string[]; most?: number };
   with?: Record<string, unknown>;
   /** The values that must reach the step, as JSON Schema. */
   takes?: Schema;
