@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +17,8 @@ import { costOf, pi } from "../src/pi.ts";
 import { formatFlow, parseFlow } from "../src/yaml.ts";
 
 const Summary = Type.Object({ summary: Type.String() });
+
+const CLI = new URL("../src/cli.ts", import.meta.url).pathname;
 
 function workspace(): string {
   const directory = mkdtempSync(join(tmpdir(), "orchy-"));
@@ -4363,4 +4365,26 @@ test("a run whose process has gone says stopped, and not running", async () => {
 
   const [listed] = list(cwd);
   assert.equal(listed?.status, "stopped");
+});
+
+test("a flow that will not load ends the command as a wrong command, not a failed run", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "orchy-codes-"));
+  writeFileSync(join(cwd, "m.ts"), "export default () => ({ summary: 'x' });\n");
+  writeFileSync(
+    join(cwd, "broken.yaml"),
+    "name: broken\nsteps:\n  - id: a\n    kind: call\n    needs: []\n    module: m.ts\n    returns:\n      type: object\n    cycle: { to: a, when: failed }\n",
+  );
+
+  const code = (args: string[]) =>
+    new Promise<number>((done) => {
+      const child = spawn(process.execPath, [CLI, ...args], { cwd, stdio: "ignore" });
+      child.on("close", (ended) => done(ended ?? -1));
+    });
+
+  // `--help` reserves 1 for a run that failed and 2 for a command that is
+  // wrong. A flow that cannot even load is the second kind.
+  assert.equal(await code(["run", "broken.yaml"]), 2);
+  assert.equal(await code(["run", "nothing.yaml"]), 2);
+  // `check` runs nothing and spends nothing, and says the same thing.
+  assert.equal(await code(["check", "broken.yaml"]), 2);
 });

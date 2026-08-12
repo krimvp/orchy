@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 import { claude } from "./claude.ts";
 import { type AdapterName, ADAPTERS, type Harness } from "./harness.ts";
+import { validate } from "./flow.ts";
 import { loadFlow } from "./load.ts";
 import { pi } from "./pi.ts";
 import { type RunEvent, type RunState, list, resume, run } from "./run.ts";
@@ -11,6 +12,7 @@ import { type RunEvent, type RunState, list, resume, run } from "./run.ts";
 const VERSION = String(createRequire(import.meta.url)("../package.json").version);
 
 const USAGE = `use: orchy run <flow file> [--with <json>] [--harness pi|claude] [--events]
+     orchy check <flow file> [--harness pi|claude]
      orchy resume <run id> [json value] [--from <step>] [--harness pi|claude] [--events]
      orchy runs [--events]
      orchy daemon [--port 4000]
@@ -22,6 +24,9 @@ A flow file is TypeScript or YAML.
 no step, a failed run goes back to the step that failed, and a stopped run
 continues where it stood.
 --events writes one JSON event for each line, for a parent process to read.
+
+orchy check reads a flow, and every flow it holds, and says what is wrong with
+it. It runs nothing and spends nothing.
 
 orchy runs lists the runs of this directory, newest first.
 
@@ -123,6 +128,19 @@ function text(list: string[], flag: string): string | undefined {
 }
 
 /** The values that the flow takes. One JSON object, so every key has a name. */
+/**
+ * The flow a file holds. A file that will not load is a fault of what the
+ * command was given, not of a run: it ends with the code for a wrong command,
+ * and not with the one that says a run failed.
+ */
+async function read(file: string) {
+  try {
+    return await loadFlow(file);
+  } catch (error) {
+    throw new Wrong(error instanceof Error ? error.message : String(error));
+  }
+}
+
 function valuesOf(source: string | undefined): Record<string, unknown> | undefined {
   if (source === undefined) return undefined;
   let value: unknown;
@@ -196,7 +214,7 @@ try {
   if (command === "run") {
     if (!first) throw new Wrong(`orchy run wants a flow file.\n\n${USAGE}`);
     const options = { onEvent: emit, harness, harnessName: chosen, harnesses: HARNESSES, with: valuesOf(given) };
-    const flow = await loadFlow(first);
+    const flow = await read(first);
     watchForSignals();
     finish(await run(flow, options));
   }
@@ -214,6 +232,17 @@ try {
     }
     watchForSignals(first);
     finish(await resume(first, value, options));
+  }
+
+  if (command === "check") {
+    if (!first) throw new Wrong(`orchy check wants a flow file.\n\n${USAGE}`);
+    // Loading is what checks: every file of a chain is read and validated, and
+    // the harness of this command is the one a step that names none would use.
+    const flow = await read(first);
+    const problems = validate(flow, chosen);
+    if (problems.length > 0) throw new Wrong(`the flow is not valid:\n- ${problems.join("\n- ")}`);
+    console.log(`${first} is valid: ${flow.steps.length} step${flow.steps.length === 1 ? "" : "s"}`);
+    process.exit(EXIT.done);
   }
 
   if (command === "runs") {

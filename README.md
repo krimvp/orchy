@@ -179,9 +179,13 @@ and a name the flow does not take: a value that reaches no step and no prompt is
 a mistake that would otherwise run to the end in silence.
 
 The command prints the events to the error stream and the run state to the
-output stream. It ends with 0 when the run finishes or waits, and 1 when the
-run fails. `--events` writes one JSON event for each line instead, which is how
+output stream. It ends with 0 when the run finishes, 1 when the run fails, 2
+when the command or the flow it was given is wrong, and 3 when the run waits for
+a person. `--events` writes one JSON event for each line instead, which is how
 the daemon reads a run.
+
+`orchy check <flow file>` reads a flow, and every flow it holds, and says what
+is wrong with it. It runs nothing and spends nothing.
 
 A `prompt` path and a `module` path are relative to the flow file. The working
 directory is where the steps act, so run the command from the directory you want

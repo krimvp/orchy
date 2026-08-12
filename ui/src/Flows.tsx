@@ -1,5 +1,5 @@
-import { type CSSProperties, useState } from "react";
-import { type FlowRow, type Schema, api, follow, useLoad } from "./api";
+import { type CSSProperties, useEffect, useState } from "react";
+import { type FlowRow, type Schema, api, follow, useLoad, useNotices } from "./api";
 import { Contract } from "./Run";
 import { Loading, length, when } from "./Runs";
 
@@ -14,6 +14,14 @@ function reveal(panel: HTMLDivElement | null): void {
 export function Flows() {
   const health = useLoad(() => api.health(), []);
   const { value: flows, again } = useLoad(() => api.flows(), []);
+  // Every other view follows the run stream. This one waited for a reload, so
+  // a run started here left its own line saying "never ran" until the page was
+  // loaded again.
+  const { events, pending } = useNotices();
+
+  useEffect(() => {
+    again();
+  }, [events.length, pending.length, again]);
   const [path, setPath] = useState("");
   const [name, setName] = useState("");
   const [making, setMaking] = useState(false);

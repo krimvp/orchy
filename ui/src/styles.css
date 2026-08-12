@@ -24,8 +24,9 @@
   --hairline: rgba(255, 255, 255, 0.085);
   --hairline-2: rgba(255, 255, 255, 0.16);
   --text: #d7d9de;
-  --text-2: rgba(215, 217, 222, 0.6);
-  --text-3: rgba(215, 217, 222, 0.36);
+  --text-2: rgba(215, 217, 222, 0.72);
+  /* A label is text, and text carries AA against the well. This read 2.68:1. */
+  --text-3: rgba(215, 217, 222, 0.55);
   /* Four states, held back from full saturation so the grey stays the ground. */
   --accent: #7fa9d6;
   --green: #8fb573;
@@ -1082,7 +1083,26 @@ textarea:focus,
 button:focus-visible {
   outline: none;
   border-color: color-mix(in srgb, var(--accent) 70%, transparent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+/*
+ * Everything a keyboard reaches says so. The browser drew its own ring in
+ * `rgb(16, 16, 16)` on a ground of `rgb(10, 10, 11)`, which no one can see, so
+ * a person tabbing through the page had no idea where they were.
+ */
+a:focus-visible,
+button:focus-visible,
+summary:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+
+input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 textarea {

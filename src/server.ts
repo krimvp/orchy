@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
@@ -7,7 +8,7 @@ import type { Daemon } from "./daemon.ts";
 import { type Flow, OPERATORS, type Step, validate } from "./flow.ts";
 import { ADAPTERS, MODELS, TOOLS } from "./harness.ts";
 import { loadFlow, readFlow } from "./load.ts";
-import { formatFlow } from "./yaml.ts";
+import { formatFlow, parseFlow } from "./yaml.ts";
 
 const UI = resolve(import.meta.dirname, "..", "ui", "dist");
 
@@ -64,6 +65,10 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
           const schedule = daemon.store.schedule(row.id);
           return {
             ...row,
+            // The file has the last word on the harness, and the row is only
+            // what a step that names none falls back to. The list showed the
+            // row, so every flow that wrote `harness: claude` read as `pi`.
+            harness: harnessInFile(row.path) ?? row.harness,
             description: descriptionOf(row.path),
             lastRun: runs.find((run) => run.path === row.path) ?? null,
             schedule: schedule ? { everyMinutes: schedule.everyMinutes, lastAt: schedule.lastAt } : null,
@@ -163,7 +168,14 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
         const harness = adapterOf(body.harness);
         const flow: Flow = {
           name: name || slug || "new-flow",
-          workspace: { kind: "git", path: "." },
+          // The harness a person picked belongs in the file. It went to the
+          // index alone, so the same new flow finished through the daemon and
+          // died at the command line, which passes no harness of its own.
+          harness,
+          // A workspace is a promise about a repository, so it is written only
+          // where there is one. The scaffold declared git wherever it landed,
+          // and the first run of a flow in a plain directory died at the check.
+          ...(isRepository(dirname(path)) ? { workspace: { kind: "git" as const, path: "." } } : {}),
           budget: 5,
           steps: [
             {
@@ -172,7 +184,8 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
               needs: [],
               prompt: "prompts/work.md",
               tools: ["read", "grep", "find", "ls"],
-              changes: "nothing",
+              // A promise needs a workspace to check it against.
+              ...(isRepository(dirname(path)) ? { changes: "nothing" as const } : {}),
               returns: {
                 type: "object",
                 required: ["summary"],
@@ -597,6 +610,31 @@ function adapterOf(value: unknown): string {
     throw new Error(`there is no harness "${name}". Use one of: ${ADAPTERS.join(", ")}`);
   }
   return name;
+}
+
+/**
+ * The harness a flow file names for itself, when it names one. Reading the file
+ * costs a line, and the alternative is a list that says the wrong thing about
+ * every flow that names its own.
+ */
+function harnessInFile(path: string): string | undefined {
+  try {
+    const named = parseFlow(readFileSync(path, "utf8"), path).harness;
+    return typeof named === "string" && named !== "" ? named : undefined;
+  } catch {
+    // A file that will not parse says so everywhere else. Here it says nothing.
+    return undefined;
+  }
+}
+
+/** Whether git reads this directory as a repository, which a workspace needs. */
+function isRepository(at: string): boolean {
+  try {
+    execFileSync("git", ["rev-parse", "--git-dir"], { cwd: at, stdio: "pipe" });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function flowRow(daemon: Daemon, id: string) {

@@ -450,8 +450,10 @@ acts, which is a different thing. So you run a flow from the directory you want
 it to work in, wherever the flow file sits.
 
 The command prints the events to the error stream and the run state to the
-output stream. It ends with 0 when the run finishes or waits, and 1 when the run
-fails.
+output stream. It ends with 0 when the run finishes, 1 when the run fails, 2
+when the command or the flow it was given is wrong, and 3 when the run waits for
+a person. A script that treats a waiting run as a failure reads the 3 and knows
+better.
 
 ## Answer a gate
 
