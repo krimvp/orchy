@@ -5,11 +5,14 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { spawn } from "node:child_process";
 import { daemon } from "../src/daemon.ts";
 import { OPERATORS } from "../src/flow.ts";
 import { serve } from "../src/server.ts";
 import { KEPT, due, open, rowOf } from "../src/store.ts";
 import { formatFlow, parseFlow } from "../src/yaml.ts";
+
+const CLI = new URL("../src/cli.ts", import.meta.url).pathname;
 
 const COUNT = `export default (inputs: Record<string, unknown>) => ({ count: Object.keys(inputs).length });\n`;
 
@@ -796,10 +799,15 @@ test("a run that a person stops leaves no ticket saying it did not start", async
     const stopped = await site.call(`/api/runs/${row?.runId}/stop`, { method: "POST" });
     assert.equal(stopped.code, 200);
 
-    // The queue is for work that has not begun. A run a person ended is not that.
+    // The queue is for work that has not begun. A run a person ended is not
+    // that, and it left a ticket reading "did not start" for ever, quoting
+    // whatever its child last wrote to stderr.
     await until(async () => ((await site.call("/api/runs")).body as Array<{ status: string }>)[0]?.status !== "running");
     const pending = (await site.call("/api/queue")).body as Array<{ error?: string }>;
-    assert.deepEqual(pending, []);
+    assert.deepEqual(
+      pending.filter((one) => one.error),
+      [],
+    );
   } finally {
     await site.close();
   }
@@ -822,9 +830,36 @@ test("an answer the gate refuses is refused at the door, not in a child", async 
 
     assert.equal(refused.code, 400);
     assert.match((refused.body as { error: string }).error, /breaks the contract/);
-    // The run still waits for the person, and the queue holds nothing.
+    // The run still waits for the person, and no ticket says it did not start.
     assert.equal(((await site.call("/api/runs")).body as Array<{ status: string }>)[0]?.status, "waiting");
-    assert.deepEqual((await site.call("/api/queue")).body, []);
+    const pending = (await site.call("/api/queue")).body as Array<{ error?: string }>;
+    assert.deepEqual(
+      pending.filter((one) => one.error),
+      [],
+    );
+  } finally {
+    await site.close();
+  }
+});
+
+test("the page shows a run that the command line started while the daemon ran", async () => {
+  const root = project();
+  const site = await running(root);
+  try {
+    await site.call("/api/flows", { method: "POST", body: JSON.stringify({ path: "flow.yaml" }) });
+    assert.deepEqual((await site.call("/api/runs")).body, []);
+
+    // The daemon read `.orchy/runs` once, when it started, so a run made beside
+    // it was on disk, in `orchy runs`, and on no page at all.
+    await new Promise<void>((done, fail) => {
+      const child = spawn(process.execPath, [CLI, "run", "flow.yaml"], { cwd: root, stdio: "ignore" });
+      // A gated flow waits, which the CLI reports with the code 3.
+      child.on("close", (code) => (code === 3 || code === 0 ? done() : fail(new Error(`the run ended with ${code}`))));
+    });
+
+    const runs = (await site.call("/api/runs")).body as Array<{ status: string; flowName: string }>;
+    assert.equal(runs.length, 1);
+    assert.equal(runs[0]?.flowName, "gated");
   } finally {
     await site.close();
   }

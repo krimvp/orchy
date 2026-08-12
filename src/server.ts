@@ -58,6 +58,7 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
       "GET",
       "/api/flows",
       () => {
+        daemon.catchUp();
         const runs = daemon.store.runs();
         return daemon.store.flows().map((row) => {
           const schedule = daemon.store.schedule(row.id);
@@ -315,14 +316,26 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
       },
     ],
 
-    ["GET", "/api/runs", () => daemon.store.runs()],
+    [
+      "GET",
+      "/api/runs",
+      () => {
+        // A run the command line started is on disk and in no job of this
+        // daemon, so the list reads the disk before it answers.
+        daemon.catchUp();
+        return daemon.store.runs();
+      },
+    ],
 
     // The runs of one flow, newest first. Several runs of one flow go at once,
     // each on its own values, and this is where a person reads them together.
     [
       "GET",
       "/api/flows/:id/runs",
-      (parameters) => daemon.store.runs(flowRow(daemon, parameters.id as string).path),
+      (parameters) => {
+        daemon.catchUp();
+        return daemon.store.runs(flowRow(daemon, parameters.id as string).path);
+      },
     ],
 
     [

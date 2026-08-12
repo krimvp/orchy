@@ -4238,3 +4238,109 @@ test("validate refuses a contract whose keyword is a typo, which used to check n
 
   assert.ok(problems.some((p) => p.includes("unknown keyword")));
 });
+
+test("a cycle back past the step that gave the list makes the members again", async () => {
+  const cwd = workspace();
+  // The list grows every round. The members froze on the first list: the new
+  // names were never run, and the run ended `done` saying nothing about it.
+  writeFileSync(
+    join(cwd, "plan.ts"),
+    [
+      "let round = 0;",
+      "export default () => {",
+      "  round += 1;",
+      "  const names = ['a', 'b', 'c'].slice(0, round + 1);",
+      "  return { round, items: names.map((name) => ({ name })) };",
+      "};",
+      "",
+    ].join("\n"),
+  );
+  writeFileSync(
+    join(cwd, "judge.ts"),
+    "export default (_i, _s, values) => ({ name: String(values.name) });\n",
+  );
+  writeFileSync(
+    join(cwd, "check.ts"),
+    [
+      "export default (inputs) => {",
+      "  const judged = Object.keys(inputs).filter((id) => id.startsWith('judge/'));",
+      "  return { judged, enough: judged.length >= 3 };",
+      "};",
+      "",
+    ].join("\n"),
+  );
+
+  const state = await run(
+    flow("growing", {
+      steps: [
+        call({ id: "plan", module: "plan.ts", returns: Type.Object({ round: Type.Number(), items: Type.Array(Type.Object({ name: Type.String() })) }) }),
+        call({
+          id: "judge",
+          needs: ["plan"],
+          module: "judge.ts",
+          fanout: { step: "plan", key: "items" },
+          returns: Type.Object({ name: Type.String() }),
+        }),
+        call({
+          id: "check",
+          needs: ["judge"],
+          module: "check.ts",
+          returns: Type.Object({ judged: Type.Array(Type.String()), enough: Type.Boolean() }),
+          cycle: { to: "plan", when: { enough: false }, limit: 3, policy: "accept" },
+        }),
+      ],
+    }),
+    { cwd },
+  );
+
+  assert.equal(state.status, "done");
+  assert.deepEqual((state.steps.check?.value as { judged: string[] }).judged, ["judge/a", "judge/b", "judge/c"]);
+});
+
+test("a member of a computed fanout keeps the values its step already holds", async () => {
+  const cwd = workspace();
+  writeFileSync(join(cwd, "plan.ts"), "export default () => ({ items: [{ name: 'one' }] });\n");
+  writeFileSync(join(cwd, "member.ts"), "export default (_i, _s, values) => ({ summary: `${values.tag}:${values.name}` });\n");
+
+  const state = await run(
+    flow("keeps", {
+      steps: [
+        call({ id: "plan", module: "plan.ts", returns: Type.Object({ items: Type.Array(Type.Object({ name: Type.String() })) }) }),
+        call({
+          id: "work",
+          needs: ["plan"],
+          module: "member.ts",
+          with: { tag: "outer" },
+          fanout: { step: "plan", key: "items" },
+          returns: Summary,
+        }),
+      ],
+    }),
+    { cwd },
+  );
+
+  assert.equal(state.status, "done");
+  assert.equal((state.steps["work/one"]?.value as { summary: string }).summary, "outer:one");
+});
+
+test("a gate asks its question with the names in it filled in", async () => {
+  const cwd = workspace();
+
+  const state = await run(
+    flow("asking", {
+      takes: Type.Object({ ticket: Type.String() }),
+      steps: [
+        gate({
+          id: "approve",
+          question: "Does ticket {{ ticket }} look right?",
+          returns: Type.Object({ approved: Type.Boolean() }),
+        }),
+      ],
+    }),
+    { cwd, with: { ticket: "ORC-41" } },
+  );
+
+  assert.equal(state.status, "waiting");
+  // The braces reached the person. Two runs of one flow asked the same question.
+  assert.equal(state.question, "Does ticket ORC-41 look right?");
+});

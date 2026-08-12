@@ -1124,6 +1124,20 @@ select {
   background-size: 5px 5px;
 }
 
+/* A form that asks for an answer draws its boxes. The value of a field that a
+ * person reads is text until the hand reaches it; the value of a field that a
+ * run waits for is a thing to fill in, and it says so from across the room. */
+.answering .field input:not([type="checkbox"]),
+.answering .field select,
+.answering .field textarea {
+  background: var(--void);
+  border-color: var(--hairline);
+}
+
+.answering .field textarea {
+  min-height: 62px;
+}
+
 /* -- the segmented control, for a choice of a few -- */
 
 .segmented {

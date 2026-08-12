@@ -699,18 +699,45 @@ export function Contract({
 }) {
   const properties = (schema.properties ?? {}) as Record<string, Schema>;
   const required = (schema.required ?? []) as string[];
-  const [value, setValue] = useState<Record<string, unknown>>(() => blank(properties));
+  const [value, setValue] = useState<Record<string, unknown>>(() => blank(properties, required));
   const [raw, setRaw] = useState(false);
-  const [text, setText] = useState(() => JSON.stringify(blank(properties), null, 2));
+  const [text, setText] = useState(() => JSON.stringify(blank(properties, required), null, 2));
   const [need, setNeed] = useState<string>();
+  /** What a person typed into a field that holds JSON, until it reads as JSON. */
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
 
   const set = (key: string, next: unknown) => {
     setNeed(undefined);
     setValue((held) => ({ ...held, [key]: next }));
   };
 
+  const write = (key: string, typed: string) => {
+    setNeed(undefined);
+    setDrafts((held) => ({ ...held, [key]: typed }));
+    if (typed.trim() === "") return set(key, undefined);
+    try {
+      set(key, JSON.parse(typed));
+    } catch {
+      // The field holds what was typed, and `send` refuses until it reads.
+      setValue((held) => ({ ...held, [key]: UNREADABLE }));
+    }
+  };
+
   const send = () => {
-    if (raw) return onSend(JSON.parse(text));
+    if (raw) {
+      // Malformed JSON threw where no one caught it, and the page did nothing.
+      try {
+        return onSend(JSON.parse(text));
+      } catch (problem) {
+        return setNeed(`That is not JSON: ${problem instanceof Error ? problem.message : String(problem)}`);
+      }
+    }
+    const unreadable = Object.keys(properties).filter((key) => value[key] === UNREADABLE);
+    if (unreadable.length > 0) {
+      return setNeed(`${unreadable.join(", ")} holds something that is not JSON.`);
+    }
+    // A boolean nobody answered is not a "no". It was one, and a run that
+    // cycles on a "no" went backwards because a person pressed the only button.
     const empty = required.filter((key) => {
       const held = value[key];
       return held === undefined || held === "" || (Array.isArray(held) && held.length === 0);
@@ -724,37 +751,78 @@ export function Contract({
   };
 
   return (
-    <>
+    // A form a person must fill is not a file they may read: every field it
+    // holds shows its box, so nothing that wants an answer looks like text.
+    <div className="answering">
       {!raw &&
-        Object.entries(properties).map(([key, field]) => (
-          <label key={key} className={field.type === "boolean" ? "field tick" : "field"}>
-            {field.type === "boolean" && (
-              <input type="checkbox" checked={Boolean(value[key])} onChange={(e) => set(key, e.target.checked)} />
-            )}
-            <span>
-              {key}
-              {required.includes(key) && <em className="need"> · needed</em>}
-            </span>
-            {(field.type === "number" || field.type === "integer") && (
-              <input
-                type="number"
-                value={value[key] === undefined ? "" : String(value[key])}
-                onChange={(e) => set(key, e.target.value === "" ? undefined : Number(e.target.value))}
-              />
-            )}
-            {field.type === "string" && (
-              <input value={String(value[key] ?? "")} onChange={(e) => set(key, e.target.value)} />
-            )}
-            {field.type === "array" && (
-              <textarea
-                rows={3}
-                placeholder="one for each line"
-                value={((value[key] as string[]) ?? []).join("\n")}
-                onChange={(e) => set(key, e.target.value.split("\n").filter(Boolean))}
-              />
-            )}
-          </label>
-        ))}
+        Object.entries(properties).map(([key, field]) => {
+          const asked = required.includes(key);
+          const drawn = shapeOf(field);
+          const kind = drawn === "yes-no" && !asked ? "tick" : drawn;
+          return (
+            <label key={key} className={kind === "tick" ? "field tick" : "field"}>
+              {kind === "tick" && (
+                <input type="checkbox" checked={Boolean(value[key])} onChange={(e) => set(key, e.target.checked)} />
+              )}
+              <span>
+                {key}
+                {asked && <em className="need"> · needed</em>}
+              </span>
+              {/* A yes or a no that a person must give is a choice, not a box
+               * that starts at "no" and sends itself. */}
+              {kind === "yes-no" && (
+                <Choice
+                  value={value[key] === undefined ? "" : value[key] ? "yes" : "no"}
+                  options={[
+                    { value: "yes", label: "yes" },
+                    { value: "no", label: "no" },
+                  ]}
+                  onPick={(picked) => set(key, picked === "yes")}
+                />
+              )}
+              {kind === "one-of" && (
+                <Choice
+                  value={value[key] === undefined ? "" : String(value[key])}
+                  options={((field.enum ?? []) as unknown[]).map((one) => ({
+                    value: String(one),
+                    label: String(one),
+                  }))}
+                  onPick={(picked) => set(key, ((field.enum ?? []) as unknown[]).find((one) => String(one) === picked))}
+                />
+              )}
+              {kind === "number" && (
+                <input
+                  type="number"
+                  value={value[key] === undefined ? "" : String(value[key])}
+                  onChange={(e) => set(key, e.target.value === "" ? undefined : Number(e.target.value))}
+                />
+              )}
+              {kind === "string" && (
+                <input value={String(value[key] ?? "")} onChange={(e) => set(key, e.target.value)} />
+              )}
+              {kind === "lines" && (
+                <textarea
+                  rows={3}
+                  placeholder="one for each line"
+                  value={((value[key] as string[]) ?? []).join("\n")}
+                  onChange={(e) => set(key, e.target.value.split("\n").filter(Boolean))}
+                />
+              )}
+              {/* An object, a list of objects, a property of two types, a
+               * property of none: every contract the form could not draw used
+               * to draw a label and nothing under it, and no answer could be
+               * given at all. */}
+              {kind === "json" && (
+                <textarea
+                  rows={3}
+                  placeholder="as JSON"
+                  value={drafts[key] ?? (value[key] === undefined ? "" : JSON.stringify(value[key], null, 2))}
+                  onChange={(e) => write(key, e.target.value)}
+                />
+              )}
+            </label>
+          );
+        })}
       {raw && <textarea rows={8} value={text} onChange={(e) => setText(e.target.value)} />}
       {need && <p className="bad small">{need}</p>}
       <div className="row" style={{ marginBottom: 0 }}>
@@ -772,7 +840,7 @@ export function Contract({
           {raw ? "Use the form" : "Write JSON"}
         </button>
       </div>
-    </>
+    </div>
   );
 }
 
@@ -783,14 +851,68 @@ function promise(changes: NonNullable<Step["changes"]>): string {
   return `changes only ${changes.paths.join(", ")}`;
 }
 
-function blank(properties: Record<string, Schema>): Record<string, unknown> {
+/** What a form draws for one property of a contract. */
+type Shape = "yes-no" | "tick" | "one-of" | "number" | "string" | "lines" | "json";
+
+/**
+ * A property whose shape the form can draw, or `json` for one it cannot: an
+ * object, a list of objects, a property of two types, a property of none. Those
+ * drew a label with no control at all, and the answer could not be given.
+ */
+function shapeOf(field: Schema): Shape {
+  if (Array.isArray(field.enum)) return "one-of";
+  if (field.type === "boolean") return "yes-no";
+  if (field.type === "number" || field.type === "integer") return "number";
+  if (field.type === "string") return "string";
+  // A list of plain words is a line each. A list of anything else is JSON.
+  if (field.type === "array") {
+    const of = field.items as Schema | undefined;
+    return of === undefined || of.type === "string" ? "lines" : "json";
+  }
+  return "json";
+}
+
+/** One of a few, drawn as the words themselves. Nothing is chosen to start with. */
+function Choice({
+  value,
+  options,
+  onPick,
+}: {
+  value: string;
+  options: Array<{ value: string; label: string }>;
+  onPick: (value: string) => void;
+}) {
+  return (
+    <div className="segmented">
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          className={value === option.value ? "on" : ""}
+          onClick={() => onPick(option.value)}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** A field that holds text which is not JSON yet. `send` refuses it by name. */
+const UNREADABLE = Symbol("unreadable");
+
+function blank(properties: Record<string, Schema>, required: string[] = []): Record<string, unknown> {
   const value: Record<string, unknown> = {};
   for (const [key, field] of Object.entries(properties)) {
-    if (field.type === "boolean") value[key] = false;
+    const shape = shapeOf(field);
+    // A boolean a person must answer starts at nothing: an unticked box that
+    // sends itself is a "no" that nobody gave. One that is not required keeps
+    // the box, and false is what leaving it alone has always meant.
+    if (shape === "yes-no") value[key] = required.includes(key) ? undefined : false;
     // A number stays empty: a pre-filled 0 is an answer no one gave.
-    else if (field.type === "number" || field.type === "integer") value[key] = undefined;
-    else if (field.type === "array") value[key] = [];
-    else if (field.type === "object") value[key] = {};
+    else if (shape === "number" || shape === "one-of") value[key] = undefined;
+    else if (shape === "lines") value[key] = [];
+    else if (shape === "json") value[key] = undefined;
     else value[key] = "";
   }
   return value;

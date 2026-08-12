@@ -241,6 +241,15 @@ export function daemon(root: string) {
     store,
     root,
 
+    /**
+     * Reads the runs on disk that the index does not hold, or that it thinks
+     * are still going. A run started at the command line belongs to no job of
+     * this daemon, so nothing else would ever tell the index about it.
+     */
+    catchUp(): void {
+      if (!closed) store.index(runs, false);
+    },
+
     start,
 
     /**

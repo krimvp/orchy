@@ -178,6 +178,11 @@ export interface RunState {
   feedback?: Array<{ step: string; to: string; value: unknown }>;
   /** Every step that a cycle dropped. A dropped attempt is still a cost. */
   history?: Array<{ step: string; record: StepRecord }>;
+  /**
+   * The step each computed fanout was, before the run expanded it into members.
+   * A cycle back past the step that gave the list expands it again from here.
+   */
+  spread?: Record<string, Step>;
 }
 
 export type RunEvent =
@@ -405,6 +410,13 @@ async function execute(state: RunState, cwd: string, options: RunOptions, answer
   }
 
   for (;;) {
+    // The steps of a run change while it runs: a computed fanout becomes its
+    // members, and a cycle back past the step that gave the list turns them
+    // into that step again. So the order is read from the flow each turn, and
+    // never held from an earlier one — a stale order kept running the members
+    // of a list that no longer stood.
+    sorted = order(state.flow.steps);
+
     // Every step whose needs have settled runs together. Invariant 3 still holds,
     // because a step with an unfinished need is not in the wave.
     const ready = sorted.filter((step) => !settled(step.id) && step.needs.every(settled));
@@ -440,8 +452,7 @@ async function execute(state: RunState, cwd: string, options: RunOptions, answer
         emit({ type: "step_end", step: step.id, status: "failed", error: problem });
         return fail(state, undefined, close, emit);
       }
-      // The expansion made new steps, so the order of the run holds them now.
-      sorted = order(state.flow.steps);
+      // The expansion made new steps; the top of the loop reads them.
       save();
       continue;
     }
@@ -449,7 +460,10 @@ async function execute(state: RunState, cwd: string, options: RunOptions, answer
     const work = ready.filter((step) => step.kind !== "gate");
     if (work.length === 0) {
       const waiting = ready[0] as GateStep;
-      return stop(state, waiting.id, waiting.question, close, emit);
+      // A question is a prompt for a person, so a name in it takes its value the
+      // same way. It did not: a flow that takes a ticket asked about
+      // "{{ ticket }}" itself, in every run, and two waiting runs read alike.
+      return stop(state, waiting.id, ask(waiting, state), close, emit);
     }
 
     const feedback = state.feedback;
@@ -605,6 +619,19 @@ function reasons(state: RunState): string | undefined {
   return failed.map(([id, record]) => `step "${id}" failed: ${record.error ?? "with no reason"}`).join("\n");
 }
 
+/**
+ * What a gate asks, with every name in it filled in. A name that nothing
+ * supplies is the fault of the flow, and a person reading the question is the
+ * last one who could fix it, so the run says so where the question would be.
+ */
+function ask(step: GateStep, state: RunState): string {
+  try {
+    return fill(step.question, step.id, valuesOf(step, state));
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
 function stop(
   state: RunState,
   step: string,
@@ -695,12 +722,20 @@ function spread(state: RunState, step: Step): string | undefined {
     if (members.some((one) => one.name === name)) {
       return `${at}, and two items use the name "${name}". Each item needs a name of its own.`;
     }
-    members.push({ name, with: item as Record<string, unknown> });
+    // The item is what the member adds, not what it replaces: a `with` on the
+    // step reached the members of a file-written fanout and not these, so a
+    // value the step held vanished, and the advice for the failure that
+    // followed was to add it where it already was.
+    members.push({ name, with: { ...((step as CallStep).with ?? {}), ...(item as Record<string, unknown>) } });
   }
 
   const steps = state.flow.steps.map((one) => (one.id === step.id ? ({ ...one, fanout: members } as Step) : one));
   // ADR 0005: the state on disk is the run, so the expanded steps live there and
-  // a crash recovers them. The step is gone, so nothing expands it a second time.
+  // a crash recovers them. Expansion takes the step away, so the run keeps the
+  // step it started from: a cycle back past the step that computed the list has
+  // to expand it again, over the list as it is now. Without this the members
+  // froze — the list grew, the run judged the old names, and said nothing.
+  state.spread = { ...state.spread, [step.id]: step };
   state.flow = expandFanout({ ...state.flow, steps });
   return undefined;
 }
@@ -778,6 +813,43 @@ function goBackTo(target: string, state: RunState, sorted: Step[]): void {
     delete state.steps[step.id];
   }
   state.history = dropped;
+  unspread(state, again);
+}
+
+/**
+ * Puts back every fanout that the run must compute again. A computed fanout
+ * reads the value of a step; when the run goes back past that step, the value
+ * it read is gone, so the members it made are of a list that no longer stands.
+ * They kept running all the same, on the names of the first round.
+ */
+function unspread(state: RunState, cleared: Set<string>): void {
+  const held = state.spread;
+  if (!held) return;
+  for (const [id, step] of Object.entries(held)) {
+    const from = computedOf(step);
+    // The list is still the list, so the members it made still stand.
+    if (!from || !cleared.has(from.step)) continue;
+    const names = new Set(state.flow.steps.filter((one) => one.id.startsWith(`${id}/`)).map((one) => one.id));
+    for (const name of names) {
+      const record = state.steps[name];
+      if (record) (state.history ??= []).push({ step: name, record });
+      delete state.steps[name];
+    }
+    // The members go, and the step that makes them takes their place again.
+    const steps = state.flow.steps.filter((one) => !names.has(one.id));
+    const at = state.flow.steps.findIndex((one) => names.has(one.id));
+    steps.splice(at === -1 ? steps.length : at, 0, step);
+    // A step that needed a member needs the step it came from again.
+    state.flow = {
+      ...state.flow,
+      steps: steps.map((one) =>
+        one.needs.some((need) => names.has(need))
+          ? ({ ...one, needs: [...new Set(one.needs.map((need) => (names.has(need) ? id : need)))] } as Step)
+          : one,
+      ),
+    };
+    delete held[id];
+  }
 }
 
 function matches(when: Match, value: unknown): boolean {

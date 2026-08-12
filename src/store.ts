@@ -245,10 +245,22 @@ export function open(file: string) {
       ).run(KEPT);
     },
 
-    /** Reads every run on disk, so a lost index costs nothing but the events. */
-    index(runs: string): number {
+    /**
+     * Reads every run on disk, so a lost index costs nothing but the events.
+     *
+     * `all` reads them every one, which is what a daemon does when it starts.
+     * Without it, only the runs this index has never seen and the ones it still
+     * believes are going: a run started at the command line while the daemon
+     * runs is one of those, and the page did not show it at all until a
+     * restart, because this ran once and never again.
+     */
+    index(runs: string, all = true): number {
       let found = 0;
       for (const runId of directories(runs)) {
+        if (!all) {
+          const held = this.run(runId);
+          if (held && held.status !== "running" && held.status !== "waiting") continue;
+        }
         const state = stateAt(join(runs, runId, "state.json"));
         if (!state) continue;
         // A run that says it runs, and whose process has gone, is a run that
