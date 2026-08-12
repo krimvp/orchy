@@ -47,8 +47,9 @@ what changed.
   store through this door.
 - `run_flow` answers with the run id and returns. A run takes minutes, so the
   agent reads the run for its state. The door holds no tool that waits for a
-  run to end. A queue with every slot taken answers the bare ticket instead
-  of holding the answer with the run.
+  run to end; `read_run` later took a bounded hold of at most 55 seconds,
+  which answers where the run stands either way. A queue with every slot
+  taken answers the bare ticket instead of holding the answer with the run.
 - Schedules belong to the long daemon. The MCP daemon does not fire them, so
   the daemon and `orchy mcp` over one root do not fire one schedule twice.
 - The tool names, the harness names, and the model grammar go into the server
@@ -57,6 +58,8 @@ what changed.
 - A tool list is not a sandbox (ADR 0018). An agent that writes and runs a
   flow runs code, with the authority of the user who started `orchy mcp`.
   The door adds no authority that the command line does not already give.
-- A step of a flow does not reach this door yet. A run that starts runs
+- A step of a flow did not reach this door at first. A run that starts runs
   opens the budget of the flow (invariant 4) and the record of the step
-  (invariant 5), so that is a later decision with an ADR of its own.
+  (invariant 5), so that was a later decision — and [ADR
+  0025](./0025-a-step-reaches-the-door-of-its-own-run.md) made it: the
+  `orchy` tool, a recorded chain, and a depth of three.

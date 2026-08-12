@@ -9,8 +9,12 @@ export const ADAPTERS = ["pi", "claude"] as const;
 
 export type AdapterName = (typeof ADAPTERS)[number];
 
-/** Invariant 1 speaks these names. Each adapter maps them to its own. */
-export const TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls", "web"] as const;
+/**
+ * Invariant 1 speaks these names. Each adapter maps them to its own. `orchy`
+ * is the door of the run's own root: a step that declares it authors flows,
+ * starts runs, and answers gates, and ADR 0025 states what bounds that.
+ */
+export const TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls", "web", "orchy"] as const;
 
 export type ToolName = (typeof TOOLS)[number];
 
@@ -45,6 +49,8 @@ export interface AgentRequest {
   cwd: string;
   /** A string that only this harness reads. Absent means the harness decides. */
   model?: string;
+  /** The run this step belongs to, so a run the step starts records it. ADR 0025. */
+  run?: string;
 }
 
 export interface AgentResult {

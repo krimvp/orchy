@@ -5,6 +5,7 @@ import type { Daemon, Ticket } from "./daemon.ts";
 import { type Flow, validate } from "./flow.ts";
 import { ADAPTERS, MODELS, SUPPLIES, TOOLS } from "./harness.ts";
 import { readFlow } from "./load.ts";
+import { read } from "./run.ts";
 import { descriptionOf, harnessInFile, harnessOfRun, missing, start, under, unfilled } from "./server.ts";
 import { parseFlow } from "./yaml.ts";
 
@@ -16,6 +17,18 @@ const VERSION = String(createRequire(import.meta.url)("../package.json").version
  * one line. That is small enough to write here, so the door adds no dependency.
  */
 const PROTOCOL = "2025-06-18";
+
+/**
+ * How deep a chain of runs goes: a run, a run its step starts, and one more.
+ * ADR 0025: the budget bounds one run and not its children, so the depth is
+ * what bounds the chain, the way a limit bounds a cycle. This is a constant,
+ * not a setting: a flow that wants more depth holds a `flow` step instead,
+ * which expands into its parent and spends the parent's budget.
+ */
+const DEEP = 3;
+
+/** How long `read_run` may hold its answer while the run works, in seconds. */
+const PATIENCE = 55;
 
 /**
  * What an agent reads before it writes a flow. The tool names, the harness
@@ -110,6 +123,7 @@ export function mcp(
   harness = "pi",
   input: NodeJS.ReadableStream = process.stdin,
   output: NodeJS.WritableStream = process.stdout,
+  startedBy?: { runId: string; step: string },
 ): void {
   const root = resolve(daemon.root);
 
@@ -126,18 +140,28 @@ export function mcp(
     {
       name: "check_flow",
       description:
-        "Says what is wrong with a flow, given as YAML text. An empty list means the flow is valid. It runs nothing and spends nothing.",
+        "Says what is wrong with a flow, given as YAML text. Empty lists mean the flow is valid. It runs nothing and spends nothing.",
       inputSchema: {
         type: "object",
         required: ["yaml"],
-        properties: { yaml: { type: "string", description: "The flow, as YAML text." } },
+        properties: {
+          yaml: { type: "string", description: "The flow, as YAML text." },
+          prompts: {
+            type: "object",
+            description: "Prompt texts to check before they are written, each key a path relative to the flow file.",
+            additionalProperties: { type: "string" },
+          },
+        },
       },
       handle(args) {
         try {
           const flow = parseFlow(String(args.yaml ?? ""));
-          // No path reaches this tool, so only the questions are read for a
-          // hole here. The write reads the prompt files too.
-          return { problems: validate(flow, harness), warnings: unfilled(flow) };
+          // A prompt given here stands in for its file, so a hole in one is
+          // heard before anything is written. The write reads the files too.
+          return {
+            problems: validate(flow, harness),
+            warnings: unfilled(flow, undefined, args.prompts as Record<string, string> | undefined),
+          };
         } catch (error) {
           return { problems: [error instanceof Error ? error.message : String(error)], warnings: [] };
         }
@@ -233,10 +257,17 @@ export function mcp(
         if (!existsSync(path)) {
           throw new Error(`there is no flow file at "${path}". Write it with write_flow, or pick one from list_flows.`);
         }
+        // ADR 0025: the budget bounds one run and not its children, so the
+        // depth bounds the chain, and it stops here, where the chain grows.
+        if (startedBy && deepOf(root, startedBy) >= DEEP) {
+          throw new Error(
+            `the run ${startedBy.runId} stands ${DEEP} runs deep, and a chain of runs stops at ${DEEP}. Use a "flow" step for work that runs inside this run.`,
+          );
+        }
         const row =
           daemon.store.flowAt(path) ??
           daemon.store.addFlow(path, (await readFlow(path)).name || path, harnessInFile(path) ?? harness);
-        const ticket = await start(daemon, row, args.with as Record<string, unknown> | undefined);
+        const ticket = await start(daemon, row, args.with as Record<string, unknown> | undefined, undefined, startedBy);
         return started(daemon, ticket);
       },
     },
@@ -244,17 +275,30 @@ export function mcp(
     {
       name: "read_run",
       description:
-        "Reads a run: its status, the record of every step, its value, and — when it waits at a gate — the question to answer with resume_run.",
+        "Reads a run: its status, the record of every step, its value, the runs its steps started, and — when it waits at a gate — the question to answer with resume_run. `wait` holds the answer up to that many seconds while the run works, so a poll costs fewer turns.",
       inputSchema: {
         type: "object",
         required: ["runId"],
-        properties: { runId: { type: "string" } },
+        properties: {
+          runId: { type: "string" },
+          wait: { type: "number", description: `Seconds to hold the answer while the run works. At most ${PATIENCE}.` },
+        },
       },
-      handle(args) {
+      async handle(args) {
         const runId = String(args.runId ?? "");
-        const state = daemon.state(runId);
+        let state = daemon.state(runId);
         if (!state) throw new Error(`there is no run ${runId}`);
-        return { row: daemon.store.run(runId) ?? null, state };
+        // A bounded hold, not a wait for the end: the answer says where the
+        // run stands when the time is up, and the agent reads again.
+        const until = Date.now() + Math.min(Math.max(Number(args.wait) || 0, 0), PATIENCE) * 1000;
+        while (state.status === "running" && Date.now() < until) {
+          await new Promise((rest) => setTimeout(rest, 500));
+          state = daemon.state(runId) ?? state;
+        }
+        // No catchUp here: it writes the row from disk before the job of the
+        // run settles, and an answer given at that moment used to be refused
+        // with "already on its way". The row waits for the daemon to say so.
+        return { row: daemon.store.run(runId) ?? null, state, children: childrenOf(daemon, runId) };
       },
     },
 
@@ -434,6 +478,38 @@ function started(daemon: Daemon, ticket: Ticket): Promise<Ticket> {
       done(daemon.pending().find((one) => one.ticket === ticket.ticket) ?? ticket);
     }, 15_000);
     look();
+  });
+}
+
+/**
+ * How many runs stand above this one, counting it. The chain is read from the
+ * states on disk, because the state is the run (ADR 0005). A chain that comes
+ * back to itself, or breaks, counts what it reached.
+ */
+function deepOf(root: string, startedBy: { runId: string; step: string }): number {
+  const seen = new Set<string>();
+  let at: string | undefined = startedBy.runId;
+  while (at && !seen.has(at)) {
+    seen.add(at);
+    try {
+      at = read(root, at).startedBy?.runId;
+    } catch {
+      at = undefined;
+    }
+  }
+  return seen.size;
+}
+
+/** The runs the steps of this run started, read from the index. */
+function childrenOf(daemon: Daemon, runId: string): Array<{ runId: string; step: string; status: string; cost: number | null }> {
+  return daemon.store.runs().flatMap((one) => {
+    if (!one.startedByJson) return [];
+    try {
+      const by = JSON.parse(one.startedByJson) as { runId: string; step: string };
+      return by.runId === runId ? [{ runId: one.runId, step: by.step, status: one.status, cost: one.cost }] : [];
+    } catch {
+      return [];
+    }
   });
 }
 

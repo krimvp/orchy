@@ -19,13 +19,14 @@ Tables and their types:
 
 - `ADAPTERS` — `["pi", "claude"]`, the name of every adapter.
   `AdapterName` is the union of those names.
-- `TOOLS` — the eight harness-neutral tool names a flow may declare
-  (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, `web`); each
-  adapter maps them to its own. `ToolName` is their union.
+- `TOOLS` — the nine harness-neutral tool names a flow may declare
+  (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, `web`, `orchy`);
+  each adapter maps them to its own. `orchy` is the door of the run's own
+  root, served over MCP (ADR 0025). `ToolName` is their union.
 - `SUPPLIES: Record<AdapterName, readonly ToolName[]>` — which of those
-  tools each adapter supplies. Pi supplies everything but `web`; Claude
-  supplies all eight. `validate()` reads it to refuse a tool the harness
-  lacks, and each adapter checks requests against its own row.
+  tools each adapter supplies. Pi supplies everything but `web` and
+  `orchy`; Claude supplies all nine. `validate()` reads it to refuse a tool
+  the harness lacks, and each adapter checks requests against its own row.
 - `MODELS: Record<AdapterName, { reads: RegExp; write: string }>` — the
   grammar of a model name per adapter (`reads`) and the message to show
   when a name fails it (`write`). Pi reads a `provider/model` pair like

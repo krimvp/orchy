@@ -24,7 +24,11 @@ const TOOLS: Record<ToolName, string[]> = {
   find: ["Glob"],
   ls: ["Glob"],
   web: ["WebSearch", "WebFetch"],
+  // The door of the run's own root, served over MCP. ADR 0025.
+  orchy: ["mcp__orchy"],
 };
+
+const CLI = join(import.meta.dirname, "cli.ts");
 
 interface Answer {
   subtype?: string;
@@ -59,6 +63,21 @@ export const claude: Harness = {
     // A fresh id keeps a step out of the transcript of whatever session started it.
     const sessionId = randomUUID();
 
+    // `--tools` bounds the built-in set only; a tool of an MCP server exists
+    // through `--mcp-config` instead, so the two lists part here.
+    const builtin = tools.filter((name) => !name.startsWith("mcp__"));
+    // The step reaches the door of its own root, and the door records who
+    // asked: the child run writes `startedBy` from this. ADR 0025.
+    const door = {
+      mcpServers: {
+        orchy: {
+          command: process.execPath,
+          args: [CLI, "mcp"],
+          ...(request.run ? { env: { ORCHY_STARTED_BY: JSON.stringify({ runId: request.run, step: request.step }) } } : {}),
+        },
+      },
+    };
+
     const args = [
       "--print",
       request.prompt,
@@ -70,9 +89,13 @@ export const claude: Harness = {
       JSON.stringify(request.returns),
       // Invariant 1: `--tools` limits what exists, `--allowedTools` runs it without a prompt.
       "--tools",
-      ...(tools.length > 0 ? tools : [""]),
+      ...(builtin.length > 0 ? builtin : [""]),
       "--allowedTools",
       ...(tools.length > 0 ? tools : [""]),
+      // Invariant 1 again: without this, every MCP server of the user's own
+      // configuration exists for the step, and no tool list declared it.
+      "--strict-mcp-config",
+      ...(tools.includes("mcp__orchy") ? ["--mcp-config", JSON.stringify(door)] : []),
       ...(request.model ? ["--model", request.model] : []),
     ];
 

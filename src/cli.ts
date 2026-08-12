@@ -25,6 +25,8 @@ A flow file is TypeScript or YAML.
 no step, a failed run goes back to the step that failed, and a stopped run
 continues where it stood.
 --events writes one JSON event for each line, for a parent process to read.
+--started-by records the run and the step that started this one, as one JSON
+object. The door of a run passes it; a person has no use for it.
 
 orchy check reads a flow, and every flow it holds, and says what is wrong with
 it. It runs nothing and spends nothing.
@@ -108,10 +110,12 @@ if (at !== -1) argv.splice(at, 2);
 let given: string | undefined;
 let from: string | undefined;
 let port: number | undefined;
+let starter: string | undefined;
 try {
   given = text(argv, "--with");
   from = text(argv, "--from");
   port = number(argv, "--port");
+  starter = text(argv, "--started-by");
 } catch (error) {
   wrong(error instanceof Error ? error.message : String(error));
 }
@@ -157,6 +161,21 @@ function valuesOf(source: string | undefined): Record<string, unknown> | undefin
     throw new Wrong(`--with holds "${source}". Write one JSON object, such as '{"issue":123}'.`);
   }
   return value as Record<string, unknown>;
+}
+
+/** The run and the step that started this run, when the door of a run says so. */
+function starterOf(source: string | undefined): { runId: string; step: string } | undefined {
+  if (source === undefined) return undefined;
+  let value: { runId?: unknown; step?: unknown };
+  try {
+    value = JSON.parse(source) as typeof value;
+  } catch {
+    throw new Wrong(`--started-by holds "${source}", which is not JSON`);
+  }
+  if (typeof value.runId !== "string" || typeof value.step !== "string") {
+    throw new Wrong(`--started-by wants one JSON object with "runId" and "step"`);
+  }
+  return { runId: value.runId, step: value.step };
 }
 
 /**
@@ -217,7 +236,14 @@ if (!harness) wrong(`unknown harness "${chosen}". Use one of: ${ADAPTERS.join(",
 try {
   if (command === "run") {
     if (!first) throw new Wrong(`orchy run wants a flow file.\n\n${USAGE}`);
-    const options = { onEvent: emit, harness, harnessName: chosen, harnesses: HARNESSES, with: valuesOf(given) };
+    const options = {
+      onEvent: emit,
+      harness,
+      harnessName: chosen,
+      harnesses: HARNESSES,
+      with: valuesOf(given),
+      startedBy: starterOf(starter),
+    };
     const flow = await read(first);
     watchForSignals();
     finish(await run(flow, options));
@@ -262,7 +288,9 @@ try {
     // ADR 0024: the long daemon fires the schedules, so this one does not, and
     // the two can stand over one root without firing one schedule twice.
     const engine = daemon(process.cwd(), false);
-    mcp(engine, chosen);
+    // A step that holds the `orchy` tool reaches this door, and its adapter
+    // says which run asked, so the runs it starts record it. ADR 0025.
+    mcp(engine, chosen, process.stdin, process.stdout, starterOf(process.env.ORCHY_STARTED_BY));
     const leave = () => {
       engine.close();
       process.exit(EXIT.done);

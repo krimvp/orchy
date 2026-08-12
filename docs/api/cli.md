@@ -25,7 +25,13 @@ Four commands exist:
 - `orchy mcp` — serve the Model Context Protocol on stdin and stdout, so an
   agent writes flows and runs them here. See `src/mcp.ts`. The engine behind
   it fires no schedule — the long daemon does — so the two stand over one
-  root together. The door closes when the client closes stdin.
+  root together. The door closes when the client closes stdin. When a step
+  opened the door, `ORCHY_STARTED_BY` names the run and the step, and every
+  run it starts records them (ADR 0025).
+
+`orchy run` also takes `--started-by <json>`, one object with `runId` and
+`step`: the record of who started this run. The MCP door of a run passes it
+through the daemon; a person has no use for it.
 
 `run` and `resume` share two more flags. `--harness pi|claude` picks the
 adapter (default `pi`); the table of adapters is typed by `AdapterName`, so an

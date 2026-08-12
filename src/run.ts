@@ -159,6 +159,12 @@ export interface RunState {
   flow: Flow;
   /** The values this run supplies for what the flow takes. Every step reads them. */
   with?: Record<string, unknown>;
+  /**
+   * The run and the step that started this run, when a step did through the
+   * door of its own root. The record is the bound: a chain of runs is read
+   * from here, and the door refuses one that stands too deep. ADR 0025.
+   */
+  startedBy?: { runId: string; step: string };
   /** `stopped` is what a person or a dead daemon leaves; a run never writes it itself. */
   status: "running" | "waiting" | "done" | "failed" | "stopped";
   /**
@@ -209,6 +215,8 @@ export interface RunOptions {
   harnessName?: string;
   /** The adapters a step can name. */
   harnesses?: Record<string, Harness>;
+  /** The run and the step that started this run, when a step did. ADR 0025. */
+  startedBy?: { runId: string; step: string };
   onEvent?: (event: RunEvent) => void;
 }
 
@@ -239,6 +247,7 @@ export async function run(input: Flow, options: RunOptions = {}): Promise<RunSta
   const state: RunState = { runId: randomUUID(), flow, status: "running", steps: {}, cycles: {} };
   // ADR 0005: the state on disk is the run, so a resume reads the values again.
   if (options.with) state.with = options.with;
+  if (options.startedBy) state.startedBy = options.startedBy;
   mkdirSync(directoryOf(cwd, state.runId), { recursive: true });
   return execute(state, cwd, options);
 }
@@ -947,6 +956,7 @@ async function runStep(
               returns: step.returns,
               cwd,
               model: modelOf(state.flow, step),
+              run: state.runId,
             },
             watch,
           )

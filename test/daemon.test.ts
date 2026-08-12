@@ -504,6 +504,7 @@ test("the index drops the events of a run that falls behind the list, and keeps 
       cost: null,
       tokens: null,
       withJson: null,
+      startedByJson: null,
     });
     store.addEvent(runId, { type: "run_start", runId });
   }

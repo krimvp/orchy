@@ -465,6 +465,16 @@ over one root. See [ADR
 does not reach this door yet: that is a later decision with an ADR of its
 own, because it touches the budget and the record.
 
+**M14 — a step reaches the door of its own run. Done.** `orchy` is a tool a
+step declares, and the claude adapter opens the MCP door of the run's root
+for it. A run a step starts records `startedBy` in its state and its row,
+`read_run` lists the children of a run with their costs and holds its answer
+up to 55 seconds while a run works, `check_flow` reads a prompt before it is
+written, and the door refuses a chain of runs that stands three deep. Every
+claude step now rides `--strict-mcp-config`, so no server of the user's own
+configuration exists for a step that declared none. See [ADR
+0025](./adr/0025-a-step-reaches-the-door-of-its-own-run.md).
+
 ## The proof flows
 
 Two flows prove the design, and they stress different parts.

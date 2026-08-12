@@ -55,10 +55,13 @@ Shapes:
 - `RunOptions` — everything a run can be given: `cwd` (default: the current
   working directory), `with` (the values the flow takes), `harness` (the
   adapter for a step that names none; default: `pi`), `harnesses` (the
-  adapters a step can name), and `onEvent`, a callback for `RunEvent`s.
+  adapters a step can name), `startedBy` (the run and the step that started
+  this one, when a step did through the MCP door — ADR 0025), and `onEvent`,
+  a callback for `RunEvent`s.
 
 - `RunState` — the whole run: `runId`, the `flow` itself (held in full, so a
-  resume needs no file), the run's `with` values, a `status` of `"running"`,
+  resume needs no file), the run's `with` values, its `startedBy` when a
+  step started it, a `status` of `"running"`,
   `"waiting"`, `"done"`, `"failed"`, or `"stopped"` (what a person or a dead
   daemon leaves — a run never writes it itself), an `error` when the fault
   belongs to the run and not to one step, a `StepRecord` per settled step,

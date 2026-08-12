@@ -45,11 +45,14 @@ export interface Order {
   harness: string;
   /** The values the flow takes. The daemon passes them on, and the child checks them. */
   with?: Record<string, unknown>;
+  /** The run and the step that placed this order, when a step did. ADR 0025. */
+  startedBy?: { runId: string; step: string };
 }
 
 interface Job extends Ticket {
   harness: string;
   with?: Record<string, unknown>;
+  startedBy?: { runId: string; step: string };
   runId?: string;
   /** The job continues a run instead of starting one. */
   resumes?: boolean;
@@ -172,7 +175,12 @@ export function daemon(root: string, beats = true) {
             ...(job.value === undefined ? [] : [JSON.stringify(job.value)]),
             ...(job.from ? ["--from", job.from] : []),
           ]
-        : ["run", job.path, ...(job.with ? ["--with", JSON.stringify(job.with)] : [])];
+        : [
+            "run",
+            job.path,
+            ...(job.with ? ["--with", JSON.stringify(job.with)] : []),
+            ...(job.startedBy ? ["--started-by", JSON.stringify(job.startedBy)] : []),
+          ];
       const child = spawn(process.execPath, [CLI, ...args, "--harness", job.harness, "--events"], {
         cwd: root,
         stdio: ["ignore", "pipe", "pipe"],

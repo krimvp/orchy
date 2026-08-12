@@ -4347,6 +4347,16 @@ test("a gate asks its question with the names in it filled in", async () => {
   assert.equal(state.question, "Does ticket ORC-41 look right?");
 });
 
+test("the orchy tool is refused where the harness cannot supply it", () => {
+  const doored = flow("doored", {
+    steps: [agent({ id: "spawn", prompt: "step.md", tools: ["orchy"], returns: Summary })],
+  });
+
+  // Only the claude adapter opens the door of the run for a step. ADR 0025.
+  assert.match(validate(doored, "pi").join("\n"), /the tool "orchy", and the harness "pi" has none/);
+  assert.deepEqual(validate(doored, "claude"), []);
+});
+
 test("the question of a gate carries the values of the steps it needs", async () => {
   const cwd = workspace();
   const harness = fakeHarness({ summary: "looks fine" });

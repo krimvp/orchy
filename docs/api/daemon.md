@@ -39,6 +39,8 @@ and the daemon marks the row `stopped`.
   - `start(order)` — queues a run and returns its `Ticket`. The `Order`
     names the flow file (`path`), the flow (`flowName`), the harness, and
     optionally `with`, the values the flow takes; the child validates them.
+    `startedBy` rides along when a step placed the order through the MCP
+    door, and the child writes it into its state (ADR 0025).
   - `resume(runId, value, harness, from?)` — continues a run, returning a
     fresh `Ticket`. A `value` answers the gate of a run whose status is
     `waiting`. No value continues a run that ended, from the step `from`

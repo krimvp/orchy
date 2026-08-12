@@ -28,7 +28,8 @@ create table if not exists run (
   question text,
   cost real,
   tokens integer,
-  withJson text
+  withJson text,
+  startedByJson text
 );
 create table if not exists event (
   id integer primary key,
@@ -75,6 +76,8 @@ export interface RunRow {
    * by nothing else a list can show, so the list shows them.
    */
   withJson: string | null;
+  /** The run and the step that started this run, as JSON, when a step did. */
+  startedByJson: string | null;
 }
 
 /**
@@ -120,6 +123,9 @@ export function open(file: string) {
   const columns = db.prepare("pragma table_info(run)").all() as Array<{ name: string }>;
   if (!columns.some((column) => column.name === "withJson")) {
     db.exec("alter table run add column withJson text");
+  }
+  if (!columns.some((column) => column.name === "startedByJson")) {
+    db.exec("alter table run add column startedByJson text");
   }
 
   const all = <T>(sql: string, ...values: unknown[]): T[] =>
@@ -196,12 +202,12 @@ export function open(file: string) {
 
     saveRun(row: RunRow): void {
       db.prepare(
-        `insert into run (runId, flowName, path, status, startedAt, endedAt, waitingFor, question, cost, tokens, withJson)
-         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `insert into run (runId, flowName, path, status, startedAt, endedAt, waitingFor, question, cost, tokens, withJson, startedByJson)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          on conflict(runId) do update set
            status = excluded.status, endedAt = excluded.endedAt, waitingFor = excluded.waitingFor,
            question = excluded.question, cost = excluded.cost, tokens = excluded.tokens,
-           withJson = excluded.withJson`,
+           withJson = excluded.withJson, startedByJson = excluded.startedByJson`,
       ).run(
         row.runId,
         row.flowName,
@@ -214,6 +220,7 @@ export function open(file: string) {
         row.cost,
         row.tokens,
         row.withJson,
+        row.startedByJson,
       );
     },
 
@@ -297,6 +304,7 @@ export function rowOf(state: RunState, path: string | null, spend?: { cost?: num
     cost: spend?.cost ?? null,
     tokens: spend?.tokens ?? null,
     withJson: state.with ? JSON.stringify(state.with) : null,
+    startedByJson: state.startedBy ? JSON.stringify(state.startedBy) : null,
   };
 }
 

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -47,11 +47,11 @@ function project(): string {
 }
 
 /** Opens the door over two streams, and gives back a client that speaks its lines. */
-function talking(root: string) {
+function talking(root: string, startedBy?: { runId: string; step: string }) {
   const engine = daemon(root, false);
   const input = new PassThrough();
   const output = new PassThrough();
-  mcp(engine, "pi", input, output);
+  mcp(engine, "pi", input, output, startedBy);
 
   let count = 0;
   const waits = new Map<number, (message: Record<string, unknown>) => void>();
@@ -112,7 +112,7 @@ test("the door answers initialize with its guide, and lists every tool", async (
     // A client shows the first 2048 characters of a guide and cuts the rest,
     // so a guide that grows past this ends mid-word for the agent that reads it.
     assert.ok(
-      opened.result.instructions.length < 1950,
+      opened.result.instructions.length < 1980,
       `the guide holds ${opened.result.instructions.length} characters, and a client cuts it at 2048`,
     );
 
@@ -235,6 +235,86 @@ test("a name that nothing supplies is named at the write, and refused before a r
     // The run is refused at the door, before the steps before the hole spend money.
     const started = await site.call("run_flow", { path: "flows/holey/flow.yaml" });
     assert.match(started.refused as string, /nothing supplies "issue"/);
+  } finally {
+    site.close();
+  }
+});
+
+test("a run a step starts records the run that started it, and the parent lists it", async () => {
+  const root = project();
+  const solo = { name: "solo", steps: [{ id: "work", kind: "call", module: "count.ts", returns: NUMBER }] };
+  const parent = talking(root);
+  let child: ReturnType<typeof talking> | undefined;
+  try {
+    await parent.call("write_flow", { path: "flows/solo/flow.yaml", yaml: formatFlow(solo as never) });
+    writeFileSync(join(root, "flows", "solo", "count.ts"), COUNT);
+    const first = (await parent.call("run_flow", { path: "flows/solo/flow.yaml" })).body as { runId: string };
+    const settled = async (site: ReturnType<typeof talking>, runId: string) => {
+      const held = await site.call("read_run", { runId, wait: 30 });
+      return held.refused ? undefined : (held.body as { row: { status: string } | null }).row?.status;
+    };
+    await until(async () => (await settled(parent, first.runId)) === "done");
+
+    // A second door speaks for a step of that run, the way an adapter opens one.
+    child = talking(root, { runId: first.runId, step: "spawn" });
+    const second = (await child.call("run_flow", { path: "flows/solo/flow.yaml" })).body as { runId: string };
+    await until(async () => (await settled(child as ReturnType<typeof talking>, second.runId)) === "done");
+
+    assert.deepEqual(child.engine.state(second.runId)?.startedBy, { runId: first.runId, step: "spawn" });
+    const held = (await parent.call("read_run", { runId: first.runId })).body as {
+      children: Array<{ runId: string; step: string; status: string }>;
+    };
+    assert.equal(held.children[0]?.runId, second.runId);
+    assert.equal(held.children[0]?.step, "spawn");
+  } finally {
+    child?.close();
+    parent.close();
+  }
+});
+
+test("a chain of runs stops at three, and the door names the way that still runs", async () => {
+  const root = project();
+  const runs = join(root, ".orchy", "runs");
+  // Three runs stand on disk, each started by the one before it.
+  const chain = [
+    { runId: "r1", flow: { name: "a", steps: [] }, status: "done", steps: {}, cycles: {} },
+    { runId: "r2", flow: { name: "b", steps: [] }, status: "done", steps: {}, cycles: {}, startedBy: { runId: "r1", step: "s" } },
+    { runId: "r3", flow: { name: "c", steps: [] }, status: "done", steps: {}, cycles: {}, startedBy: { runId: "r2", step: "s" } },
+  ];
+  for (const state of chain) {
+    mkdirSync(join(runs, state.runId), { recursive: true });
+    writeFileSync(join(runs, state.runId, "state.json"), JSON.stringify(state));
+  }
+  const site = talking(root, { runId: "r3", step: "spawn" });
+  try {
+    await site.call("write_flow", {
+      path: "flows/solo/flow.yaml",
+      yaml: formatFlow({ name: "solo", steps: [{ id: "work", kind: "call", module: "count.ts", returns: NUMBER }] } as never),
+    });
+    const refused = await site.call("run_flow", { path: "flows/solo/flow.yaml" });
+    assert.match(refused.refused as string, /stops at 3/);
+    assert.match(refused.refused as string, /"flow" step/);
+  } finally {
+    site.close();
+  }
+});
+
+test("check_flow reads a prompt before it is written, and names the hole in it", async () => {
+  const site = talking(project());
+  try {
+    const prompted = {
+      name: "prompted",
+      harness: "pi",
+      steps: [{ id: "work", kind: "agent", prompt: "prompts/work.md", tools: ["read"], returns: NUMBER }],
+    };
+    const checked = (
+      await site.call("check_flow", {
+        yaml: formatFlow(prompted as never),
+        prompts: { "prompts/work.md": "Fix issue {{ ghost }}.\n" },
+      })
+    ).body as { problems: string[]; warnings: string[] };
+    assert.deepEqual(checked.problems, []);
+    assert.match(checked.warnings[0] as string, /nothing supplies "ghost"/);
   } finally {
     site.close();
   }

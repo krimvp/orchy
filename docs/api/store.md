@@ -58,6 +58,9 @@ of every run stay on disk regardless (ADR 0009).
   never fired is due now — that is what scheduling it asked for; after that,
   it is due when its interval has passed since `lastAt`.
 
+- A `RunRow` also carries `startedByJson` — the run and the step that
+  started this run, when a step did (ADR 0025) — so the door lists the
+  children of a run from the index alone.
 - `rowOf(state, path, spend?)` — builds a `RunRow` from a `RunState`: the
   start time is the earliest step start, the end time is the latest step end
   (counting attempts a cycle or resume dropped to `history`) but only once

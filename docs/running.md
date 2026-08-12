@@ -625,3 +625,21 @@ An agent that writes and runs a flow runs code on this machine, with your
 authority. That is the same trust the command line gives, and no more — but
 give the door only to an agent you would give a shell to. See [ADR
 0024](./adr/0024-an-agent-authors-a-flow-through-mcp.md).
+
+A step of a flow reaches the same door by declaring the `orchy` tool:
+
+```yaml
+- id: dispatch
+  kind: agent
+  prompt: prompts/dispatch.md
+  tools: [read, orchy]
+  returns: { type: object, properties: { started: { type: array } } }
+```
+
+The step authors flows, starts runs, and answers gates, in the root of its
+own run. Every run it starts records the run and the step that asked, a
+run's children ride on `read_run` with their costs, and a chain of runs
+stops at three. The budget of a run does not count its children, and a step
+that starts a run must not wait for it — work that runs inside this run is a
+`flow` step. Only the claude harness supplies the tool. See [ADR
+0025](./adr/0025-a-step-reaches-the-door-of-its-own-run.md).

@@ -29,18 +29,19 @@ flow runs code, with the authority of the user who started `orchy mcp`.
 ## Exports
 
 - `mcp(daemon: Daemon, harness = "pi", input = process.stdin, output =
-  process.stdout)` — serves the protocol over the two streams, against the
-  daemon. `harness` is what a flow that names none runs on, as at the
-  command line. The tools it answers:
+  process.stdout, startedBy?)` — serves the protocol over the two streams,
+  against the daemon. `harness` is what a flow that names none runs on, as
+  at the command line. `startedBy` names the run and the step this door
+  speaks for, when a step opened it. The tools it answers:
 
   | Tool | What it does |
   | --- | --- |
-  | `check_flow` | `{ problems, warnings }` for a flow given as YAML text. Empty lists mean the flow is valid. A warning names a brace name in a question that nothing supplies; no path reaches this tool, so prompt files are read at the write instead. It runs nothing and spends nothing. |
+  | `check_flow` | `{ problems, warnings }` for a flow given as YAML text. Empty lists mean the flow is valid. A warning names a brace name that nothing supplies — in a question, or in a prompt passed through `prompts`, which stands in for its file so a hole is heard before anything is written. It runs nothing and spends nothing. |
   | `write_flow` | Writes the YAML text as given — the leading comment stays the description — and the `prompts` files beside it, then registers the flow. Refuses a flow that does not validate, naming every problem; answers `{ flow, warnings }`, where a warning names a file the flow needs and does not have yet, or a brace name that nothing supplies. `run_flow` refuses a flow with either, so a warning is the next thing to fix. |
   | `read_flow` | `{ path, yaml, files }` — the flow file, and every file its steps name that is there: a prompt, a module, an inner flow. |
   | `list_flows` | Every registered flow: its row, its `description`, and its `lastRun`. |
   | `run_flow` | Loads and validates the flow, then queues a run — registering the file first when no row holds it. Answers the `Ticket`, with its `runId` once the run starts; a queue with every slot taken answers the bare ticket instead of holding the answer. `with` carries the values the flow takes, which the child checks. A run of agent steps spends money. |
-  | `read_run` | `{ row, state }` — the run's row and its `RunState` from disk, with the `question` when it waits at a gate. |
+  | `read_run` | `{ row, state, children }` — the run's row, its `RunState` from disk with the `question` when it waits at a gate, and the runs its steps started, each with its status and cost. `wait` holds the answer up to that many seconds (at most 55) while the run works, so a poll costs fewer turns; the answer says where the run stands either way. |
   | `read_trajectory` | The run's parsed `trajectory.json`, or an error while it has written none. |
   | `list_runs` | `{ queue, runs }` — every pending ticket, and every run the index holds, newest first. |
   | `resume_run` | Continues a run. `value` answers the gate of a waiting run — as JSON text, as at the command line, so a boolean stays a boolean across every client — and the contract of the gate checks it here, at the door; `from` names a step of an ended run to go back to; `step` names the gate the answer was written for, so a run that moved on refuses it. |
@@ -50,6 +51,12 @@ The daemon behind this door asks for no schedule beat (`daemon(root, false)`),
 so it and the long daemon stand over one root without firing one schedule
 twice. The schedules belong to the long daemon. Runs either door starts are
 on disk, so each shows the other's.
+
+A step of a flow reaches this door too, by declaring the `orchy` tool (ADR
+0025). The claude adapter opens the door with the run and the step in
+`ORCHY_STARTED_BY`, `mcp()` takes them as `startedBy`, and every run such a
+step starts records them in its state. The door refuses a chain that stands
+three runs deep, and names the `flow` step as the way that still runs.
 
 ## Example
 

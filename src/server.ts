@@ -657,6 +657,7 @@ export async function start(
   row: { id: number; path: string; harness: string },
   values: Record<string, unknown> | undefined,
   harness?: string,
+  startedBy?: { runId: string; step: string },
 ) {
   const flow = await loadFlow(row.path, daemon.root);
   const problems = validate(flow, harness ?? row.harness);
@@ -669,7 +670,13 @@ export async function start(
   const holes = unfilled(raw, row.path);
   if (holes.length > 0) throw new Error(`the flow reads names that nothing supplies:\n- ${holes.join("\n- ")}`);
   // The daemon adds no rule: it passes the values on, and the child checks them.
-  return daemon.start({ path: row.path, flowName: flow.name, harness: harness ?? row.harness, with: values });
+  return daemon.start({
+    path: row.path,
+    flowName: flow.name,
+    harness: harness ?? row.harness,
+    with: values,
+    ...(startedBy ? { startedBy } : {}),
+  });
 }
 
 /** A run keeps the file it came from, so a resume uses the harness of that flow. */
@@ -711,7 +718,7 @@ export function descriptionOf(path: string): string {
  * computed fanout supplies each member values no file names yet, so its
  * prompt is checked by the run and not here.
  */
-export function unfilled(flow: Flow, flowPath?: string): string[] {
+export function unfilled(flow: Flow, flowPath?: string, texts?: Record<string, string>): string[] {
   const takes = ((flow.takes as { properties?: Record<string, unknown> } | undefined)?.properties ?? {}) as Record<
     string,
     unknown
@@ -730,7 +737,11 @@ export function unfilled(flow: Flow, flowPath?: string): string[] {
   };
   const base = flowPath ? dirname(resolve(flowPath)) : undefined;
   const readAt = (path?: string): string | undefined => {
-    if (!base || !path || isAbsolute(path)) return undefined;
+    if (!path) return undefined;
+    // A text given by the caller stands in for the file, so a prompt is
+    // checked before anything is written.
+    if (texts && Object.hasOwn(texts, path)) return texts[path];
+    if (!base || isAbsolute(path)) return undefined;
     try {
       return readFileSync(resolve(base, path), "utf8");
     } catch {
