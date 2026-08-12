@@ -41,6 +41,17 @@ const SLEEPS = `export default async () => {
 
 const NUMBER = { type: "object", required: ["count"], properties: { count: { type: "number" } } };
 
+const APPROVED = { type: "object", required: ["approved"], properties: { approved: { type: "boolean" } } };
+
+/** Two gates, so a test can answer one of them while the other waits. */
+const TWO_GATES = {
+  name: "two-gates",
+  steps: [
+    { id: "first", kind: "gate", question: "The first question?", returns: APPROVED },
+    { id: "second", kind: "gate", needs: ["first"], question: "The second question?", returns: APPROVED },
+  ],
+};
+
 /** A flow with one slow step, so a test can stop a run that is really running. */
 const SLOW = { name: "slow", steps: [{ id: "wait", kind: "call", module: "sleeps.ts", returns: NUMBER }] };
 
@@ -860,6 +871,38 @@ test("the page shows a run that the command line started while the daemon ran", 
     const runs = (await site.call("/api/runs")).body as Array<{ status: string; flowName: string }>;
     assert.equal(runs.length, 1);
     assert.equal(runs[0]?.flowName, "gated");
+  } finally {
+    await site.close();
+  }
+});
+
+test("an answer written for one gate is not given to another", async () => {
+  const site = await running(project(TWO_GATES));
+  try {
+    await site.call("/api/flows", { method: "POST", body: JSON.stringify({ path: "flow.yaml" }) });
+    await site.call("/api/flows/1/runs", { method: "POST", body: "{}" });
+    const waiting = async () =>
+      ((await site.call("/api/runs")).body as Array<{ status: string; waitingFor: string }>)[0];
+    await until(async () => (await waiting())?.status === "waiting");
+    const [row] = (await site.call("/api/runs")).body as Array<{ runId: string }>;
+
+    // One person answers the first question. Another was still reading it.
+    await site.call(`/api/runs/${row?.runId}/resume`, {
+      method: "POST",
+      body: JSON.stringify({ value: { approved: true }, step: "first" }),
+    });
+    await until(async () => (await waiting())?.waitingFor === "second");
+
+    // Their answer was written for "first", and the run has moved on: it must
+    // not be recorded as the answer to a question they never read.
+    const crossed = await site.call(`/api/runs/${row?.runId}/resume`, {
+      method: "POST",
+      body: JSON.stringify({ value: { approved: false }, step: "first" }),
+    });
+
+    assert.equal(crossed.code, 400);
+    assert.match((crossed.body as { error: string }).error, /waits at "second", and this answer is for "first"/);
+    assert.equal((await waiting())?.waitingFor, "second");
   } finally {
     await site.close();
   }

@@ -317,9 +317,13 @@ export const api = {
   flowRuns: (id: number) => call<RunRow[]>(`/api/flows/${id}/runs`),
   run: (runId: string) => call<{ row: RunRow | null; state: RunState }>(`/api/runs/${runId}`),
   trajectory: (runId: string) => call<Atif>(`/api/runs/${runId}/trajectory`),
-  /** A value answers a gate. No value continues an ended run, from `from` or where it stood. */
-  resume: (runId: string, value?: unknown, from?: string) =>
-    call<Ticket>(`/api/runs/${runId}/resume`, { method: "POST", body: JSON.stringify({ value, from }) }),
+  /**
+   * A value answers a gate. No value continues an ended run, from `from` or
+   * where it stood. `step` is the gate the answer was written for, so an answer
+   * cannot land on a question that arrived while a person was reading.
+   */
+  resume: (runId: string, value?: unknown, from?: string, step?: string) =>
+    call<Ticket>(`/api/runs/${runId}/resume`, { method: "POST", body: JSON.stringify({ value, from, step }) }),
   stop: (runId: string) =>
     call<{ stopped: boolean; abandoned?: boolean }>(`/api/runs/${runId}/stop`, { method: "POST" }),
   queue: () => call<Ticket[]>("/api/queue"),

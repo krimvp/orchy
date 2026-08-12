@@ -84,7 +84,9 @@ export function Run({ runId }: { runId: string }) {
         onOpen={pick}
         onAnswer={(answer) =>
           api
-            .resume(runId, answer)
+            // The answer names the gate the page drew it for, so it cannot land
+            // on a question that arrived while a person was reading this one.
+            .resume(runId, answer, undefined, state.waitingFor)
             .then(() => (setFault(undefined), again()))
             .catch((problem: Error) => setFault(problem.message))
         }

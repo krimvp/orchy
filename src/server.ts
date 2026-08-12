@@ -366,7 +366,10 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
         const runId = parameters.id as string;
         const harness = body.harness ? adapterOf(body.harness) : harnessOfRun(daemon, runId);
         const from = typeof body.from === "string" && body.from !== "" ? body.from : undefined;
-        return daemon.resume(runId, body.value, harness, from);
+        // The gate the answer was written for, when the caller says. A run that
+        // moved on since takes no answer meant for the question it has left.
+        const step = typeof body.step === "string" && body.step !== "" ? body.step : undefined;
+        return daemon.resume(runId, body.value, harness, from, step);
       },
     ],
 

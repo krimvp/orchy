@@ -321,6 +321,17 @@ function refuse(problems: string[]): void {
 }
 
 /** Whether a process still holds a run. A run with no pid is from an older Orchy. */
+/**
+ * The state as it stands, and not as it was last written. A run whose process
+ * has gone still says "running" in its own file, and every reader repeated it:
+ * the page, `orchy runs`, and the API each answered "running" for a run that
+ * had died, while the index beside them said "stopped". One answer, one status.
+ */
+export function standing(state: RunState): RunState {
+  if (state.status !== "running" || alive(state.pid)) return state;
+  return { ...state, status: "stopped" };
+}
+
 export function alive(pid: number | undefined): boolean {
   if (pid === undefined) return false;
   try {
@@ -344,7 +355,7 @@ export function list(cwd: string): RunState[] {
   const runs: RunState[] = [];
   for (const id of ids) {
     try {
-      runs.push(read(cwd, id));
+      runs.push(standing(read(cwd, id)));
     } catch {
       // A run that is half written is not a run to list.
     }

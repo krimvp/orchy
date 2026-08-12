@@ -10,7 +10,7 @@ import { type AgentStep, type CallStep, type Flow, type GateStep, agent, call, e
 import { loadFlow } from "../src/load.ts";
 import type { AgentRequest, AgentResult, Harness } from "../src/harness.ts";
 import { notesOf } from "../src/harness.ts";
-import { type RunEvent, type RunState, resume, run } from "../src/run.ts";
+import { type RunEvent, type RunState, list, resume, run } from "../src/run.ts";
 import { tail } from "../src/tail.ts";
 import { claude } from "../src/claude.ts";
 import { costOf, pi } from "../src/pi.ts";
@@ -4343,4 +4343,24 @@ test("a gate asks its question with the names in it filled in", async () => {
   assert.equal(state.status, "waiting");
   // The braces reached the person. Two runs of one flow asked the same question.
   assert.equal(state.question, "Does ticket ORC-41 look right?");
+});
+
+test("a run whose process has gone says stopped, and not running", async () => {
+  const cwd = workspace();
+  writeFileSync(join(cwd, "m.ts"), "export default () => ({ summary: 'x' });\n");
+  await run(
+    flow("gone", { steps: [call({ id: "a", module: "m.ts", returns: Summary })] }),
+    { cwd },
+  );
+
+  // A run that died leaves its own file saying "running", with the pid of a
+  // process that has gone. Every reader repeated it: the page, `orchy runs`,
+  // and the API, while the index beside them said "stopped".
+  const [id] = readdirSync(join(cwd, ".orchy", "runs"));
+  const file = join(cwd, ".orchy", "runs", id as string, "state.json");
+  const state = JSON.parse(readFileSync(file, "utf8")) as RunState;
+  writeFileSync(file, JSON.stringify({ ...state, status: "running", pid: 2_147_483_646 }, null, 2));
+
+  const [listed] = list(cwd);
+  assert.equal(listed?.status, "stopped");
 });

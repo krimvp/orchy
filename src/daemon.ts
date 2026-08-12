@@ -2,7 +2,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { schemaProblem } from "./flow.ts";
-import { type RunEvent, read } from "./run.ts";
+import { type RunEvent, read, standing } from "./run.ts";
 import { type Store, type StoredEvent, due, metricsAt, open, rowOf } from "./store.ts";
 
 /**
@@ -257,7 +257,7 @@ export function daemon(root: string) {
      * ended, from the step `from` names or where the run stood. The child
      * checks the details again; this refuses only what a row already refutes.
      */
-    resume(runId: string, value: unknown, harness: string, from?: string): Ticket {
+    resume(runId: string, value: unknown, harness: string, from?: string, step?: string): Ticket {
       const row = store.run(runId);
       if (!row) throw new Error(`this daemon holds no run ${runId}`);
       if (row.status === "running") throw new Error(`the run ${runId} is running, so there is nothing to continue`);
@@ -276,7 +276,7 @@ export function daemon(root: string) {
       // the words "did not start". The command line refused it at once, and now
       // both surfaces say the same thing at the same moment.
       if (value !== undefined) {
-        const problem = answerProblem(root, runId, value);
+        const problem = answerProblem(root, runId, value, step);
         if (problem) throw new Error(problem);
       }
       if ([...jobs.values()].some((job) => job.runId === runId && !job.settled && !job.done)) {
@@ -343,7 +343,11 @@ export function daemon(root: string) {
       told();
     },
 
-    state: (runId: string) => stateOf(root, runId),
+    // A run whose process has gone is not running, whatever its file still says.
+    state: (runId: string) => {
+      const state = stateOf(root, runId);
+      return state && standing(state);
+    },
 
     trajectory(runId: string): unknown {
       try {
@@ -384,9 +388,16 @@ function ticketOf(job: Job): Ticket {
  * schema the child would check the value against, read at the same moment the
  * person presses the button.
  */
-function answerProblem(root: string, runId: string, value: unknown): string | undefined {
+function answerProblem(root: string, runId: string, value: unknown, answering?: string): string | undefined {
   const state = stateOf(root, runId);
   if (!state?.waitingFor) return undefined;
+  // An answer that names the gate it was written for is not given to another
+  // one. Two people on a two-gate run crossed answers this way: one answered
+  // the first question, and the other's answer to that same question was
+  // recorded against the second, and the run finished.
+  if (answering !== undefined && answering !== state.waitingFor) {
+    return `the run ${runId} waits at "${state.waitingFor}", and this answer is for "${answering}". Read the question it asks now.`;
+  }
   const step = state.flow.steps.find((one) => one.id === state.waitingFor);
   if (!step || step.kind === "flow") return undefined;
   const problem = schemaProblem(step.returns, value);
