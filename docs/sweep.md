@@ -24,6 +24,55 @@ works.
 The raw reports of every agent are in [`sweep/`](./sweep), one file each, with the
 commands and the output they quote.
 
+## What is closed
+
+Twenty-eight of these are fixed, each with a test that fails without the fix.
+In the order they were closed:
+
+- **Nothing hangs a machine.** A cycle with no limit is refused; a cycle states
+  its whole shape. A flow that holds itself, or a chain that comes back to one it
+  holds, is refused by the loader instead of loading until the heap goes.
+- **Nothing loses money.** A step that fails inside the claude harness hands its
+  cost and its transcript out on the error, so the record keeps both and the
+  budget counts the attempt. An answer is counted once, by its id, and a cache
+  write counts as the input token it was.
+- **A promise is read the way git writes a path**, so `./src` and `src` are one
+  path. A workspace Orchy cannot read stops the run before it starts, and a
+  workspace that goes wrong later is a fault of the step that met it, not a run
+  left at "running" for ever. `budget: 0` means what it says.
+- **Every rule that looked enforced is enforced.** A harness that does not exist
+  is a fault; the harness a run will really use reaches the tool check and the
+  model check; `model: ""` names no model; Ajv is strict, so a contract with a
+  typo in it is refused instead of checking nothing; a flow step is validated
+  before expansion takes it away, and its own fields with it.
+- **A run cannot answer itself.** A cycle back past a computed fanout makes the
+  members again, over the list as it now stands. A member keeps the values its
+  step holds. A gate fills the names in its question. A `required` boolean is a
+  choice with nothing chosen, not a box that sends "no" for the person who
+  pressed the only button. A contract holding an object, an enum, a list of
+  objects, or a property with no type draws a control at last.
+- **One answer to one question.** An answer names the gate it was written for,
+  and the door refuses it when the run has moved on; the contract is read at that
+  door and not later in a child, so a refusal is a 400 with a sentence, not a 200
+  and a ticket on another page. A run a person stopped is not a run that did not
+  start. A run whose process has gone says "stopped" to every reader.
+- **The page shows what happened.** A run the command line started reaches the
+  list. The flows page follows the stream. The harness in the file has the last
+  word over the row. The focus ring and the labels carry AA.
+- **`orchy check <flow file>`** reads a flow and says what is wrong with it,
+  spending nothing. A file that will not load ends the command with 2, and the
+  documented exit codes are the ones the command really uses.
+
+What is still open, and worth its own decision: a budget cannot stop a wave in
+the middle of itself, because no one knows what a step costs before it runs; a
+promise is judged on the net diff, so a step that puts a file back passes; "I
+checked and nothing moved" and "I never looked" are still one record; a run
+cannot hand its values to a sub-flow; a wave is a barrier, so a ready branch
+waits for an unrelated one; a flow with two ends returns one of them by file
+order; `policy: accept` ends a run with no event of its own; a cycle to a fanout
+step still retargets the last member; and every command still pays 1.5 seconds
+to import the Pi SDK.
+
 ## The faults that must close first
 
 Twenty root causes carry the 38 high findings. Where more than one agent found
