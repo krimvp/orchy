@@ -22,70 +22,58 @@ const PROTOCOL = "2025-06-18";
  * names, and the model grammar come from the tables in `harness.ts`, the same
  * way `GET /api/health` serves the editor, so no copy here falls behind. The
  * guide holds no rule: `validate()` still refuses.
+ *
+ * A client shows the first 2048 characters and cuts the rest — a tryout read
+ * a guide that ended mid-word — so the guide stays under that, with room for
+ * a long root path. A test holds it there.
  */
-const GUIDE = `Orchy runs agent flows. A flow declares steps and rules as YAML. Orchy runs
-the steps, enforces the rules, and records what each step did.
+const guideFor = (root: string): string => `Orchy runs agent flows declared as YAML: it runs the steps, enforces the
+rules, and records what each step did.
 
-The loop: write the flow as YAML, hear every problem from check_flow, correct
-it, write it with write_flow, start it with run_flow, and follow it with
-read_run. A run that waits at a gate holds a question; answer it with
-resume_run. A run of agent steps spends money, and the "budget" of the flow
-(in dollars) bounds one run.
+The loop: draft the flow, hear every problem from check_flow, write it with
+write_flow, start it with run_flow, and poll read_run until the status is
+done, failed, or waiting. A waiting run holds a question; answer it with
+resume_run. Agent steps spend money; "budget" (dollars) bounds one run, and a
+flow with no agent step takes none.
 
-A flow file looks like this:
+The root is ${root}. A flow path is relative to it; a prompt path and a
+module path, to the flow file.
 
-  name: code-and-review
-  harness: claude
-  budget: 5
-  takes:
-    type: object
-    required: [issue]
-    properties: { issue: { type: number } }
-  steps:
-    - id: code
-      kind: agent
-      prompt: prompts/code.md
-      tools: [read, edit, grep]
-      returns:
-        type: object
-        required: [summary]
-        properties: { summary: { type: string } }
+A flow:
 
-A step is one of four kinds. "agent" runs a model with a prompt file and a
-tool list. "call" runs a TypeScript module. "gate" stops the run and asks a
-person. "flow" holds another flow file. A step names the steps before it in
-"needs". "returns" is JSON Schema, and the value of the step must match it.
-Two more steps, after the agent step above:
+name: triage
+harness: claude
+takes: { type: object, properties: { issue: { type: number } } }
+steps:
+  - id: code
+    kind: agent
+    prompt: prompts/code.md
+    tools: [read, edit, grep]
+    returns: { type: object, properties: { summary: { type: string } } }
+  - id: check
+    kind: call
+    needs: [code]
+    module: check.ts
+    returns: { type: object, properties: { ok: { type: boolean } } }
+  - id: approve
+    kind: gate
+    needs: [check]
+    question: Ship the change?
+    returns: { type: string, enum: [yes, no] }
 
-    - id: check
-      kind: call
-      needs: [code]
-      module: check.ts
-      returns:
-        type: object
-        required: [ok]
-        properties: { ok: { type: boolean } }
-    - id: approve
-      kind: gate
-      needs: [check]
-      question: Ship the change?
-      returns: { type: string, enum: [yes, no] }
+"flow", a fourth kind, holds another flow file. The value of a step must
+match its "returns" schema.
 
-A "call" module is TypeScript with one default export:
+A call module is one default export: (inputs, say, values) => ({ ok: true }).
+"inputs" holds the values of the steps it needs, by step id. "say" reports a line to the
+live notes. "values" holds what the run takes. No
+type is checked.
 
-  export default (inputs, say, values) => ({ ok: true })
+{{ issue }} in a prompt or a gate question reads what the run takes, never a
+step value: those reach an agent prompt as an appended block and a call
+module as "inputs". A name nothing supplies fails the step when it runs.
 
-"inputs" holds the values of the steps it needs, by step id. "say" reports a
-line while the module works. "values" holds what the run takes. A name in
-braces, as {{ issue }}, reads the values of the run: in a prompt file and in
-the question of a gate. The values of earlier steps reach an agent prompt as
-an appended block and a call module as "inputs" — a brace name does not read
-them. A name that nothing supplies fails the step when it runs.
-
-A flow path is relative to the root. A prompt path and a module path are
-relative to the flow file. "budget" bounds what the agent steps of a run
-spend; a flow with no agent step needs none. The tools an agent step can
-declare: ${TOOLS.join(", ")}. The harnesses:
+Agent tools: ${TOOLS.join(", ")}. Harnesses:
 ${ADAPTERS.map((name) => `- "${name}" supplies ${SUPPLIES[name].join(", ")}. ${MODELS[name].write}`).join("\n")}`;
 
 interface Message {
@@ -362,7 +350,7 @@ export function mcp(
           protocolVersion: typeof params.protocolVersion === "string" ? params.protocolVersion : PROTOCOL,
           capabilities: { tools: {} },
           serverInfo: { name: "orchy", version: VERSION },
-          instructions: GUIDE,
+          instructions: guideFor(root),
         };
       case "ping":
         return {};

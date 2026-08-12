@@ -107,6 +107,14 @@ test("the door answers initialize with its guide, and lists every tool", async (
     // The guide names the tools and the harnesses from the tables, so no copy falls behind.
     assert.match(opened.result.instructions, /check_flow/);
     assert.match(opened.result.instructions, /"pi" supplies/);
+    // The guide names the root, so an agent never has to find it.
+    assert.ok(opened.result.instructions.includes(site.engine.root));
+    // A client shows the first 2048 characters of a guide and cuts the rest,
+    // so a guide that grows past this ends mid-word for the agent that reads it.
+    assert.ok(
+      opened.result.instructions.length < 1950,
+      `the guide holds ${opened.result.instructions.length} characters, and a client cuts it at 2048`,
+    );
 
     const listed = (await site.send("tools/list")) as { result: { tools: Array<{ name: string }> } };
     assert.deepEqual(

@@ -13,10 +13,13 @@ agent reads it and writes again.
 The door speaks the part of the protocol that tools need — `initialize`,
 `tools/list`, `tools/call`, and `ping` — as JSON-RPC 2.0, one message for one
 line of the two streams. That is small enough to write here, so the door adds
-no dependency. The answer to `initialize` carries a guide: the shape of a
-flow, the loop of the tools, and the tool names, harness names, and model
-grammar from the tables in `harness.ts`, so no copy falls behind the runner.
-The guide holds no rule: `validate()` still refuses.
+no dependency. The answer to `initialize` carries a guide: the root, the
+shape of a flow, the loop of the tools, the signature of a call module, what
+a brace name reads, and the tool names, harness names, and model grammar from
+the tables in `harness.ts`, so no copy falls behind the runner. The guide
+holds no rule: `validate()` still refuses. A client shows the first 2048
+characters of the guide and cuts the rest — a tryout read one that ended
+mid-word — so the guide stays under that, and a test holds it there.
 
 The door keeps the one rule of the daemon: every path a tool names resolves
 against the root, and one outside it is refused with the root in the message.
