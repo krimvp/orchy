@@ -10,10 +10,11 @@ throws answers `400` with `{ "error": "<message>" }`; an unknown `/api/` path
 answers `404`; a request for the UI before `npm run ui:build` answers `503`.
 
 Three doors start a run — the run button, a schedule, and a webhook — and all
-three go through one checked `start`: the flow must validate, and every file
-it names (a prompt, a module, an inner flow) must exist, before a child
-spends money on it. Every route that touches a file resolves the path against
-the daemon's root and refuses one that steps outside it.
+three go through one checked `start`: the flow must validate, every file it
+names (a prompt, a module, an inner flow) must exist, and no question or
+prompt may read a brace name that nothing supplies (`unfilled`), before a
+child spends money on it. Every route that touches a file resolves the path
+against the daemon's root and refuses one that steps outside it.
 
 The server trusts no one but its own pages. It has no user and no password,
 and it starts an agent that can hold `bash`, so every request is checked
@@ -50,7 +51,7 @@ run.
   | `GET /api/file?path=...` | The content of a file under the root, for the editor: `{ path, exists, content }`. A file over one megabyte is refused — it is not a prompt. |
   | `PUT /api/file` | Writes `body.content` to `body.path` under the root, creating directories on the way. |
   | `POST /api/flows/:id/runs` | Loads and validates the flow, then queues a run and returns its `Ticket`. `body.harness` overrides the flow's harness; `body.with` carries the values the flow takes, which the child checks. |
-  | `POST /api/validate` | `{ problems, warnings }` for the flow in `body.flow`, without touching the flow file. `warnings` names missing files and is only filled when `body.path` says where the flow lives; a missing prompt blocks no save, since the editor writes one in a click. |
+  | `POST /api/validate` | `{ problems, warnings }` for the flow in `body.flow`, without touching the flow file. `warnings` names missing files and unfilled brace names; the files are only checked when `body.path` says where the flow lives. A warning blocks no save, since the editor mends one in a click — but `start` refuses both kinds, so none reaches a run. |
   | `GET /api/runs` | Every run the index holds. |
   | `GET /api/runs/:id` | The run's row and its `RunState` from disk. |
   | `GET /api/runs/:id/trajectory` | The run's parsed `trajectory.json`, or an error while it has written none. |

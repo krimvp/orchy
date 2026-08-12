@@ -179,7 +179,10 @@ test("the daemon runs a flow, stops at a gate, and ends when a person answers", 
     await until(async () => (await status()) === "waiting");
 
     const [row] = (await site.call("/api/runs")).body as Array<{ runId: string; question: string }>;
-    assert.equal(row?.question, "Is the count correct?");
+    // The question carries the values of the steps the gate needs, so the
+    // person answers with the work in front of them.
+    assert.equal(row?.question.startsWith("Is the count correct?"), true);
+    assert.match(row?.question as string, /"count": 0/);
 
     const answered = await site.call(`/api/runs/${row?.runId}/resume`, {
       method: "POST",

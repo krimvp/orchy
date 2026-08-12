@@ -4347,6 +4347,27 @@ test("a gate asks its question with the names in it filled in", async () => {
   assert.equal(state.question, "Does ticket ORC-41 look right?");
 });
 
+test("the question of a gate carries the values of the steps it needs", async () => {
+  const cwd = workspace();
+  const harness = fakeHarness({ summary: "looks fine" });
+
+  const state = await run(
+    flow("showing", {
+      steps: [
+        agent({ id: "look", prompt: "step.md", tools: ["read"], returns: Summary }),
+        gate({ id: "approve", needs: ["look"], question: "Ship it?", returns: Verdict }),
+      ],
+    }),
+    { cwd, harness },
+  );
+
+  assert.equal(state.status, "waiting");
+  // The person answers with the work in front of them, the way an agent step
+  // reads the steps before it in its prompt.
+  assert.equal(state.question?.startsWith("Ship it?"), true);
+  assert.match(state.question ?? "", /"summary": "looks fine"/);
+});
+
 test("a run whose process has gone says stopped, and not running", async () => {
   const cwd = workspace();
   writeFileSync(join(cwd, "m.ts"), "export default () => ({ summary: 'x' });\n");

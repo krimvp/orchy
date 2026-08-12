@@ -234,7 +234,7 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
           row,
           flow,
           problems: validate(flow),
-          warnings: missing(flow, row.path),
+          warnings: [...missing(flow, row.path), ...unfilled(flow, row.path)],
           editable: /\.ya?ml$/.test(row.path),
         };
       },
@@ -325,7 +325,10 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
         // A flow that names no harness runs on the one the daemon holds for its
         // file, so that is the harness the page is answered for.
         const held = path ? daemon.store.flowAt(resolve(daemon.root, path))?.harness : undefined;
-        return { problems: validate(flow, held), warnings: path ? missing(flow, path) : [] };
+        return {
+          problems: validate(flow, held),
+          warnings: path ? [...missing(flow, path), ...unfilled(flow, path)] : unfilled(flow),
+        };
       },
     ],
 
@@ -658,8 +661,13 @@ export async function start(
   const flow = await loadFlow(row.path, daemon.root);
   const problems = validate(flow, harness ?? row.harness);
   if (problems.length > 0) throw new Error(`the flow is not valid:\n- ${problems.join("\n- ")}`);
-  const gone = missing(await readFlow(row.path), row.path);
+  const raw = await readFlow(row.path);
+  const gone = missing(raw, row.path);
   if (gone.length > 0) throw new Error(`the flow names files that are not there:\n- ${gone.join("\n- ")}`);
+  // A hole in a prompt fails its step at run time, after the steps before it
+  // spent money, so the run is refused where a person can still act on it.
+  const holes = unfilled(raw, row.path);
+  if (holes.length > 0) throw new Error(`the flow reads names that nothing supplies:\n- ${holes.join("\n- ")}`);
   // The daemon adds no rule: it passes the values on, and the child checks them.
   return daemon.start({ path: row.path, flowName: flow.name, harness: harness ?? row.harness, with: values });
 }
@@ -694,6 +702,59 @@ export function descriptionOf(path: string): string {
  * The files a flow names that are not there: a prompt, a module, an inner
  * flow. Each path is relative to the flow file, the way the run resolves it.
  */
+/**
+ * The brace names a flow reads that nothing supplies: in the question of a
+ * gate, and in the prompt file of an agent step, when the file is there to
+ * read. Each one fails its step at run time, after the steps before it spent
+ * money. `takesProblem` refuses a value outside `takes`, so what a run can
+ * supply is exactly what `takes` names, and this check proves a hole. A
+ * computed fanout supplies each member values no file names yet, so its
+ * prompt is checked by the run and not here.
+ */
+export function unfilled(flow: Flow, flowPath?: string): string[] {
+  const takes = ((flow.takes as { properties?: Record<string, unknown> } | undefined)?.properties ?? {}) as Record<
+    string,
+    unknown
+  >;
+  const problems: string[] = [];
+  const check = (step: string, where: string, text: string, held?: Record<string, unknown>) => {
+    for (const [, inside] of text.matchAll(/\{\{([^{}]*)\}\}/g)) {
+      const name = (inside as string).trim();
+      if (Object.hasOwn(takes, name) || (held && Object.hasOwn(held, name))) continue;
+      problems.push(
+        `the step "${step}" reads "{{ ${name} }}" in its ${where}, and nothing supplies "${name}". Add it to "takes" on the flow${
+          where === "prompt" ? ', or to "with" on the step' : ""
+        }.`,
+      );
+    }
+  };
+  const base = flowPath ? dirname(resolve(flowPath)) : undefined;
+  const readAt = (path?: string): string | undefined => {
+    if (!base || !path || isAbsolute(path)) return undefined;
+    try {
+      return readFileSync(resolve(base, path), "utf8");
+    } catch {
+      return undefined;
+    }
+  };
+  type Named = { id: string; question?: string; prompt?: string; with?: Record<string, unknown>; fanout?: unknown };
+  for (const step of (flow.steps ?? []) as unknown as Named[]) {
+    if (typeof step.question === "string") check(step.id, "question", step.question, step.with);
+    if (step.fanout && !Array.isArray(step.fanout)) continue;
+    if (Array.isArray(step.fanout)) {
+      for (const member of step.fanout as Array<{ name: string; prompt?: string; with?: Record<string, unknown> }>) {
+        const text = readAt(member.prompt ?? step.prompt);
+        // A member's `with` replaces the step's, as `expandFanout` writes it.
+        if (text !== undefined) check(`${step.id}/${member.name}`, "prompt", text, member.with ?? step.with);
+      }
+      continue;
+    }
+    const text = readAt(step.prompt);
+    if (text !== undefined) check(step.id, "prompt", text, step.with);
+  }
+  return problems;
+}
+
 export function missing(flow: Flow, flowPath: string): string[] {
   const base = dirname(resolve(flowPath));
   const gone: string[] = [];

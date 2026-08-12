@@ -35,8 +35,8 @@ flow runs code, with the authority of the user who started `orchy mcp`.
 
   | Tool | What it does |
   | --- | --- |
-  | `check_flow` | `{ problems }` for a flow given as YAML text. An empty list means the flow is valid. It runs nothing and spends nothing. |
-  | `write_flow` | Writes the YAML text as given — the leading comment stays the description — and the `prompts` files beside it, then registers the flow. Refuses a flow that does not validate, naming every problem; answers `{ flow, warnings }`, where a warning names a file the flow needs and does not have yet. |
+  | `check_flow` | `{ problems, warnings }` for a flow given as YAML text. Empty lists mean the flow is valid. A warning names a brace name in a question that nothing supplies; no path reaches this tool, so prompt files are read at the write instead. It runs nothing and spends nothing. |
+  | `write_flow` | Writes the YAML text as given — the leading comment stays the description — and the `prompts` files beside it, then registers the flow. Refuses a flow that does not validate, naming every problem; answers `{ flow, warnings }`, where a warning names a file the flow needs and does not have yet, or a brace name that nothing supplies. `run_flow` refuses a flow with either, so a warning is the next thing to fix. |
   | `read_flow` | `{ path, yaml, files }` — the flow file, and every file its steps name that is there: a prompt, a module, an inner flow. |
   | `list_flows` | Every registered flow: its row, its `description`, and its `lastRun`. |
   | `run_flow` | Loads and validates the flow, then queues a run — registering the file first when no row holds it. Answers the `Ticket`, with its `runId` once the run starts; a queue with every slot taken answers the bare ticket instead of holding the answer. `with` carries the values the flow takes, which the child checks. A run of agent steps spends money. |

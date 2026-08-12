@@ -637,7 +637,17 @@ function reasons(state: RunState): string | undefined {
  */
 function ask(step: GateStep, state: RunState): string {
   try {
-    return fill(step.question, step.id, valuesOf(step, state));
+    const asked = fill(step.question, step.id, valuesOf(step, state));
+    // The person answers with the work in front of them, the way an agent step
+    // reads the steps before it in its prompt. A brace name reads no step
+    // value, so this block is the one way a question shows one.
+    const inputs = Object.fromEntries(
+      step.needs
+        .filter((need) => state.steps[need]?.value !== undefined)
+        .map((need) => [need, state.steps[need]?.value]),
+    );
+    if (Object.keys(inputs).length === 0) return asked;
+    return `${asked}\n\n${block("The values of the steps before this one", inputs)}`;
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }

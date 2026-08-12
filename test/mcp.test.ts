@@ -203,6 +203,43 @@ test("a missing prompt is a warning the write answers, and run_flow refuses the 
   }
 });
 
+test("a name that nothing supplies is named at the write, and refused before a run spends", async () => {
+  const site = talking(project());
+  try {
+    // The question reads a name outside "takes", so check_flow warns with no file at all.
+    const asking = {
+      name: "asking",
+      takes: { type: "object", properties: { issue: { type: "number" } } },
+      steps: [{ id: "ask", kind: "gate", question: "Ship {{ ticket }}?", returns: NUMBER }],
+    };
+    const checked = (await site.call("check_flow", { yaml: formatFlow(asking as never) })).body as {
+      problems: string[];
+      warnings: string[];
+    };
+    assert.deepEqual(checked.problems, []);
+    assert.match(checked.warnings[0] as string, /nothing supplies "ticket"/);
+
+    // The prompt reads the same hole, and the write names it once the file is there.
+    const prompted = {
+      name: "prompted",
+      harness: "pi",
+      steps: [{ id: "work", kind: "agent", prompt: "prompts/work.md", tools: ["read"], returns: NUMBER }],
+    };
+    const written = await site.call("write_flow", {
+      path: "flows/holey/flow.yaml",
+      yaml: formatFlow(prompted as never),
+      prompts: { "prompts/work.md": "Fix issue {{ issue }}.\n" },
+    });
+    assert.match((written.body as { warnings: string[] }).warnings[0] as string, /nothing supplies "issue"/);
+
+    // The run is refused at the door, before the steps before the hole spend money.
+    const started = await site.call("run_flow", { path: "flows/holey/flow.yaml" });
+    assert.match(started.refused as string, /nothing supplies "issue"/);
+  } finally {
+    site.close();
+  }
+});
+
 test("an agent writes a flow, runs it, answers the gate, and reads the value of the run", async () => {
   const site = talking(project());
   try {
@@ -229,7 +266,7 @@ test("an agent writes a flow, runs it, answers the gate, and reads the value of 
       return held.refused ? undefined : (held.body as { row: { status: string; question?: string } | null }).row;
     };
     await until(async () => (await row())?.status === "waiting");
-    assert.equal((await row())?.question, "Is the count correct?");
+    assert.equal((await row())?.question?.startsWith("Is the count correct?"), true);
 
     // The contract of the gate refuses a wrong answer at the door.
     const crossed = await site.call("resume_run", { runId, value: { approved: "yes please" } });

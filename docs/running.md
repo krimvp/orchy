@@ -458,7 +458,9 @@ better.
 ## Answer a gate
 
 A run that reaches a gate writes its state and ends. The command prints the run
-id.
+id. The question carries the values of the steps the gate needs, the way an
+agent step reads them in its prompt, so the person answers with the work in
+front of them.
 
 ```bash
 orchy resume <run id> '{"approved":true}'

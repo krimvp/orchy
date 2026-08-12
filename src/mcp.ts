@@ -5,7 +5,7 @@ import type { Daemon, Ticket } from "./daemon.ts";
 import { type Flow, validate } from "./flow.ts";
 import { ADAPTERS, MODELS, SUPPLIES, TOOLS } from "./harness.ts";
 import { readFlow } from "./load.ts";
-import { descriptionOf, harnessInFile, harnessOfRun, missing, start, under } from "./server.ts";
+import { descriptionOf, harnessInFile, harnessOfRun, missing, start, under, unfilled } from "./server.ts";
 import { parseFlow } from "./yaml.ts";
 
 const VERSION = String(createRequire(import.meta.url)("../package.json").version);
@@ -134,9 +134,12 @@ export function mcp(
       },
       handle(args) {
         try {
-          return { problems: validate(parseFlow(String(args.yaml ?? "")), harness) };
+          const flow = parseFlow(String(args.yaml ?? ""));
+          // No path reaches this tool, so only the questions are read for a
+          // hole here. The write reads the prompt files too.
+          return { problems: validate(flow, harness), warnings: unfilled(flow) };
         } catch (error) {
-          return { problems: [error instanceof Error ? error.message : String(error)] };
+          return { problems: [error instanceof Error ? error.message : String(error)], warnings: [] };
         }
       },
     },
@@ -174,7 +177,10 @@ export function mcp(
         // the description of the flow, and a reprint drops every comment.
         writeFileSync(path, String(args.yaml));
         const own = typeof flow.harness === "string" && flow.harness !== "" ? flow.harness : harness;
-        return { flow: daemon.store.addFlow(path, flow.name, own), warnings: missing(flow, path) };
+        return {
+          flow: daemon.store.addFlow(path, flow.name, own),
+          warnings: [...missing(flow, path), ...unfilled(flow, path)],
+        };
       },
     },
 
