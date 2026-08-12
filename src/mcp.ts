@@ -55,11 +55,37 @@ A step is one of four kinds. "agent" runs a model with a prompt file and a
 tool list. "call" runs a TypeScript module. "gate" stops the run and asks a
 person. "flow" holds another flow file. A step names the steps before it in
 "needs". "returns" is JSON Schema, and the value of the step must match it.
-A prompt file reads a value of the run as {{ issue }}, and a name that
-nothing supplies fails the step.
+Two more steps, after the agent step above:
 
-A flow path is relative to the root. A prompt path is relative to its flow
-file. The tools a step can declare: ${TOOLS.join(", ")}. The harnesses:
+    - id: check
+      kind: call
+      needs: [code]
+      module: check.ts
+      returns:
+        type: object
+        required: [ok]
+        properties: { ok: { type: boolean } }
+    - id: approve
+      kind: gate
+      needs: [check]
+      question: Ship the change?
+      returns: { type: string, enum: [yes, no] }
+
+A "call" module is TypeScript with one default export:
+
+  export default (inputs, say, values) => ({ ok: true })
+
+"inputs" holds the values of the steps it needs, by step id. "say" reports a
+line while the module works. "values" holds what the run takes. A name in
+braces, as {{ issue }}, reads the values of the run: in a prompt file and in
+the question of a gate. The values of earlier steps reach an agent prompt as
+an appended block and a call module as "inputs" — a brace name does not read
+them. A name that nothing supplies fails the step when it runs.
+
+A flow path is relative to the root. A prompt path and a module path are
+relative to the flow file. "budget" bounds what the agent steps of a run
+spend; a flow with no agent step needs none. The tools an agent step can
+declare: ${TOOLS.join(", ")}. The harnesses:
 ${ADAPTERS.map((name) => `- "${name}" supplies ${SUPPLIES[name].join(", ")}. ${MODELS[name].write}`).join("\n")}`;
 
 interface Message {
@@ -272,16 +298,37 @@ export function mcp(
         required: ["runId"],
         properties: {
           runId: { type: "string" },
-          value: { description: "The value that answers the gate. It must match the contract of the gate." },
+          value: {
+            type: "string",
+            description:
+              'The value that answers the gate, as JSON text: true, 42, "yes", or {"approved":true}. It must match the contract of the gate.',
+          },
           from: { type: "string", description: "The step to go back to. Every step after it runs again." },
-          step: { type: "string", description: "The gate the answer was written for, so a run that moved on refuses it." },
+          step: {
+            type: "string",
+            description:
+              "The gate this answer was written for. A run that has moved on to another gate then refuses it, instead of taking it for a question the answerer never read.",
+          },
         },
       },
       handle(args) {
         const runId = String(args.runId ?? "");
+        // The answer crosses the protocol as JSON text, as it does at the
+        // command line, so a boolean stays a boolean. A client that sends the
+        // value itself is read as it is.
+        let value: unknown = args.value;
+        if (typeof value === "string") {
+          try {
+            value = JSON.parse(value);
+          } catch {
+            throw new Error(
+              `the answer holds ${String(args.value)}, which is not JSON. Write the value as JSON text, such as '"yes"' or 'true'.`,
+            );
+          }
+        }
         const from = typeof args.from === "string" && args.from !== "" ? args.from : undefined;
         const step = typeof args.step === "string" && args.step !== "" ? args.step : undefined;
-        return daemon.resume(runId, args.value, harnessOfRun(daemon, runId), from, step);
+        return daemon.resume(runId, value, harnessOfRun(daemon, runId), from, step);
       },
     },
 

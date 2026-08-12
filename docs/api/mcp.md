@@ -40,7 +40,7 @@ flow runs code, with the authority of the user who started `orchy mcp`.
   | `read_run` | `{ row, state }` — the run's row and its `RunState` from disk, with the `question` when it waits at a gate. |
   | `read_trajectory` | The run's parsed `trajectory.json`, or an error while it has written none. |
   | `list_runs` | `{ queue, runs }` — every pending ticket, and every run the index holds, newest first. |
-  | `resume_run` | Continues a run. `value` answers the gate of a waiting run, and the contract of the gate checks it here, at the door; `from` names a step of an ended run to go back to; `step` names the gate the answer was written for, so a run that moved on refuses it. |
+  | `resume_run` | Continues a run. `value` answers the gate of a waiting run — as JSON text, as at the command line, so a boolean stays a boolean across every client — and the contract of the gate checks it here, at the door; `from` names a step of an ended run to go back to; `step` names the gate the answer was written for, so a run that moved on refuses it. |
   | `stop_run` | Stops a run where it stands, as `POST /api/runs/:id/stop` does. |
 
 The daemon behind this door asks for no schedule beat (`daemon(root, false)`),

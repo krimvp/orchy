@@ -227,7 +227,11 @@ test("an agent writes a flow, runs it, answers the gate, and reads the value of 
     const crossed = await site.call("resume_run", { runId, value: { approved: "yes please" } });
     assert.match(crossed.refused as string, /breaks the contract/);
 
-    const answered = await site.call("resume_run", { runId, value: { approved: true }, step: "ask" });
+    // The answer crosses the protocol as JSON text, and text that is not JSON says so.
+    const loose = await site.call("resume_run", { runId, value: "yes please" });
+    assert.match(loose.refused as string, /not JSON/);
+
+    const answered = await site.call("resume_run", { runId, value: '{"approved":true}', step: "ask" });
     assert.equal(answered.refused, undefined);
     await until(async () => (await row())?.status === "done");
 
