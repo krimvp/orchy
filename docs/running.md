@@ -16,10 +16,11 @@ Each adapter gives the contract to its harness whole. Pi builds a
 it gives one source for the contract and the static type that makes
 `cycle.when` safe. A flow in YAML holds plain JSON Schema and needs nothing.
 
-Orchy is not on npm yet, and another package already holds the name. Install it
-from the repository, as the [Install](../README.md#install) part of the README
-says. Add `@sinclair/typebox` only to write a flow in TypeScript. A flow in YAML
-holds plain JSON Schema and needs nothing.
+Orchy is on npm as `@krimvp/orchy`, because the bare name belongs to another
+package, and a clone runs from source. Either way, see the
+[Install](../README.md#install) part of the README. Add `@sinclair/typebox` only
+to write a flow in TypeScript. A flow in YAML holds plain JSON Schema and needs
+nothing.
 
 ## The values a run takes
 
@@ -396,7 +397,9 @@ A model must call tools well. Orchy takes the value of a step from a
 `submit_result` tool, so a model that answers in prose fails the step.
 
 The `cost` numbers come from you. A provider with a subscription price reports
-no cost for one call, so `cost_usd` in the trajectory stays at zero.
+no cost for one call, so `cost_usd` in the trajectory stays at zero. A session
+whose cost is zero throughout is a session that reported nothing, and a budget
+over it stops the run. So a flow on such a provider declares no budget.
 
 Claude Code writes no cost into its transcript, so the adapter takes the cost
 from the answer of the command and Orchy keeps it in the step record.
@@ -431,10 +434,13 @@ A budget does not wait for a person. No value of any step answers "the money ran
 out", and a resumed run meets the same spend again.
 
 Orchy enforces no budget that it cannot measure. A run with a budget stops when
-an agent step reports no cost, and says so. A provider whose prices are all zero
-reports a cost of zero, which is a measurement, so a budget over it never stops
-the run. Only the flow that the run starts holds a budget: a sub-flow with one
-is refused when the file loads. See [ADR
+an agent step reports no cost, and says so. A provider with no price table, and
+a provider whose prices are all zero, both report a total of zero on every
+message — and a step that answered spent something, so Orchy reads that total as
+no measurement and not as a cost of zero. So a flow that holds one such step
+declares no budget: the wave after that step stops the run, whatever the other
+steps report. Only the flow that the run starts holds a budget: a sub-flow with
+one is refused when the file loads. See [ADR
 0019](./adr/0019-a-run-has-a-budget.md).
 
 ## Run
@@ -454,6 +460,10 @@ output stream. It ends with 0 when the run finishes, 1 when the run fails, 2
 when the command or the flow it was given is wrong, and 3 when the run waits for
 a person. A script that treats a waiting run as a failure reads the 3 and knows
 better.
+
+`--events` changes both streams: one JSON event goes to the output stream for
+each line, no run state joins it there, and the glyphs on the error stream stop.
+A parent process reads the events alone, which is what the daemon does.
 
 ## Answer a gate
 
@@ -606,7 +616,7 @@ agent holds Orchy as a set of tools. Register it from the directory the flows
 live in — that directory is the root, as it is for the daemon:
 
 ```bash
-claude mcp add orchy -- npx orchy mcp
+claude mcp add orchy -- npx @krimvp/orchy mcp
 ```
 
 The agent gets ten tools and a guide. The loop: it writes a flow as YAML,

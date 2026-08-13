@@ -424,25 +424,34 @@ footer a { color: var(--text-2); }
     <div class="win">
       <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="title">flow.yaml</span><span class="right">the whole flow</span></div>
       <pre><code><span class="k">name</span><span class="p">:</span> <span class="s">code-and-review</span>
-<span class="k">harness</span><span class="p">:</span> <span class="s">claude</span>      <span class="c"># or pi — mix per step</span>
+<span class="k">workspace</span><span class="p">:</span> <span class="p">{</span> <span class="k">kind</span><span class="p">:</span> <span class="s">git</span><span class="p">,</span> <span class="k">path</span><span class="p">:</span> <span class="s">.</span> <span class="p">}</span>
+<span class="k">harness</span><span class="p">:</span> <span class="s">claude</span>           <span class="c"># or pi — mix per step</span>
 <span class="k">model</span><span class="p">:</span> <span class="s">claude-opus-4-5</span>
-<span class="k">budget</span><span class="p">:</span> <span class="n">5</span>            <span class="c"># dollars, hard stop</span>
-<span class="k">takes</span><span class="p">:</span> <span class="p">{</span> <span class="k">required</span><span class="p">:</span> <span class="p">[</span><span class="s">issue</span><span class="p">]</span> <span class="p">}</span>
+<span class="k">takes</span><span class="p">:</span>
+  <span class="k">type</span><span class="p">:</span> <span class="s">object</span>
+  <span class="k">properties</span><span class="p">:</span> <span class="p">{</span> <span class="k">issue</span><span class="p">:</span> <span class="p">{</span> <span class="k">type</span><span class="p">:</span> <span class="s">number</span> <span class="p">}</span> <span class="p">}</span>
 
 <span class="k">steps</span><span class="p">:</span>
   <span class="p">-</span> <span class="k">id</span><span class="p">:</span> <span class="s">code</span>
     <span class="k">kind</span><span class="p">:</span> <span class="s">agent</span>
-    <span class="k">prompt</span><span class="p">:</span> <span class="s">prompts/code.md</span>   <span class="c"># reads {{ issue }}</span>
+    <span class="k">prompt</span><span class="p">:</span> <span class="s">prompts/code.md</span>    <span class="c"># reads {{ issue }}</span>
     <span class="k">tools</span><span class="p">:</span> <span class="p">[</span><span class="s">read</span><span class="p">,</span> <span class="s">write</span><span class="p">,</span> <span class="s">edit</span><span class="p">,</span> <span class="s">grep</span><span class="p">]</span>
+    <span class="k">returns</span><span class="p">:</span>
+      <span class="k">type</span><span class="p">:</span> <span class="s">object</span>
+      <span class="k">properties</span><span class="p">:</span> <span class="p">{</span> <span class="k">summary</span><span class="p">:</span> <span class="p">{</span> <span class="k">type</span><span class="p">:</span> <span class="s">string</span> <span class="p">}</span> <span class="p">}</span>
 
   <span class="p">-</span> <span class="k">id</span><span class="p">:</span> <span class="s">review</span>
+    <span class="k">kind</span><span class="p">:</span> <span class="s">agent</span>
     <span class="k">needs</span><span class="p">:</span> <span class="p">[</span><span class="s">code</span><span class="p">]</span>
     <span class="k">harness</span><span class="p">:</span> <span class="s">pi</span>
-    <span class="k">model</span><span class="p">:</span> <span class="s">ollama/glm-5.2</span>  <span class="c"># another brain reviews</span>
+    <span class="k">model</span><span class="p">:</span> <span class="s">ollama/glm-5.2</span>      <span class="c"># another brain reviews</span>
+    <span class="k">prompt</span><span class="p">:</span> <span class="s">prompts/review.md</span>
     <span class="k">tools</span><span class="p">:</span> <span class="p">[</span><span class="s">read</span><span class="p">,</span> <span class="s">grep</span><span class="p">]</span>
-    <span class="k">changes</span><span class="p">:</span> <span class="s">nothing</span>       <span class="c"># it may move no file</span>
-    <span class="k">returns</span><span class="p">:</span> <span class="p">{</span> <span class="k">required</span><span class="p">:</span> <span class="p">[</span><span class="s">approved</span><span class="p">,</span> <span class="s">findings</span><span class="p">]</span> <span class="p">}</span>
-    <span class="k">cycle</span><span class="p">:</span> <span class="p">{</span> <span class="k">to</span><span class="p">:</span> <span class="s">code</span><span class="p">,</span> <span class="k">when</span><span class="p">:</span> <span class="p">{</span> <span class="k">approved</span><span class="p">:</span> <span class="b">false</span> <span class="p">},</span> <span class="k">limit</span><span class="p">:</span> <span class="n">3</span> <span class="p">}</span></code></pre>
+    <span class="k">changes</span><span class="p">:</span> <span class="s">nothing</span>           <span class="c"># it may move no file</span>
+    <span class="k">returns</span><span class="p">:</span>
+      <span class="k">type</span><span class="p">:</span> <span class="s">object</span>
+      <span class="k">properties</span><span class="p">:</span> <span class="p">{</span> <span class="k">approved</span><span class="p">:</span> <span class="p">{</span> <span class="k">type</span><span class="p">:</span> <span class="s">boolean</span> <span class="p">}</span> <span class="p">}</span>
+    <span class="k">cycle</span><span class="p">:</span> <span class="p">{</span> <span class="k">to</span><span class="p">:</span> <span class="s">code</span><span class="p">,</span> <span class="k">when</span><span class="p">:</span> <span class="p">{</span> <span class="k">approved</span><span class="p">:</span> <span class="b">false</span> <span class="p">}</span><span class="p">,</span> <span class="k">limit</span><span class="p">:</span> <span class="n">3</span> <span class="p">}</span></code></pre>
     </div>
 
     <div class="win graphwin">
@@ -597,38 +606,70 @@ footer a { color: var(--text-2); }
   </div>
   <div class="config-grid reveal">
     <div class="win configwin">
-      <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="title">research/flow.yaml</span></div>
+      <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="title">flow.yaml</span><span class="right">valid, whole, and checked</span></div>
       <pre id="config-code"><code><span class="k">name</span><span class="p">:</span> <span class="s">research</span>
-<mark data-f="budget"><span class="k">budget</span><span class="p">:</span> <span class="n">2</span>                     <span class="c"># stop before the next step at $2</span></mark>
-<mark data-f="takes"><span class="k">takes</span><span class="p">:</span> <span class="p">{</span> <span class="k">required</span><span class="p">:</span> <span class="p">[</span><span class="s">question</span><span class="p">]</span> <span class="p">}</span></mark>
+<span class="k">workspace</span><span class="p">:</span> <span class="p">{</span> <span class="k">kind</span><span class="p">:</span> <span class="s">git</span><span class="p">,</span> <span class="k">path</span><span class="p">:</span> <span class="s">.</span> <span class="p">}</span>
+<span class="k">harness</span><span class="p">:</span> <span class="s">claude</span>               <span class="c"># only claude supplies the web tool</span>
+<span class="k">model</span><span class="p">:</span> <span class="s">sonnet</span>
+<mark data-f="budget"><span class="k">budget</span><span class="p">:</span> <span class="n">10</span>                    <span class="c"># stop before the next wave at $10</span></mark>
+<mark data-f="takes"><span class="k">takes</span><span class="p">:</span>
+  <span class="k">type</span><span class="p">:</span> <span class="s">object</span>
+  <span class="k">required</span><span class="p">:</span> <span class="p">[</span><span class="s">question</span><span class="p">]</span>
+  <span class="k">properties</span><span class="p">:</span> <span class="p">{</span> <span class="k">question</span><span class="p">:</span> <span class="p">{</span> <span class="k">type</span><span class="p">:</span> <span class="s">string</span> <span class="p">}</span> <span class="p">}</span></mark>
 
 <span class="k">steps</span><span class="p">:</span>
-  <span class="p">-</span> <span class="k">id</span><span class="p">:</span> <span class="s">plan</span>
+  <span class="p">-</span> <span class="k">id</span><span class="p">:</span> <span class="s">question</span>
     <span class="k">kind</span><span class="p">:</span> <span class="s">agent</span>
-    <span class="k">prompt</span><span class="p">:</span> <span class="s">prompts/plan.md</span>     <span class="c"># reads {{ question }}</span>
-    <span class="k">returns</span><span class="p">:</span> <span class="p">{</span> <span class="k">required</span><span class="p">:</span> <span class="p">[</span><span class="s">angles</span><span class="p">]</span> <span class="p">}</span>
+    <span class="k">prompt</span><span class="p">:</span> <span class="s">prompts/question.md</span>  <span class="c"># reads {{ question }}</span>
+    <span class="k">tools</span><span class="p">:</span> <span class="p">[</span><span class="p">]</span>
+    <span class="k">returns</span><span class="p">:</span>
+      <span class="k">type</span><span class="p">:</span> <span class="s">object</span>
+      <span class="k">properties</span><span class="p">:</span> <span class="p">{</span> <span class="k">angles</span><span class="p">:</span> <span class="p">{</span> <span class="k">type</span><span class="p">:</span> <span class="s">array</span> <span class="p">}</span> <span class="p">}</span>
 
-<mark data-f="fanout">  <span class="p">-</span> <span class="k">id</span><span class="p">:</span> <span class="s">read</span>
-    <span class="k">needs</span><span class="p">:</span> <span class="p">[</span><span class="s">plan</span><span class="p">]</span>
-    <span class="k">fanout</span><span class="p">:</span> <span class="p">{</span> <span class="k">over</span><span class="p">:</span> <span class="s">plan.angles</span><span class="p">,</span> <span class="k">as</span><span class="p">:</span> <span class="s">angle</span> <span class="p">}</span>  <span class="c"># three readers at once</span></mark>
-<mark data-f="mix">    <span class="k">harness</span><span class="p">:</span> <span class="s">pi</span>
-    <span class="k">model</span><span class="p">:</span> <span class="s">ollama/glm-5.2</span>        <span class="c"># a cheaper brain per member</span></mark>
+<mark data-f="fanout">  <span class="p">-</span> <span class="k">id</span><span class="p">:</span> <span class="s">reader</span>
+    <span class="k">kind</span><span class="p">:</span> <span class="s">agent</span>
+    <span class="k">needs</span><span class="p">:</span> <span class="p">[</span><span class="s">question</span><span class="p">]</span>
+    <span class="k">fanout</span><span class="p">:</span> <span class="p">{</span> <span class="k">step</span><span class="p">:</span> <span class="s">question</span><span class="p">,</span> <span class="k">key</span><span class="p">:</span> <span class="s">angles</span> <span class="p">}</span>  <span class="c"># one reader per angle</span></mark>
+    <span class="k">prompt</span><span class="p">:</span> <span class="s">prompts/read.md</span>
     <span class="k">tools</span><span class="p">:</span> <span class="p">[</span><span class="s">web</span><span class="p">]</span>
+    <span class="k">returns</span><span class="p">:</span>
+      <span class="k">type</span><span class="p">:</span> <span class="s">object</span>
+      <span class="k">properties</span><span class="p">:</span> <span class="p">{</span> <span class="k">sources</span><span class="p">:</span> <span class="p">{</span> <span class="k">type</span><span class="p">:</span> <span class="s">array</span> <span class="p">}</span> <span class="p">}</span>
+
+  <span class="p">-</span> <span class="k">id</span><span class="p">:</span> <span class="s">brief</span>
+    <span class="k">kind</span><span class="p">:</span> <span class="s">agent</span>
+    <span class="k">needs</span><span class="p">:</span> <span class="p">[</span><span class="s">reader</span><span class="p">]</span>
+<mark data-f="mix">    <span class="k">model</span><span class="p">:</span> <span class="s">opus</span>                 <span class="c"># the one step that earns the big model</span></mark>
+    <span class="k">prompt</span><span class="p">:</span> <span class="s">prompts/brief.md</span>
+    <span class="k">tools</span><span class="p">:</span> <span class="p">[</span><span class="s">write</span><span class="p">]</span>
+    <span class="k">returns</span><span class="p">:</span>
+      <span class="k">type</span><span class="p">:</span> <span class="s">object</span>
+      <span class="k">properties</span><span class="p">:</span> <span class="p">{</span> <span class="k">file</span><span class="p">:</span> <span class="p">{</span> <span class="k">type</span><span class="p">:</span> <span class="s">string</span> <span class="p">}</span> <span class="p">}</span>
 
   <span class="p">-</span> <span class="k">id</span><span class="p">:</span> <span class="s">check</span>
-    <span class="k">needs</span><span class="p">:</span> <span class="p">[</span><span class="s">read</span><span class="p">]</span>
+    <span class="k">kind</span><span class="p">:</span> <span class="s">agent</span>
+    <span class="k">needs</span><span class="p">:</span> <span class="p">[</span><span class="s">brief</span><span class="p">]</span>
+    <span class="k">prompt</span><span class="p">:</span> <span class="s">prompts/check.md</span>
+    <span class="k">tools</span><span class="p">:</span> <span class="p">[</span><span class="s">read</span><span class="p">,</span> <span class="s">web</span><span class="p">]</span>
 <mark data-f="changes">    <span class="k">changes</span><span class="p">:</span> <span class="s">nothing</span>            <span class="c"># reads the sources again, moves no file</span></mark>
-    <span class="k">returns</span><span class="p">:</span> <span class="p">{</span> <span class="k">required</span><span class="p">:</span> <span class="p">[</span><span class="s">solid</span><span class="p">]</span> <span class="p">}</span>
-<mark data-f="cycle">    <span class="k">cycle</span><span class="p">:</span> <span class="p">{</span> <span class="k">to</span><span class="p">:</span> <span class="s">read</span><span class="p">,</span> <span class="k">when</span><span class="p">:</span> <span class="p">{</span> <span class="k">solid</span><span class="p">:</span> <span class="b">false</span> <span class="p">},</span> <span class="k">limit</span><span class="p">:</span> <span class="n">2</span> <span class="p">}</span></mark>
+    <span class="k">returns</span><span class="p">:</span>
+      <span class="k">type</span><span class="p">:</span> <span class="s">object</span>
+      <span class="k">properties</span><span class="p">:</span> <span class="p">{</span> <span class="k">approved</span><span class="p">:</span> <span class="p">{</span> <span class="k">type</span><span class="p">:</span> <span class="s">boolean</span> <span class="p">}</span> <span class="p">}</span>
+<mark data-f="cycle">    <span class="k">cycle</span><span class="p">:</span> <span class="p">{</span> <span class="k">to</span><span class="p">:</span> <span class="s">brief</span><span class="p">,</span> <span class="k">when</span><span class="p">:</span> <span class="p">{</span> <span class="k">approved</span><span class="p">:</span> <span class="b">false</span> <span class="p">}</span><span class="p">,</span> <span class="k">limit</span><span class="p">:</span> <span class="n">2</span> <span class="p">}</span></mark>
 
 <mark data-f="gate">  <span class="p">-</span> <span class="k">id</span><span class="p">:</span> <span class="s">approve</span>
-    <span class="k">kind</span><span class="p">:</span> <span class="s">gate</span>                   <span class="c"># the run persists; a person answers</span>
-    <span class="k">needs</span><span class="p">:</span> <span class="p">[</span><span class="s">check</span><span class="p">]</span></mark></code></pre>
+    <span class="k">kind</span><span class="p">:</span> <span class="s">gate</span>                  <span class="c"># the run persists; a person answers</span>
+    <span class="k">needs</span><span class="p">:</span> <span class="p">[</span><span class="s">check</span><span class="p">]</span>
+    <span class="k">question</span><span class="p">:</span> <span class="s">Ship</span> <span class="s">the</span> <span class="s">brief?</span>
+    <span class="k">returns</span><span class="p">:</span>
+      <span class="k">type</span><span class="p">:</span> <span class="s">object</span>
+      <span class="k">properties</span><span class="p">:</span> <span class="p">{</span> <span class="k">ok</span><span class="p">:</span> <span class="p">{</span> <span class="k">type</span><span class="p">:</span> <span class="s">boolean</span> <span class="p">}</span> <span class="p">}</span></mark></code></pre>
     </div>
     <div class="legend" id="config-legend">
       <div class="item" data-f="budget"><b>A <code>budget</code> in dollars</b>
-        The run stops before the next step when it has spent it. Every attempt
-        counts, including the ones a cycle threw away.</div>
+        The run stops before the next wave when it has spent it. Every attempt
+        counts, including the ones a cycle threw away. A budget needs a harness
+        that reports a cost, so a flow on a free provider declares none.</div>
       <div class="item" data-f="takes"><b>What the flow <code>takes</code></b>
         <code>--with '{"question":"…"}'</code> is checked against this schema
         before the first step spends a token. A name nothing supplies fails at
@@ -637,8 +678,9 @@ footer a { color: var(--text-2); }
         One step runs once per member of a list an earlier step computed — a
         panel of reviewers is one block of YAML.</div>
       <div class="item" data-f="mix"><b>A harness and a model per step</b>
-        Code with one model, review with three others — <code>claude</code> and
-        <code>pi</code> side by side, local Ollama included.</div>
+        Read with a cheap model and keep the big one for the step that earns
+        it. A step names its own harness too, so <code>claude</code> and
+        <code>pi</code> run side by side, local Ollama included.</div>
       <div class="item" data-f="changes"><b>A promise: <code>changes</code></b>
         Bounds what a step may touch. The workspace record catches what
         <code>bash</code> does behind the tool list.</div>
@@ -801,19 +843,22 @@ footer a { color: var(--text-2); }
   <div class="reveal">
     <span class="eyebrow">install</span>
     <h2>Node 22.18+, no build step</h2>
-    <p class="lead">Node strips the types, so the source runs as it is. Orchy
-    is not on npm yet — install it from the repository.</p>
+    <p class="lead">Orchy is on npm as <code>@krimvp/orchy</code>, because the
+    bare name belongs to another package. From a clone it needs no build at
+    all: Node strips the types, so the source runs as it is.</p>
   </div>
   <div class="install reveal">
     <div class="win">
       <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="title">terminal</span>
         <span class="copybtn right"><button id="copy">copy</button></span></div>
-      <pre id="install-code"><code><span class="prompt">$ </span><span class="cmd">git clone https://github.com/krimvp/orchy && cd orchy && npm install</span>
-<span class="prompt">$ </span><span class="cmd">node src/cli.ts run flow.yaml --with '{"issue":412}'</span>
+      <pre id="install-code"><code><span class="prompt">$ </span><span class="cmd">npm install -g @krimvp/orchy</span>
+<span class="prompt">$ </span><span class="cmd">orchy run flow.yaml --with '{"issue":412}'</span>
+<span class="c"># or from a clone, which runs the TypeScript as it stands</span>
+<span class="prompt">$ </span><span class="cmd">git clone https://github.com/krimvp/orchy && cd orchy && npm install</span>
 <span class="c"># the daemon and the page</span>
 <span class="prompt">$ </span><span class="cmd">npm run ui:build && node src/cli.ts daemon</span>   <span class="c"># http://127.0.0.1:4000</span>
 <span class="c"># or hand the engine to an agent</span>
-<span class="prompt">$ </span><span class="cmd">claude mcp add orchy -- npx orchy mcp</span></code></pre>
+<span class="prompt">$ </span><span class="cmd">claude mcp add orchy -- npx @krimvp/orchy mcp</span></code></pre>
     </div>
   </div>
 </section>

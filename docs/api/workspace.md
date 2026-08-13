@@ -34,8 +34,13 @@ of the step.
   `{ kind: "git"; path: string }`. Tagged so that a remote sandbox becomes a
   new kind and not a change to the format (ADR 0006).
 
-- `Snapshot` — `{ head, files }`: the HEAD commit hash and a map from path
-  to its two-character porcelain status.
+- `Snapshot` — `{ head, files }`: the HEAD commit hash and a map from path to
+  its two-character porcelain status, a space, and a short hash of what the file
+  holds — `"M  1f0a8c3e5b7d9a2c"`, and the hash is empty for a rename and for a
+  path that git no longer reads, where the status characters carry the news.
+  `changed()` compares the whole string, so a second write to a file that
+  another step already changed is a change too, and not a status that stayed the
+  same.
 
 - `Change` — `{ path, how }`, where `how` is one of `"added"`, `"changed"`,
   `"deleted"`, `"renamed"`, `"restored"`, or `"moved"`. `"moved"` belongs to

@@ -10,6 +10,24 @@ named here.
 
 ## [Unreleased]
 
+### Fixed
+- The two flow files on the landing page now pass `validate()`. One fanned out
+  with a syntax Orchy has never had, both wrote a contract that Ajv refuses in
+  strict mode, and one asked `pi` for the `web` tool, which only `claude`
+  supplies.
+- The flow at the top of the README declared a `budget` beside a step on a free
+  provider, which reports no cost — a run Orchy refuses. It declares none now,
+  and the README says where a budget belongs.
+- `docs/running.md` said a provider whose prices are all zero reports a cost of
+  zero and never stops a budgeted run. It reports no cost, and it does stop one.
+- `docs/api/cli.md` said a waiting run exits `0`. It exits `3`.
+- ADR 0008 said the daemon never rewrites the state on disk. It writes one word
+  there: the `stopped` of a run no child drives.
+- `docs/api/workspace.md` described `Snapshot.files` as the porcelain status
+  alone. Each value also carries a short hash of what the file holds.
+- The docs called Orchy "not on npm yet", and registered the MCP server as
+  `npx orchy mcp`. The package is `@krimvp/orchy`.
+
 ## [0.0.1] - 2026-08-13
 
 The first release on npm, as `@krimvp/orchy`. The bare name `orchy` belongs to

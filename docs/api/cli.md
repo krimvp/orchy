@@ -47,11 +47,12 @@ a person, `—` run end), and the final `RunState` prints to stdout as pretty
 JSON. A run that ends `waiting` also prints the exact `orchy resume` command
 that would answer it.
 
-Exit codes: `0` when the run ends in any status but `failed` (a `waiting` run
-exits `0` — pausing is not failing), `1` on a failed run or a thrown error,
-`2` for a usage mistake or a refusal at the door — no command, an unknown
-harness or flag, values the flow refuses, a resume nothing takes — where
-nothing ran and nothing changed.
+Exit codes: `0` when the run ends `done` or `stopped`, `1` on a failed run or a
+thrown error, `2` for a usage mistake or a refusal at the door — no command, an
+unknown harness or flag, values the flow refuses, a resume nothing takes — where
+nothing ran and nothing changed, and `3` when the run ends `waiting`. A waiting
+run has its own code because pausing is not failing, and a script that reads the
+`3` knows a person owes it an answer.
 
 ## Exports
 

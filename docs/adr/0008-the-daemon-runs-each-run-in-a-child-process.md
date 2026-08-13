@@ -33,5 +33,8 @@ fault reaches the UI instead of a log that nobody reads.
 
 `stop` sends `SIGTERM` to the child. The state on disk keeps what the run
 reached. A run whose state says `running` when no child drives it is `stopped`,
-and the daemon says so. The daemon writes this to the index only. It never
-rewrites the state on disk, because that state is the run.
+and so is a run that waits at a gate and is abandoned. The daemon writes that
+status to the state on disk, because the state is the run, and a run that says
+`running` forever is a lie no index can correct on its own. Abandoning a gate
+clears its question with it. The daemon writes nothing else there: a run that a
+live child drives belongs to that child.

@@ -11,7 +11,6 @@ name: code-and-review
 workspace: { kind: git, path: . }
 harness: claude
 model: claude-opus-4-5
-budget: 5
 takes:
   type: object
   required: [issue]
@@ -54,12 +53,16 @@ orchy run flow.yaml --with '{"issue":412}'
 The flow takes the issue, and the prompt of the first step reads it as
 `{{ issue }}`. So one flow serves every issue, and a name that nothing supplies
 fails the step instead of sending a model to do the wrong work. The flow returns
-the value of the step it ends with, and the run stops before the next step when
-it has spent $5.
+the value of the step it ends with.
 
 One model writes the code. A different model on a different harness reviews it,
 reaches no tool that can change a file, and sends the work back until it
 approves or a person takes over.
+
+This flow declares no `budget`, because the reviewer runs on a free provider
+that reports no cost, and Orchy enforces no budget that it cannot measure. Add
+`budget: 5` to a flow whose harnesses report one, and the run stops before the
+next wave when it reaches it. See [research](./examples/research), which does.
 
 ## What Orchy guarantees
 
@@ -72,9 +75,11 @@ A prompt asks. Orchy enforces.
    `takes`, and the values that reach it must match that schema as well.
 3. **Order** — a step starts only after every step it needs passes.
 4. **Limit** — a cycle stops at its declared limit. A flow cannot run forever.
-   A flow declares a `budget` in dollars, and the run stops before the next step
-   when it reaches it. Every attempt counts, including the ones a cycle threw
-   away.
+   A flow declares a `budget` in dollars, and the run stops before the next wave
+   when it reaches it — the check falls between waves, because no one knows what
+   a step will cost before it runs. Every attempt counts, including the ones a
+   cycle threw away. A budget needs a cost that a harness reports: a run whose
+   spend Orchy cannot measure stops and says so.
 5. **Provenance** — Orchy records what each step changed in the workspace. A
    step that declares `changes: nothing`, `changes: { paths: [docs] }`, or
    `changes: { except: [src] }` fails when anything else moved. The record says
@@ -183,8 +188,9 @@ a mistake that would otherwise run to the end in silence.
 The command prints the events to the error stream and the run state to the
 output stream. It ends with 0 when the run finishes, 1 when the run fails, 2
 when the command or the flow it was given is wrong, and 3 when the run waits for
-a person. `--events` writes one JSON event for each line instead, which is how
-the daemon reads a run.
+a person. `--events` writes one JSON event for each line to the output stream
+instead, and prints no state there, so a parent process reads the events alone.
+That is how the daemon reads a run.
 
 `orchy check <flow file>` reads a flow, and every flow it holds, and says what
 is wrong with it. It runs nothing and spends nothing.
@@ -362,6 +368,10 @@ OpenAI-compatible endpoint goes in that file:
 That name is the one a flow writes: `model: ollama/glm-5.2`. Run
 `npx pi --list-models` to see what Pi reaches, and `npx pi auth check --provider
 <name>` to see whether it can reach it.
+
+A provider declared this way carries no price, so it reports no cost, and a flow
+that holds a step on it declares no `budget`. Orchy stops a run whose spend it
+cannot measure. See [docs/running.md](./docs/running.md#what-a-run-may-spend).
 
 **Claude Code** reads the account that `claude` is logged in to. A flow writes a
 plain name: `model: opus`.

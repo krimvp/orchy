@@ -66,7 +66,7 @@ a start past `starts.most` is refused with the count (ADR 0027).
 Register the door with Claude Code, from the directory the flows live in:
 
 ```sh
-claude mcp add orchy -- npx orchy mcp
+claude mcp add orchy -- npx @krimvp/orchy mcp
 ```
 
 The agent then holds the ten tools, and the guide tells it the loop: write
