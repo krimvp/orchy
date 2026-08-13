@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { type Flow, expandFlows, resolvePaths, validate } from "./flow.ts";
+import type { Workspace } from "./workspace.ts";
 import { parseFlow } from "./yaml.ts";
 
 /**
@@ -35,13 +36,21 @@ export async function readFlow(file: string, from = process.cwd()): Promise<Flow
  * `changes` — went through in silence. `chain` holds the files above this one,
  * so a flow that names itself is refused instead of loading for ever.
  */
-export async function loadFlow(file: string, from = process.cwd(), chain: string[] = []): Promise<Flow> {
+export async function loadFlow(
+  file: string,
+  from = process.cwd(),
+  chain: string[] = [],
+  workspace?: Workspace,
+): Promise<Flow> {
   const path = resolve(from, file);
   const directory = dirname(path);
   const flow = await readFlow(path);
   const seen = [...chain, path];
   const resolved = resolvePaths(flow, directory);
-  refuse(resolved, path);
+  // An inner flow may name no workspace and work in the one of the flow that
+  // includes it, so its promises are checked against the workspace it runs in.
+  const holds = resolved.workspace ?? workspace;
+  refuse(resolved.workspace === undefined && holds !== undefined ? { ...resolved, workspace: holds } : resolved, path);
   return expandFlows(resolved, (inner) => {
     const at = resolve(directory, inner);
     if (seen.includes(at)) {
@@ -49,7 +58,7 @@ export async function loadFlow(file: string, from = process.cwd(), chain: string
         `the flow at "${at}" is open already: ${[...seen, at].join(" → ")}. A flow cannot hold itself, and a chain of flows cannot come back to one it holds.`,
       );
     }
-    return loadFlow(inner, directory, seen);
+    return loadFlow(inner, directory, seen, holds);
   });
 }
 

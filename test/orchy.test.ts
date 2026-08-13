@@ -746,43 +746,48 @@ test("a cycle carries the value that sent the run back", async () => {
   assert.ok(!harness.seen[0]?.prompt.includes("approved"));
 });
 
-test("every example flow is valid", async () => {
-  // Reads the directory, so a new example is covered without touching this test.
-  const root = join(import.meta.dirname, "..", "examples");
-  const names = readdirSync(root, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name);
-  assert.ok(names.length >= 6);
+test("every example and shipped flow is valid", async () => {
+  // Reads the directories, so a new flow is covered without touching this test.
+  for (const kind of ["examples", "flows"]) {
+    const root = join(import.meta.dirname, "..", kind);
+    const names = readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+    assert.ok(names.length >= 6);
 
-  for (const name of names) {
-    for (const file of readdirSync(join(root, name)).filter((one) => /^flow\.(ts|ya?ml)$/.test(one))) {
-      const path = join(root, name, file);
-      const loaded = file.endsWith(".ts")
-        ? ((await import(path)).default as Flow)
-        : parseFlow(readFileSync(path, "utf8"));
-      const expanded = expandFanout(loaded);
-      assert.deepEqual(validate(expanded), [], `examples/${name}/${file} is not valid`);
+    for (const name of names) {
+      for (const file of readdirSync(join(root, name)).filter((one) => /^flow\.(ts|ya?ml)$/.test(one))) {
+        const path = join(root, name, file);
+        const loaded = file.endsWith(".ts")
+          ? ((await import(path)).default as Flow)
+          : parseFlow(readFileSync(path, "utf8"));
+        const expanded = expandFanout(loaded);
+        assert.deepEqual(validate(expanded), [], `${kind}/${name}/${file} is not valid`);
+      }
     }
   }
 });
 
-test("every path an example flow names exists, from any working directory", async () => {
+test("every example and shipped flow loads, and every path one names exists, from any working directory", async () => {
   // `validate()` opens no file, so it cannot answer this. A member that kept a
   // relative path passed every check and then failed in the middle of a run,
-  // anywhere but its own directory.
-  const root = join(import.meta.dirname, "..", "examples");
-  const names = readdirSync(root, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name);
+  // anywhere but its own directory. Loading also expands every inner flow, so
+  // a shipped flow that includes a fragment is checked the way a run reads it.
+  for (const kind of ["examples", "flows"]) {
+    const root = join(import.meta.dirname, "..", kind);
+    const names = readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
 
-  for (const name of names) {
-    for (const file of readdirSync(join(root, name)).filter((one) => /^flow\.(ts|ya?ml)$/.test(one))) {
-      // Loaded from a directory that holds none of it, which is how a run works.
-      const loaded = expandFanout(await loadFlow(join(root, name, file), tmpdir()));
-      for (const step of loaded.steps) {
-        const path = step.kind === "agent" ? step.prompt : step.kind === "call" ? step.module : undefined;
-        if (path === undefined) continue;
-        assert.ok(existsSync(path), `examples/${name}/${file}: step "${step.id}" names "${path}", which is not there`);
+    for (const name of names) {
+      for (const file of readdirSync(join(root, name)).filter((one) => /^flow\.(ts|ya?ml)$/.test(one))) {
+        // Loaded from a directory that holds none of it, which is how a run works.
+        const loaded = expandFanout(await loadFlow(join(root, name, file), tmpdir()));
+        for (const step of loaded.steps) {
+          const path = step.kind === "agent" ? step.prompt : step.kind === "call" ? step.module : undefined;
+          if (path === undefined) continue;
+          assert.ok(existsSync(path), `${kind}/${name}/${file}: step "${step.id}" names "${path}", which is not there`);
+        }
       }
     }
   }
@@ -4136,6 +4141,45 @@ test("a file is checked before it is expanded, so a field on a flow step cannot 
   );
 
   await assert.rejects(() => loadFlow(join(cwd, "outer.yaml")), /holds "when", which a flow step cannot act on/);
+});
+
+test("an inner flow with a promise and no workspace is checked in the workspace of the flow that holds it", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "orchy-inner-promise-"));
+  // The fragment promises what it changes and names no workspace, because the
+  // flow that includes it names one. Standing alone it is refused, since alone
+  // there is no workspace to check the promise against.
+  writeFileSync(
+    join(cwd, "inner.yaml"),
+    [
+      "name: inner",
+      "steps:",
+      "  - id: one",
+      "    kind: call",
+      "    needs: []",
+      "    module: m.ts",
+      "    changes: nothing",
+      "    returns:",
+      "      type: object",
+      "",
+    ].join("\n"),
+  );
+  writeFileSync(
+    join(cwd, "outer.yaml"),
+    [
+      "name: outer",
+      "workspace: { kind: git, path: . }",
+      "steps:",
+      "  - id: sub",
+      "    kind: flow",
+      "    needs: []",
+      "    flow: inner.yaml",
+      "",
+    ].join("\n"),
+  );
+
+  const loaded = await loadFlow(join(cwd, "outer.yaml"));
+  assert.deepEqual(validate(loaded), []);
+  await assert.rejects(() => loadFlow(join(cwd, "inner.yaml")), /no workspace to check it/);
 });
 
 test("an inner flow that returns a value under its own contract is refused, not quietly dropped", async () => {
