@@ -255,6 +255,7 @@ h2 { margin: 10px 0 0; font-size: clamp(24px, 3.4vw, 34px); letter-spacing: -0.0
 .card h3 { margin: 8px 0 8px; font-size: 16px; }
 .card h3 code { color: var(--accent); font-size: 14px; }
 .card p { margin: 0; font-size: 13px; color: var(--text-2); }
+.card p + p { margin-top: 10px; }
 .card.wide { grid-column: span 2; }
 @media (max-width: 640px) { .card.wide { grid-column: span 1; } }
 
@@ -832,8 +833,14 @@ footer a { color: var(--text-2); }
     <div class="card reveal">
       <h3>An agent drives Orchy too</h3>
       <p><code>orchy mcp</code> serves the same engine over the Model Context
-      Protocol — a coding agent writes flows, hears every problem from
-      <code>validate()</code>, runs them, and answers a gate.</p>
+      Protocol, as ten tools: a coding agent writes a flow, hears every problem
+      from <code>validate()</code>, runs it, follows it, and answers a gate. A
+      flow that does not validate is refused at the write, with every problem
+      named, so a broken one never runs.</p>
+      <p>A step reaches that door too, by declaring the <code>orchy</code> tool
+      — and <code>starts</code> bounds what it may start: which flow files, and
+      how many runs. The door counts from the state on disk, so a model cannot
+      talk its way past the bound.</p>
     </div>
   </div>
 </section>

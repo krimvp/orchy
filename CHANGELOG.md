@@ -10,6 +10,11 @@ named here.
 
 ## [Unreleased]
 
+### Changed
+- The landing page says what `orchy mcp` gives an agent — ten tools, and a flow
+  refused at the write when it does not validate — and that a step reaches the
+  same door with the `orchy` tool, under the bound that `starts` declares.
+
 ### Fixed
 - The two flow files on the landing page now pass `validate()`. One fanned out
   with a syntax Orchy has never had, both wrote a contract that Ajv refuses in
