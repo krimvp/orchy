@@ -1,0 +1,974 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Orchy — run agent flows</title>
+<meta name="description" content="Orchy runs agent flows. You declare the steps and the rules. Orchy runs the steps, enforces the rules, and records what each step did." />
+<meta property="og:title" content="Orchy — run agent flows" />
+<meta property="og:description" content="A prompt asks. Orchy enforces. Compose agent flows, enforce the rules, and record what each step did." />
+<meta property="og:type" content="website" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230e0f11'/%3E%3Ccircle cx='10' cy='16' r='4' fill='none' stroke='%237fa9d6' stroke-width='2'/%3E%3Ccircle cx='23' cy='16' r='4' fill='none' stroke='%238fb573' stroke-width='2'/%3E%3Cpath d='M14 16h5' stroke='%23d7d9de' stroke-width='2'/%3E%3C/svg%3E" />
+<style>
+/* ============================================================
+   Orchy landing — same tokens as the product UI, one register.
+   ============================================================ */
+:root {
+  --void: #0a0a0b;
+  --bg: #0e0f11;
+  --bg-2: #151619;
+  --surface: #131417;
+  --surface-2: #191b1f;
+  --raised: rgba(255, 255, 255, 0.045);
+  --hairline: rgba(255, 255, 255, 0.085);
+  --hairline-2: rgba(255, 255, 255, 0.16);
+  --text: #d7d9de;
+  --text-2: rgba(215, 217, 222, 0.72);
+  --text-3: rgba(215, 217, 222, 0.55);
+  --accent: #7fa9d6;
+  --green: #8fb573;
+  --red: #d97066;
+  --orange: #d3a04c;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 18px 48px rgba(0, 0, 0, 0.55);
+  --r-sm: 4px; --r-md: 6px; --r-lg: 10px; --r-win: 14px;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", "JetBrains Mono",
+    "Cascadia Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; background: var(--void); }
+body {
+  margin: 0;
+  min-height: 100dvh;
+  background: var(--void);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 14px;
+  line-height: 1.6;
+  font-variant-ligatures: none;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+::selection { background: rgba(127, 169, 214, 0.28); }
+
+/* ---------- backdrop: grid + aurora ---------- */
+.backdrop {
+  position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  overflow: hidden;
+}
+.backdrop .grid {
+  position: absolute; inset: -2px;
+  background-image:
+    linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px);
+  background-size: 56px 56px;
+  mask-image: radial-gradient(120% 70% at 50% 0%, #000 30%, transparent 78%);
+  -webkit-mask-image: radial-gradient(120% 70% at 50% 0%, #000 30%, transparent 78%);
+}
+.aurora { position: absolute; border-radius: 50%; filter: blur(90px); opacity: .5; }
+.aurora.a { width: 60vw; height: 42vh; left: -12vw; top: -14vh;
+  background: radial-gradient(closest-side, rgba(127,169,214,.32), transparent 70%);
+  animation: drift-a 26s var(--ease) infinite alternate; }
+.aurora.b { width: 46vw; height: 38vh; right: -10vw; top: -8vh;
+  background: radial-gradient(closest-side, rgba(143,181,115,.20), transparent 70%);
+  animation: drift-b 32s var(--ease) infinite alternate; }
+.aurora.c { width: 34vw; height: 30vh; left: 34vw; top: 6vh;
+  background: radial-gradient(closest-side, rgba(211,160,76,.12), transparent 70%);
+  animation: drift-c 38s var(--ease) infinite alternate; }
+@keyframes drift-a { to { transform: translate(9vw, 6vh) scale(1.12); } }
+@keyframes drift-b { to { transform: translate(-7vw, 9vh) scale(0.94); } }
+@keyframes drift-c { to { transform: translate(-10vw, -4vh) scale(1.18); } }
+
+/* a beam that travels the top hairline of the page, Inspira style */
+.beam {
+  position: fixed; top: 0; left: 0; right: 0; height: 1px; z-index: 5;
+  background: linear-gradient(90deg, transparent,
+    rgba(127,169,214,.0) 20%, rgba(127,169,214,.9) 50%,
+    rgba(127,169,214,.0) 80%, transparent);
+  background-size: 50% 100%; background-repeat: no-repeat;
+  animation: beam 7s linear infinite; opacity: .7; pointer-events: none;
+}
+@keyframes beam { 0% { background-position: -60% 0; } 100% { background-position: 160% 0; } }
+
+/* ---------- layout ---------- */
+.wrap { position: relative; z-index: 1; max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+section { padding: 96px 0 0; scroll-margin-top: 40px; }
+footer { padding: 88px 0 56px; }
+
+/* top bar */
+nav {
+  position: sticky; top: 0; z-index: 10;
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  background: rgba(10,10,11,0.7);
+  border-bottom: 1px solid var(--hairline);
+}
+nav .row {
+  max-width: 1080px; margin: 0 auto; padding: 0 24px;
+  display: flex; align-items: center; gap: 20px; height: 52px;
+}
+.brand { display: flex; align-items: center; gap: 10px; color: var(--text); font-weight: 600; letter-spacing: .04em; }
+.brand:hover { text-decoration: none; }
+.brand svg { display: block; }
+nav .links { margin-left: auto; display: flex; gap: 18px; font-size: 12.5px; }
+nav .links a { color: var(--text-2); }
+nav .links a:hover { color: var(--text); text-decoration: none; }
+
+/* ---------- hero ---------- */
+.hero { padding: 92px 0 0; text-align: center; }
+.badge {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 12px; color: var(--text-2);
+  border: 1px solid var(--hairline-2); border-radius: 999px;
+  padding: 5px 14px; background: var(--raised);
+  animation: rise .7s var(--ease) both;
+}
+.badge .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green);
+  box-shadow: 0 0 8px var(--green); animation: pulse 2s ease-in-out infinite; }
+h1 {
+  margin: 26px auto 0; max-width: 820px;
+  font-size: clamp(34px, 6vw, 62px); line-height: 1.12;
+  letter-spacing: -0.02em; font-weight: 700;
+  animation: rise .7s var(--ease) .08s both;
+}
+h1 .ask { color: var(--text-3); }
+h1 .enforce {
+  background: linear-gradient(100deg, var(--accent), #b8d4f0 30%, var(--green) 65%, var(--accent));
+  background-size: 220% 100%;
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  animation: shimmer 6s linear infinite;
+}
+@keyframes shimmer { to { background-position: -220% 0; } }
+.sub {
+  margin: 22px auto 0; max-width: 640px; color: var(--text-2);
+  font-size: clamp(14px, 1.6vw, 16.5px);
+  animation: rise .7s var(--ease) .16s both;
+}
+.cta { margin-top: 34px; display: flex; gap: 14px; justify-content: center; flex-wrap: wrap;
+  animation: rise .7s var(--ease) .24s both; }
+.btn {
+  display: inline-flex; align-items: center; gap: 9px;
+  padding: 11px 22px; border-radius: var(--r-md);
+  font-family: var(--mono); font-size: 13.5px; cursor: pointer;
+  border: 1px solid var(--hairline-2); color: var(--text);
+  background: var(--raised); transition: all .25s var(--ease);
+}
+.btn:hover { border-color: var(--accent); box-shadow: 0 0 24px rgba(127,169,214,.22); text-decoration: none; transform: translateY(-1px); }
+.btn.primary {
+  background: linear-gradient(135deg, rgba(127,169,214,.18), rgba(143,181,115,.12));
+  border-color: rgba(127,169,214,.5);
+}
+.btn code { color: var(--accent); }
+@keyframes rise { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: none; } }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+
+/* ---------- hero stage: yaml + live graph + terminal ---------- */
+.stage {
+  margin-top: 64px; display: grid; grid-template-columns: 1.05fr .95fr; gap: 18px;
+  text-align: left; animation: rise .8s var(--ease) .34s both;
+}
+@media (max-width: 900px) { .stage { grid-template-columns: 1fr; } }
+.win {
+  background: rgba(14,15,17,0.86); border: 1px solid var(--hairline);
+  border-radius: var(--r-win); box-shadow: var(--shadow); overflow: hidden;
+  backdrop-filter: blur(6px);
+}
+.win .bar {
+  display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 14px;
+  background: var(--bg-2); border-bottom: 1px solid var(--hairline);
+  font-size: 12px; color: var(--text-3);
+}
+.win .bar .dots { display: flex; gap: 6px; }
+.win .bar .dots i { width: 10px; height: 10px; border-radius: 50%; background: var(--raised); border: 1px solid var(--hairline-2); }
+.win .bar .title { margin-left: 6px; }
+.win .bar .right { margin-left: auto; font-size: 11px; }
+pre { margin: 0; padding: 18px 20px; font-size: 12.5px; line-height: 1.62; overflow-x: auto; }
+pre::-webkit-scrollbar { height: 8px; } pre::-webkit-scrollbar-thumb { background: var(--raised); border-radius: 4px; }
+.k { color: var(--accent); } .s { color: var(--green); } .n { color: var(--orange); }
+.c { color: var(--text-3); } .p { color: var(--text-2); } .b { color: var(--red); }
+.hl { background: rgba(127,169,214,.10); outline: 1px solid rgba(127,169,214,.18); border-radius: 3px; padding: 0 3px; margin: 0 -3px; }
+
+/* the live graph */
+.graphwin .body { padding: 10px 8px 2px; }
+.graph-svg { width: 100%; height: auto; display: block; }
+.node-box { fill: var(--surface-2); stroke: var(--hairline-2); rx: 8; transition: stroke .4s var(--ease); }
+.node.running .node-box { stroke: var(--accent); filter: drop-shadow(0 0 7px rgba(127,169,214,.55)); animation: nodepulse 1.6s ease-in-out infinite; }
+.node.done .node-box { stroke: var(--green); }
+.node.failed .node-box { stroke: var(--red); }
+@keyframes nodepulse { 0%,100% { stroke-opacity: 1; } 50% { stroke-opacity: .45; } }
+.node text { fill: var(--text); font-family: var(--mono); font-size: 13px; }
+.node .meta { fill: var(--text-3); font-size: 10.5px; }
+.node .state { font-size: 10.5px; }
+.node.running .state { fill: var(--accent); }
+.node.done .state { fill: var(--green); }
+.node.failed .state { fill: var(--red); }
+.node.idle .state { fill: var(--text-3); }
+.edge { stroke: var(--hairline-2); stroke-width: 1.5; fill: none; transition: stroke .4s; }
+.edge.active { stroke: var(--accent); stroke-dasharray: 6 6; animation: flow 0.8s linear infinite; }
+.edge.cycling { stroke: var(--orange); stroke-dasharray: 6 6; animation: flow 0.8s linear infinite; }
+@keyframes flow { to { stroke-dashoffset: -12; } }
+.edge-label { fill: var(--text-3); font-family: var(--mono); font-size: 10px; }
+.edge-label.cycling { fill: var(--orange); }
+
+/* terminal */
+.term { grid-column: 1 / -1; }
+.term pre { min-height: 172px; }
+.term .prompt { color: var(--text-3); }
+.term .cmd { color: var(--text); }
+.caret { display: inline-block; width: 7px; height: 14px; background: var(--text-2);
+  vertical-align: -2px; animation: caret 1s steps(1) infinite; }
+@keyframes caret { 50% { opacity: 0; } }
+.ev { display: block; opacity: 0; transform: translateY(4px); transition: all .45s var(--ease); }
+.ev.on { opacity: 1; transform: none; }
+.ev .tag { display: inline-block; min-width: 66px; }
+.t-run { color: var(--accent); } .t-done { color: var(--green); }
+.t-fail { color: var(--red); } .t-cycle { color: var(--orange); }
+
+/* ---------- section headers ---------- */
+.eyebrow { font-size: 12px; letter-spacing: .18em; text-transform: uppercase; color: var(--accent); }
+h2 { margin: 10px 0 0; font-size: clamp(24px, 3.4vw, 34px); letter-spacing: -0.015em; line-height: 1.2; }
+.lead { margin: 14px 0 0; max-width: 640px; color: var(--text-2); font-size: 15px; }
+
+/* reveal on scroll */
+.reveal { opacity: 0; transform: translateY(26px); transition: opacity .8s var(--ease), transform .8s var(--ease); }
+.reveal.in { opacity: 1; transform: none; }
+
+/* ---------- guarantee cards (spotlight) ---------- */
+.cards { margin-top: 38px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+@media (max-width: 900px) { .cards { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 640px) { .cards { grid-template-columns: 1fr; } }
+.card {
+  position: relative; border: 1px solid var(--hairline); border-radius: var(--r-lg);
+  background: rgba(19,20,23,0.75); padding: 22px; overflow: hidden;
+}
+.card::before {
+  content: ""; position: absolute; inset: 0; border-radius: inherit;
+  background: radial-gradient(360px circle at var(--mx, 50%) var(--my, 50%),
+    rgba(127,169,214,.13), transparent 42%);
+  opacity: 0; transition: opacity .35s var(--ease); pointer-events: none;
+}
+.card:hover::before { opacity: 1; }
+.card:hover { border-color: var(--hairline-2); }
+.card .num { font-size: 11px; color: var(--text-3); letter-spacing: .1em; }
+.card h3 { margin: 8px 0 8px; font-size: 16px; }
+.card h3 code { color: var(--accent); font-size: 14px; }
+.card p { margin: 0; font-size: 13px; color: var(--text-2); }
+.card.wide { grid-column: span 2; }
+@media (max-width: 640px) { .card.wide { grid-column: span 1; } }
+
+/* ---------- how it works pipeline ---------- */
+.pipe { margin-top: 40px; }
+.pipe .win pre { font-size: 12px; }
+.pipe-svg { width: 100%; height: auto; display: block; }
+.pipe-box { fill: var(--surface-2); stroke: var(--hairline-2); }
+.pipe-svg text { fill: var(--text); font-family: var(--mono); font-size: 12px; }
+.pipe-svg .dim { fill: var(--text-3); font-size: 10.5px; }
+.pipe-edge { stroke: var(--hairline-2); stroke-width: 1.5; fill: none; }
+.pipe-svg .marching { stroke: var(--accent); stroke-dasharray: 5 6; animation: flow 1s linear infinite; }
+.notes { margin-top: 26px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+@media (max-width: 820px) { .notes { grid-template-columns: 1fr; } }
+.note { border-left: 2px solid rgba(127,169,214,.4); padding: 2px 0 2px 16px; font-size: 13px; color: var(--text-2); }
+.note b { color: var(--text); display: block; margin-bottom: 4px; font-weight: 600; }
+
+/* ---------- config section ---------- */
+.config-grid { margin-top: 38px; display: grid; grid-template-columns: 1.15fr .85fr; gap: 20px; align-items: start; }
+@media (max-width: 900px) { .config-grid { grid-template-columns: 1fr; } }
+.legend { display: flex; flex-direction: column; gap: 4px; }
+.legend .item {
+  border: 1px solid transparent; border-radius: var(--r-md);
+  padding: 12px 14px; cursor: pointer; transition: all .3s var(--ease);
+  font-size: 13px; color: var(--text-2);
+}
+.legend .item b { color: var(--text); display: block; font-weight: 600; margin-bottom: 2px; }
+.legend .item b code { color: var(--accent); }
+.legend .item.on { border-color: rgba(127,169,214,.35); background: rgba(127,169,214,.07); }
+.configwin mark {
+  background: transparent; color: inherit; border-radius: 3px;
+  transition: background .3s var(--ease), box-shadow .3s var(--ease);
+  padding: 1px 2px; margin: -1px -2px;
+}
+.configwin mark.lit { background: rgba(127,169,214,.14); box-shadow: 0 0 0 1px rgba(127,169,214,.3); }
+
+/* ---------- UI showcase ---------- */
+.ui-grid { margin-top: 38px; display: grid; grid-template-columns: 1fr; gap: 18px; }
+.uiwin .body { padding: 0; }
+.ui-cols { display: grid; grid-template-columns: 250px 1fr; min-height: 320px; }
+@media (max-width: 760px) { .ui-cols { grid-template-columns: 1fr; } }
+.ui-side { border-right: 1px solid var(--hairline); padding: 14px 0; background: var(--surface); }
+@media (max-width: 760px) { .ui-side { display: flex; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--hairline); } }
+.ui-run { display: flex; align-items: center; gap: 10px; padding: 9px 16px; font-size: 12px; color: var(--text-2); white-space: nowrap; }
+.ui-run.sel { background: var(--raised); color: var(--text); box-shadow: inset 2px 0 0 var(--accent); }
+.st { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.st.done { background: var(--green); } .st.failed { background: var(--red); }
+.st.running { background: var(--accent); box-shadow: 0 0 8px var(--accent); animation: pulse 1.6s ease-in-out infinite; }
+.st.waiting { background: var(--orange); }
+.ui-main { padding: 18px 20px; }
+.ui-main h4 { margin: 0 0 4px; font-size: 13px; font-weight: 600; }
+.ui-main .dim { color: var(--text-3); font-size: 11.5px; }
+.ui-steps { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
+.ui-step {
+  display: flex; align-items: center; gap: 12px; padding: 10px 14px;
+  border: 1px solid var(--hairline); border-radius: var(--r-md);
+  background: var(--surface-2); font-size: 12.5px;
+}
+.ui-step .cost { margin-left: auto; color: var(--text-3); font-size: 11.5px; }
+.ui-step .live { color: var(--text-3); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40%; }
+.gate {
+  margin-top: 14px; border: 1px solid rgba(211,160,76,.4); border-radius: var(--r-md);
+  background: rgba(211,160,76,.06); padding: 14px 16px;
+}
+.gate .q { font-size: 12.5px; color: var(--text); }
+.gate .form { margin-top: 10px; display: flex; gap: 10px; flex-wrap: wrap; }
+.chip {
+  border: 1px solid var(--hairline-2); border-radius: var(--r-sm);
+  background: var(--raised); color: var(--text); font-family: var(--mono);
+  font-size: 12px; padding: 6px 14px; cursor: pointer; transition: all .25s var(--ease);
+}
+.chip:hover { border-color: var(--orange); }
+.chip.ok:hover { border-color: var(--green); box-shadow: 0 0 12px rgba(143,181,115,.25); }
+.ui-points { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+@media (max-width: 820px) { .ui-points { grid-template-columns: 1fr; } }
+
+/* ---------- examples marquee + cards ---------- */
+.marquee { margin-top: 34px; overflow: hidden;
+  mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent); }
+.marquee .track { display: flex; gap: 12px; width: max-content; animation: marquee 36s linear infinite; }
+.marquee:hover .track { animation-play-state: paused; }
+@keyframes marquee { to { transform: translateX(-50%); } }
+.mcard {
+  flex: none; width: 280px; border: 1px solid var(--hairline); border-radius: var(--r-lg);
+  background: rgba(19,20,23,0.8); padding: 16px 18px; transition: border-color .3s;
+}
+.mcard:hover { border-color: rgba(127,169,214,.4); text-decoration: none; }
+.mcard b { display: block; color: var(--text); font-size: 13.5px; }
+.mcard span { display: block; margin-top: 6px; color: var(--text-2); font-size: 12px; line-height: 1.5; }
+.mcard .tagrow { margin-top: 10px; display: flex; gap: 6px; flex-wrap: wrap; }
+.mtag { font-size: 10.5px; color: var(--text-3); border: 1px solid var(--hairline); border-radius: 999px; padding: 2px 8px; }
+
+/* ---------- achieve strip ---------- */
+.achieve { margin-top: 38px; display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+@media (max-width: 760px) { .achieve { grid-template-columns: 1fr; } }
+
+/* ---------- install ---------- */
+.install { margin-top: 38px; }
+.install .win pre { font-size: 13px; }
+.copybtn { margin-left: auto; }
+.copybtn button {
+  background: none; border: 1px solid var(--hairline-2); color: var(--text-2);
+  border-radius: var(--r-sm); font-family: var(--mono); font-size: 11px;
+  padding: 3px 10px; cursor: pointer; transition: all .25s;
+}
+.copybtn button:hover { color: var(--text); border-color: var(--accent); }
+
+footer { text-align: center; color: var(--text-3); font-size: 12.5px; }
+footer .fin { margin-top: 10px; }
+footer a { color: var(--text-2); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+  .reveal { opacity: 1; transform: none; }
+  .ev { opacity: 1; transform: none; }
+}
+</style>
+</head>
+<body>
+
+<div class="backdrop" aria-hidden="true">
+  <div class="grid"></div>
+  <div class="aurora a"></div>
+  <div class="aurora b"></div>
+  <div class="aurora c"></div>
+</div>
+<div class="beam" aria-hidden="true"></div>
+
+<nav>
+  <div class="row">
+    <a class="brand" href="#">
+      <svg width="20" height="20" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#151619"/><circle cx="10" cy="16" r="4" fill="none" stroke="#7fa9d6" stroke-width="2"/><circle cx="23" cy="16" r="4" fill="none" stroke="#8fb573" stroke-width="2"/><path d="M14 16h5" stroke="#d7d9de" stroke-width="2"/></svg>
+      orchy
+    </a>
+    <div class="links">
+      <a href="#guarantees">guarantees</a>
+      <a href="#how">how it works</a>
+      <a href="#config">the flow file</a>
+      <a href="#ui">the page</a>
+      <a href="#examples">examples</a>
+      <a href="https://github.com/krimvp/orchy">github ↗</a>
+    </div>
+  </div>
+</nav>
+
+<!-- ================= HERO ================= -->
+<header class="hero wrap">
+  <span class="badge"><span class="dot"></span> orchy · runs agent flows</span>
+  <h1><span class="ask">A prompt asks.</span><br /><span class="enforce">Orchy enforces.</span></h1>
+  <p class="sub">
+    You declare the steps and the rules. Orchy runs the steps, enforces the
+    rules, and records what each step did. A coding agent is good at one step
+    and poor at a long one — so Orchy holds the control flow, and gives each
+    step one job, one tool list, and one contract.
+  </p>
+  <div class="cta">
+    <a class="btn primary" href="https://github.com/krimvp/orchy">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+      krimvp/orchy
+    </a>
+    <a class="btn" href="#install"><code>$</code> git clone &amp; run</a>
+  </div>
+
+  <!-- live stage: the flow file, the run, the events -->
+  <div class="stage">
+    <div class="win">
+      <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="title">flow.yaml</span><span class="right">the whole flow</span></div>
+      <pre><code><span class="k">name</span><span class="p">:</span> <span class="s">code-and-review</span>
+<span class="k">harness</span><span class="p">:</span> <span class="s">claude</span>      <span class="c"># or pi — mix per step</span>
+<span class="k">model</span><span class="p">:</span> <span class="s">claude-opus-4-5</span>
+<span class="k">budget</span><span class="p">:</span> <span class="n">5</span>            <span class="c"># dollars, hard stop</span>
+<span class="k">takes</span><span class="p">:</span> <span class="p">{</span> <span class="k">required</span><span class="p">:</span> <span class="p">[</span><span class="s">issue</span><span class="p">]</span> <span class="p">}</span>
+
+<span class="k">steps</span><span class="p">:</span>
+  <span class="p">-</span> <span class="k">id</span><span class="p">:</span> <span class="s">code</span>
+    <span class="k">kind</span><span class="p">:</span> <span class="s">agent</span>
+    <span class="k">prompt</span><span class="p">:</span> <span class="s">prompts/code.md</span>   <span class="c"># reads {{ issue }}</span>
+    <span class="k">tools</span><span class="p">:</span> <span class="p">[</span><span class="s">read</span><span class="p">,</span> <span class="s">write</span><span class="p">,</span> <span class="s">edit</span><span class="p">,</span> <span class="s">grep</span><span class="p">]</span>
+
+  <span class="p">-</span> <span class="k">id</span><span class="p">:</span> <span class="s">review</span>
+    <span class="k">needs</span><span class="p">:</span> <span class="p">[</span><span class="s">code</span><span class="p">]</span>
+    <span class="k">harness</span><span class="p">:</span> <span class="s">pi</span>
+    <span class="k">model</span><span class="p">:</span> <span class="s">ollama/glm-5.2</span>  <span class="c"># another brain reviews</span>
+    <span class="k">tools</span><span class="p">:</span> <span class="p">[</span><span class="s">read</span><span class="p">,</span> <span class="s">grep</span><span class="p">]</span>
+    <span class="k">changes</span><span class="p">:</span> <span class="s">nothing</span>       <span class="c"># it may move no file</span>
+    <span class="k">returns</span><span class="p">:</span> <span class="p">{</span> <span class="k">required</span><span class="p">:</span> <span class="p">[</span><span class="s">approved</span><span class="p">,</span> <span class="s">findings</span><span class="p">]</span> <span class="p">}</span>
+    <span class="k">cycle</span><span class="p">:</span> <span class="p">{</span> <span class="k">to</span><span class="p">:</span> <span class="s">code</span><span class="p">,</span> <span class="k">when</span><span class="p">:</span> <span class="p">{</span> <span class="k">approved</span><span class="p">:</span> <span class="b">false</span> <span class="p">},</span> <span class="k">limit</span><span class="p">:</span> <span class="n">3</span> <span class="p">}</span></code></pre>
+    </div>
+
+    <div class="win graphwin">
+      <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="title">run · code-and-review</span><span class="right" id="graph-status">wave 1</span></div>
+      <div class="body">
+        <svg class="graph-svg" viewBox="0 0 460 300" role="img" aria-label="Animated run of the code and review flow: the code step runs, review rejects it once, the cycle sends it back, then both pass.">
+          <!-- edges -->
+          <path id="e-in"    class="edge" d="M 60 60 L 60 96" />
+          <path id="e-fwd"   class="edge" d="M 150 150 C 210 150 230 150 290 150" />
+          <path id="e-cycle" class="edge" d="M 355 190 C 355 250 105 250 80 196" />
+          <path id="e-out"   class="edge" d="M 420 150 L 452 150" />
+          <text class="edge-label" x="70" y="80">--with '{"issue":412}'</text>
+          <text id="cycle-label" class="edge-label" x="150" y="266">cycle · when approved: false · limit 3</text>
+          <text class="edge-label" x="330" y="84">returns { approved }</text>
+
+          <!-- code node -->
+          <g id="node-code" class="node idle">
+            <rect class="node-box" x="20" y="100" width="130" height="96" rx="8" />
+            <text x="36" y="128">code</text>
+            <text class="meta" x="36" y="148">claude · opus</text>
+            <text class="meta" x="36" y="164">read write edit</text>
+            <text class="state" x="36" y="184" data-state>waiting</text>
+          </g>
+
+          <!-- review node -->
+          <g id="node-review" class="node idle">
+            <rect class="node-box" x="290" y="100" width="130" height="96" rx="8" />
+            <text x="306" y="128">review</text>
+            <text class="meta" x="306" y="148">pi · glm-5.2</text>
+            <text class="meta" x="306" y="164">changes: nothing</text>
+            <text class="state" x="306" y="184" data-state>waiting</text>
+          </g>
+        </svg>
+      </div>
+    </div>
+
+    <div class="win term">
+      <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="title">terminal</span><span class="right">events on stderr · state on stdout</span></div>
+      <pre><code><span class="prompt">$ </span><span class="cmd" id="typed"></span><span class="caret" id="caret"></span>
+<span id="events"></span></code></pre>
+    </div>
+  </div>
+</header>
+
+<!-- ================= GUARANTEES ================= -->
+<section id="guarantees" class="wrap">
+  <div class="reveal">
+    <span class="eyebrow">five invariants</span>
+    <h2>What Orchy guarantees</h2>
+    <p class="lead">Every rule is enforced by the runner, not requested by the
+    prompt. <code>validate()</code> refuses a rule it cannot check, so a rule
+    never looks enforced when it is not.</p>
+  </div>
+  <div class="cards">
+    <div class="card reveal">
+      <span class="num">01</span>
+      <h3>Tools</h3>
+      <p>A step calls only the tools it declares. A harness refuses a tool it
+      cannot supply — it never drops one in silence.</p>
+    </div>
+    <div class="card reveal">
+      <span class="num">02</span>
+      <h3>Contract</h3>
+      <p>The value of a step must match its JSON Schema. A step that answers
+      something else fails. The rule works both ways: what reaches a step must
+      match what it <code>takes</code>.</p>
+    </div>
+    <div class="card reveal">
+      <span class="num">03</span>
+      <h3>Order</h3>
+      <p>A step starts only after every step it <code>needs</code> passes.
+      Everything whose needs have passed runs in the same wave, in parallel.</p>
+    </div>
+    <div class="card reveal">
+      <span class="num">04</span>
+      <h3>Limit</h3>
+      <p>A cycle stops at its declared limit, and a flow declares a
+      <code>budget</code> in dollars. A flow cannot run forever, and every
+      attempt counts — including the ones a cycle threw away.</p>
+    </div>
+    <div class="card wide reveal">
+      <span class="num">05</span>
+      <h3>Provenance</h3>
+      <p>Orchy records what each step changed in the workspace. A step that
+      promises <code>changes: nothing</code> — or <code>changes: { paths: [docs] }</code> —
+      fails when anything else moved. This catches what <code>bash</code> does behind
+      rule one: the record says what happened to each path — added, changed,
+      deleted, renamed, restored, or moved.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ================= HOW IT WORKS ================= -->
+<section id="how" class="wrap">
+  <div class="reveal">
+    <span class="eyebrow">how it works</span>
+    <h2>A flow is data, not code</h2>
+    <p class="lead">So the TypeScript API, a YAML file, and the graphical editor
+    all produce the same flow — and one flat pipeline runs it.</p>
+  </div>
+  <div class="pipe reveal">
+    <div class="win">
+      <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="title">the pipeline</span></div>
+      <div class="body" style="padding: 18px 12px 8px;">
+        <svg class="pipe-svg" viewBox="0 0 980 200" role="img" aria-label="Three sources — the TypeScript API, a YAML file, and the graphical editor — produce one flow, which is expanded, validated, run in waves, and recorded; the daemon serves it as a queue, an API, and a page.">
+          <g>
+            <rect class="pipe-box" x="10"  y="14"  width="150" height="34" rx="6"/><text x="30" y="36">TypeScript API</text>
+            <rect class="pipe-box" x="10"  y="62"  width="150" height="34" rx="6"/><text x="42" y="84">YAML file</text>
+            <rect class="pipe-box" x="10"  y="110" width="150" height="34" rx="6"/><text x="26" y="132">Graphical editor</text>
+          </g>
+          <path class="pipe-edge marching" d="M 160 31  C 200 31 200 79 236 79"/>
+          <path class="pipe-edge marching" d="M 160 79  L 236 79"/>
+          <path class="pipe-edge marching" d="M 160 127 C 200 127 200 79 236 79"/>
+          <rect class="pipe-box" x="236" y="60" width="130" height="38" rx="6"/><text x="256" y="84">Flow <tspan class="dim">(data)</tspan></text>
+          <path class="pipe-edge marching" d="M 366 79 L 402 79"/>
+          <rect class="pipe-box" x="402" y="60" width="96" height="38" rx="6"/><text x="422" y="84">expand</text>
+          <path class="pipe-edge marching" d="M 498 79 L 528 79"/>
+          <rect class="pipe-box" x="528" y="60" width="104" height="38" rx="6"/><text x="546" y="84">validate</text>
+          <path class="pipe-edge marching" d="M 632 79 L 662 79"/>
+          <rect class="pipe-box" x="662" y="60" width="90" height="38" rx="6"/><text x="684" y="84">waves</text>
+          <path class="pipe-edge marching" d="M 752 79 L 782 79"/>
+          <rect class="pipe-box" x="782" y="60" width="92" height="38" rx="6"/><text x="802" y="84">record</text>
+          <path class="pipe-edge marching" d="M 828 98 L 828 128 L 560 128 L 560 148"/>
+          <rect class="pipe-box" x="404" y="148" width="312" height="38" rx="6"/>
+          <text x="424" y="172">orchy daemon <tspan class="dim">— a queue, an API, a page</tspan></text>
+        </svg>
+      </div>
+    </div>
+    <div class="notes">
+      <div class="note reveal"><b>A run is a state machine on disk.</b>
+        It writes its state after every step, so a gate and a crash recover the
+        same way — and <code>orchy resume</code> continues either one, even in CI.</div>
+      <div class="note reveal"><b>Each run is a child process.</b>
+        The daemon starts <code>orchy run</code> per run and indexes what it
+        writes. A run that hangs or dies takes nothing with it; four run at once.</div>
+      <div class="note reveal"><b>The record is a standard.</b>
+        One ATIF v1.7 trajectory per run holds the tool calls, the reasoning,
+        the tokens, and the cost of every step — including the attempts a cycle
+        threw away.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= CONFIGURATION ================= -->
+<section id="config" class="wrap">
+  <div class="reveal">
+    <span class="eyebrow">the flow file</span>
+    <h2>One file holds the whole contract</h2>
+    <p class="lead">Hover a rule to see where it lives. The same flow writes as
+    YAML, as TypeScript with typed contracts, or as a drawing in the editor —
+    a test keeps them the same.</p>
+  </div>
+  <div class="config-grid reveal">
+    <div class="win configwin">
+      <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="title">research/flow.yaml</span></div>
+      <pre id="config-code"><code><span class="k">name</span><span class="p">:</span> <span class="s">research</span>
+<mark data-f="budget"><span class="k">budget</span><span class="p">:</span> <span class="n">2</span>                     <span class="c"># stop before the next step at $2</span></mark>
+<mark data-f="takes"><span class="k">takes</span><span class="p">:</span> <span class="p">{</span> <span class="k">required</span><span class="p">:</span> <span class="p">[</span><span class="s">question</span><span class="p">]</span> <span class="p">}</span></mark>
+
+<span class="k">steps</span><span class="p">:</span>
+  <span class="p">-</span> <span class="k">id</span><span class="p">:</span> <span class="s">plan</span>
+    <span class="k">kind</span><span class="p">:</span> <span class="s">agent</span>
+    <span class="k">prompt</span><span class="p">:</span> <span class="s">prompts/plan.md</span>     <span class="c"># reads {{ question }}</span>
+    <span class="k">returns</span><span class="p">:</span> <span class="p">{</span> <span class="k">required</span><span class="p">:</span> <span class="p">[</span><span class="s">angles</span><span class="p">]</span> <span class="p">}</span>
+
+<mark data-f="fanout">  <span class="p">-</span> <span class="k">id</span><span class="p">:</span> <span class="s">read</span>
+    <span class="k">needs</span><span class="p">:</span> <span class="p">[</span><span class="s">plan</span><span class="p">]</span>
+    <span class="k">fanout</span><span class="p">:</span> <span class="p">{</span> <span class="k">over</span><span class="p">:</span> <span class="s">plan.angles</span><span class="p">,</span> <span class="k">as</span><span class="p">:</span> <span class="s">angle</span> <span class="p">}</span>  <span class="c"># three readers at once</span></mark>
+<mark data-f="mix">    <span class="k">harness</span><span class="p">:</span> <span class="s">pi</span>
+    <span class="k">model</span><span class="p">:</span> <span class="s">ollama/glm-5.2</span>        <span class="c"># a cheaper brain per member</span></mark>
+    <span class="k">tools</span><span class="p">:</span> <span class="p">[</span><span class="s">web</span><span class="p">]</span>
+
+  <span class="p">-</span> <span class="k">id</span><span class="p">:</span> <span class="s">check</span>
+    <span class="k">needs</span><span class="p">:</span> <span class="p">[</span><span class="s">read</span><span class="p">]</span>
+<mark data-f="changes">    <span class="k">changes</span><span class="p">:</span> <span class="s">nothing</span>            <span class="c"># reads the sources again, moves no file</span></mark>
+    <span class="k">returns</span><span class="p">:</span> <span class="p">{</span> <span class="k">required</span><span class="p">:</span> <span class="p">[</span><span class="s">solid</span><span class="p">]</span> <span class="p">}</span>
+<mark data-f="cycle">    <span class="k">cycle</span><span class="p">:</span> <span class="p">{</span> <span class="k">to</span><span class="p">:</span> <span class="s">read</span><span class="p">,</span> <span class="k">when</span><span class="p">:</span> <span class="p">{</span> <span class="k">solid</span><span class="p">:</span> <span class="b">false</span> <span class="p">},</span> <span class="k">limit</span><span class="p">:</span> <span class="n">2</span> <span class="p">}</span></mark>
+
+<mark data-f="gate">  <span class="p">-</span> <span class="k">id</span><span class="p">:</span> <span class="s">approve</span>
+    <span class="k">kind</span><span class="p">:</span> <span class="s">gate</span>                   <span class="c"># the run persists; a person answers</span>
+    <span class="k">needs</span><span class="p">:</span> <span class="p">[</span><span class="s">check</span><span class="p">]</span></mark></code></pre>
+    </div>
+    <div class="legend" id="config-legend">
+      <div class="item" data-f="budget"><b>A <code>budget</code> in dollars</b>
+        The run stops before the next step when it has spent it. Every attempt
+        counts, including the ones a cycle threw away.</div>
+      <div class="item" data-f="takes"><b>What the flow <code>takes</code></b>
+        <code>--with '{"question":"…"}'</code> is checked against this schema
+        before the first step spends a token. A name nothing supplies fails at
+        the door.</div>
+      <div class="item" data-f="fanout"><b>A <code>fanout</code></b>
+        One step runs once per member of a list an earlier step computed — a
+        panel of reviewers is one block of YAML.</div>
+      <div class="item" data-f="mix"><b>A harness and a model per step</b>
+        Code with one model, review with three others — <code>claude</code> and
+        <code>pi</code> side by side, local Ollama included.</div>
+      <div class="item" data-f="changes"><b>A promise: <code>changes</code></b>
+        Bounds what a step may touch. The workspace record catches what
+        <code>bash</code> does behind the tool list.</div>
+      <div class="item" data-f="cycle"><b>A <code>cycle</code></b>
+        Sends the work back until it passes, at most <code>limit</code> times.
+        A retry is just a cycle to the step itself, on the word
+        <code>failed</code>.</div>
+      <div class="item" data-f="gate"><b>A <code>gate</code></b>
+        Stops the run and waits for a person. The process ends, the run
+        persists, and <code>orchy resume</code> answers it — so a flow works in
+        CI.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= THE UI ================= -->
+<section id="ui" class="wrap">
+  <div class="reveal">
+    <span class="eyebrow">the daemon and the page</span>
+    <h2>Watch every run, answer every gate</h2>
+    <p class="lead"><code>orchy daemon</code> holds a queue, starts each run as
+    a child process, and serves a page: nearly monochrome, four state colours,
+    and motion that says state and nothing else.</p>
+  </div>
+  <div class="ui-grid">
+    <div class="win uiwin reveal">
+      <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="title">orchy · 127.0.0.1:4000</span><span class="right">your move</span></div>
+      <div class="body">
+        <div class="ui-cols">
+          <div class="ui-side">
+            <div class="ui-run"><span class="st running"></span> code-and-review · issue 42</div>
+            <div class="ui-run sel"><span class="st waiting"></span> research · "is sqlite enough"</div>
+            <div class="ui-run"><span class="st done"></span> code-and-review · issue 41</div>
+            <div class="ui-run"><span class="st done"></span> release-notes · v0.1.0</div>
+            <div class="ui-run"><span class="st failed"></span> docs-audit</div>
+          </div>
+          <div class="ui-main">
+            <h4>research</h4>
+            <div class="dim">took { "question": "is sqlite enough" } · $1.34 of $2.00</div>
+            <div class="ui-steps">
+              <div class="ui-step"><span class="st done"></span> plan <span class="live">returned 3 angles</span><span class="cost">$0.21</span></div>
+              <div class="ui-step"><span class="st done"></span> read[0..2] <span class="live">three readers, one wave</span><span class="cost">$0.87</span></div>
+              <div class="ui-step"><span class="st done"></span> check <span class="live">solid: true · changes: nothing ✓</span><span class="cost">$0.26</span></div>
+              <div class="ui-step"><span class="st waiting"></span> approve <span class="live">gate — waiting for you</span><span class="cost">—</span></div>
+            </div>
+            <div class="gate">
+              <div class="q">approve · a form built from the gate's contract</div>
+              <div class="form">
+                <button class="chip ok" id="gate-yes">approved: true</button>
+                <button class="chip" id="gate-no">approved: false ↩ cycle</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="ui-points">
+      <div class="note reveal"><b>Read everything, live.</b> Watch each step as
+        it runs, read what it says while it works, then open the full
+        trajectory — tool calls, reasoning, tokens, cost — of every run of
+        every step.</div>
+      <div class="note reveal"><b>Edit a flow as a drawing.</b> The editor reads
+        your YAML, draws it, and writes the same file back. It refuses to write
+        a flow that <code>validate()</code> rejects.</div>
+      <div class="note reveal"><b>Runs start themselves.</b> A schedule fires a
+        flow on a pace, and a hook starts it from a POST. Both pass the same
+        checked door as the button, and a notification says when a run waits
+        for you.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= EXAMPLES ================= -->
+<section id="examples" class="wrap">
+  <div class="reveal">
+    <span class="eyebrow">what you can build</span>
+    <h2>Eight flows ship in the repo</h2>
+    <p class="lead">A test checks every one of them, and CI runs the tests on
+    every push — so a broken example fails the build.</p>
+  </div>
+
+  <div class="marquee reveal" aria-label="Example flows">
+    <div class="track" id="mtrack">
+      <a class="mcard" href="https://github.com/krimvp/orchy/tree/main/examples/code-review">
+        <b>code-review</b><span>One model writes the code, another reviews it
+        with no tool that can change a file, and a cycle sends it back until it
+        approves.</span>
+        <div class="tagrow"><span class="mtag">cycle</span><span class="mtag">two harnesses</span></div>
+      </a>
+      <a class="mcard" href="https://github.com/krimvp/orchy/tree/main/examples/research">
+        <b>research</b><span>Three readers on the web at once, a budget in
+        dollars, and a check that reads every source again before it lets the
+        answer through.</span>
+        <div class="tagrow"><span class="mtag">fanout</span><span class="mtag">web</span><span class="mtag">budget</span></div>
+      </a>
+      <a class="mcard" href="https://github.com/krimvp/orchy/tree/main/examples/triage">
+        <b>triage</b><span>An agent sorts the pile, a gate lets a person
+        override it, and no workspace exists at all.</span>
+        <div class="tagrow"><span class="mtag">gate</span><span class="mtag">no workspace</span></div>
+      </a>
+      <a class="mcard" href="https://github.com/krimvp/orchy/tree/main/examples/release-notes">
+        <b>release-notes</b><span>A deterministic step reads git, so no model
+        spends tokens on what a command already knows.</span>
+        <div class="tagrow"><span class="mtag">component</span><span class="mtag">deterministic</span></div>
+      </a>
+      <a class="mcard" href="https://github.com/krimvp/orchy/tree/main/examples/decision">
+        <b>decision</b><span>Three fixed stances argue the same question, then
+        a person chooses. Disagreement by design.</span>
+        <div class="tagrow"><span class="mtag">panel</span><span class="mtag">gate</span></div>
+      </a>
+      <a class="mcard" href="https://github.com/krimvp/orchy/tree/main/examples/dependency-audit">
+        <b>dependency-audit</b><span>One prompt over a list, a value every
+        member supplies, a retry, and a step a condition rules out.</span>
+        <div class="tagrow"><span class="mtag">fanout</span><span class="mtag">retry</span><span class="mtag">condition</span></div>
+      </a>
+      <a class="mcard" href="https://github.com/krimvp/orchy/tree/main/examples/docs-audit">
+        <b>docs-audit</b><span>One promise on the flow — and the workspace
+        checks it on every step, whatever the prompts say.</span>
+        <div class="tagrow"><span class="mtag">provenance</span></div>
+      </a>
+      <a class="mcard" href="https://github.com/krimvp/orchy/tree/main/examples/grilling">
+        <b>grilling</b><span>A gate asks a person a round of questions, over
+        and over, until the answers hold up.</span>
+        <div class="tagrow"><span class="mtag">gate</span><span class="mtag">cycle</span></div>
+      </a>
+    </div>
+  </div>
+
+  <div class="achieve">
+    <div class="card reveal">
+      <h3>Adversarial review, for real</h3>
+      <p>The reviewer runs on a different harness and a different model, reaches
+      no tool that can change a file, and its <code>approved: false</code> is a
+      machine-checked value — not a vibe in a transcript. Escalate to a person
+      at the limit.</p>
+    </div>
+    <div class="card reveal">
+      <h3>Unattended, but bounded</h3>
+      <p>A schedule or a webhook starts the flow, the budget caps the spend,
+      the cycle caps the loops, and a gate holds anything irreversible until a
+      person answers — from the page, or <code>orchy resume</code> in CI.</p>
+    </div>
+    <div class="card reveal">
+      <h3>Cheap where it can be</h3>
+      <p>Fan a prompt out over a list with a local model, keep the expensive
+      model for the one step that earns it, and let a plain command do what
+      needs no model at all.</p>
+    </div>
+    <div class="card reveal">
+      <h3>An agent drives Orchy too</h3>
+      <p><code>orchy mcp</code> serves the same engine over the Model Context
+      Protocol — a coding agent writes flows, hears every problem from
+      <code>validate()</code>, runs them, and answers a gate.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ================= INSTALL ================= -->
+<section id="install" class="wrap">
+  <div class="reveal">
+    <span class="eyebrow">install</span>
+    <h2>Node 22.18+, no build step</h2>
+    <p class="lead">Node strips the types, so the source runs as it is. Orchy
+    is not on npm yet — install it from the repository.</p>
+  </div>
+  <div class="install reveal">
+    <div class="win">
+      <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="title">terminal</span>
+        <span class="copybtn right"><button id="copy">copy</button></span></div>
+      <pre id="install-code"><code><span class="prompt">$ </span><span class="cmd">git clone https://github.com/krimvp/orchy && cd orchy && npm install</span>
+<span class="prompt">$ </span><span class="cmd">node src/cli.ts run flow.yaml --with '{"issue":412}'</span>
+<span class="c"># the daemon and the page</span>
+<span class="prompt">$ </span><span class="cmd">npm run ui:build && node src/cli.ts daemon</span>   <span class="c"># http://127.0.0.1:4000</span>
+<span class="c"># or hand the engine to an agent</span>
+<span class="prompt">$ </span><span class="cmd">claude mcp add orchy -- npx orchy mcp</span></code></pre>
+    </div>
+  </div>
+</section>
+
+<footer class="wrap">
+  <div>orchy · MIT license · <a href="https://github.com/krimvp/orchy">github.com/krimvp/orchy</a></div>
+  <div class="fin">A rule never looks enforced when it is not.</div>
+</footer>
+
+<script>
+(() => {
+  const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* ---------- reveal on scroll ---------- */
+  const io = new IntersectionObserver((es) => {
+    for (const e of es) if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); }
+  }, { threshold: 0.12 });
+  document.querySelectorAll(".reveal").forEach((el) => io.observe(el));
+
+  /* ---------- spotlight cards ---------- */
+  document.querySelectorAll(".card").forEach((card) => {
+    card.addEventListener("pointermove", (ev) => {
+      const r = card.getBoundingClientRect();
+      card.style.setProperty("--mx", (ev.clientX - r.left) + "px");
+      card.style.setProperty("--my", (ev.clientY - r.top) + "px");
+    });
+  });
+
+  /* ---------- config hover: legend <-> yaml ---------- */
+  const marks = document.querySelectorAll("#config-code mark");
+  const items = document.querySelectorAll("#config-legend .item");
+  const light = (f, on) => {
+    marks.forEach((m) => m.classList.toggle("lit", on && m.dataset.f === f));
+    items.forEach((i) => i.classList.toggle("on", on && i.dataset.f === f));
+  };
+  const bind = (el) => {
+    el.addEventListener("pointerenter", () => light(el.dataset.f, true));
+    el.addEventListener("pointerleave", () => light(el.dataset.f, false));
+  };
+  items.forEach(bind); marks.forEach(bind);
+  /* idle tour of the legend until the visitor touches it */
+  let touched = false, tour = 0;
+  items.forEach((i) => i.addEventListener("pointerenter", () => { touched = true; }));
+  if (!reduced) {
+    const keys = [...items].map((i) => i.dataset.f);
+    setInterval(() => {
+      if (touched) return;
+      light(keys[tour % keys.length], false);
+      tour++;
+      light(keys[tour % keys.length], true);
+    }, 2600);
+    light(keys[0], true);
+  }
+
+  /* ---------- copy button ---------- */
+  const copyBtn = document.getElementById("copy");
+  copyBtn?.addEventListener("click", () => {
+    navigator.clipboard.writeText(
+      "git clone https://github.com/krimvp/orchy && cd orchy && npm install"
+    ).then(() => { copyBtn.textContent = "copied"; setTimeout(() => (copyBtn.textContent = "copy"), 1400); });
+  });
+
+  /* ---------- gate buttons (a wink, not a backend) ---------- */
+  const gate = document.querySelector(".gate .q");
+  document.getElementById("gate-yes")?.addEventListener("click", () => {
+    gate.textContent = 'orchy resume <run id> \'{"approved":true}\' — the run continues';
+  });
+  document.getElementById("gate-no")?.addEventListener("click", () => {
+    gate.textContent = "approved: false — the cycle sends the work back to read";
+  });
+
+  /* ---------- the live run: graph + terminal, one scripted loop ---------- */
+  const $ = (id) => document.getElementById(id);
+  const nodes = { code: $("node-code"), review: $("node-review") };
+  const edges = { in: $("e-in"), fwd: $("e-fwd"), cycle: $("e-cycle"), out: $("e-out") };
+  const cycleLabel = $("cycle-label");
+  const status = $("graph-status");
+  const typedEl = $("typed"), caret = $("caret"), eventsEl = $("events");
+  const CMD = "orchy run flow.yaml --with '{\"issue\":412}'";
+
+  const setNode = (n, state, label) => {
+    nodes[n].setAttribute("class", "node " + state);
+    nodes[n].querySelector("[data-state]").textContent = label;
+  };
+  const setEdge = (e, cls) => edges[e].setAttribute("class", "edge" + (cls ? " " + cls : ""));
+
+  const line = (tag, cls, rest) => {
+    const s = document.createElement("span");
+    s.className = "ev";
+    s.innerHTML = '<span class="tag ' + cls + '">' + tag + "</span> " + rest;
+    eventsEl.appendChild(s);
+    requestAnimationFrame(() => requestAnimationFrame(() => s.classList.add("on")));
+  };
+
+  /* the script: what a real run of the hero flow does */
+  const script = [
+    { t: 0,    do: () => { eventsEl.innerHTML = ""; status.textContent = "wave 1";
+        setNode("code", "idle", "waiting"); setNode("review", "idle", "waiting");
+        setEdge("in", "active"); setEdge("fwd"); setEdge("cycle"); setEdge("out");
+        cycleLabel.classList.remove("cycling"); } },
+    { t: 600,  do: () => { setEdge("in"); setNode("code", "running", "running · $0.00");
+        line("run", "t-run", "code — claude · opus"); } },
+    { t: 2600, do: () => { setNode("code", "done", "passed · $0.87");
+        line("done", "t-done", 'code — { "summary": "…" } · $0.87'); } },
+    { t: 3200, do: () => { status.textContent = "wave 2"; setEdge("fwd", "active");
+        setNode("review", "running", "running · $0.00");
+        line("run", "t-run", "review — pi · glm-5.2 · changes: nothing"); } },
+    { t: 5200, do: () => { setEdge("fwd"); setNode("review", "failed", "approved: false");
+        line("fail", "t-fail", 'review — { "approved": false, "findings": [2] }'); } },
+    { t: 5800, do: () => { setEdge("cycle", "cycling"); cycleLabel.classList.add("cycling");
+        status.textContent = "cycle 1 of 3";
+        line("cycle", "t-cycle", "review → code — when { approved: false } · 1 of 3"); } },
+    { t: 7000, do: () => { setEdge("cycle"); cycleLabel.classList.remove("cycling");
+        setNode("code", "running", "running again"); setNode("review", "idle", "waiting");
+        line("run", "t-run", "code — attempt 2, the findings in hand"); } },
+    { t: 9000, do: () => { setNode("code", "done", "passed · $1.42"); setEdge("fwd", "active");
+        setNode("review", "running", "running"); status.textContent = "wave 2 · again";
+        line("run", "t-run", "review — reads the diff again"); } },
+    { t: 11000, do: () => { setEdge("fwd"); setEdge("out", "active");
+        setNode("review", "done", "approved: true");
+        line("done", "t-done", 'review — { "approved": true, "findings": [] }'); } },
+    { t: 11800, do: () => { status.textContent = "finished · $2.31 of $5.00"; setEdge("out");
+        line("done", "t-done", 'flow — returns { "approved": true } · exit 0'); } },
+  ];
+  const LOOP = 15000;
+
+  let started = false;
+  const runLoop = () => {
+    script.forEach((s) => setTimeout(s.do, s.t));
+  };
+  const type = (i) => {
+    if (i <= CMD.length) {
+      typedEl.textContent = CMD.slice(0, i);
+      setTimeout(() => type(i + 1), 26 + Math.random() * 40);
+    } else {
+      caret.style.display = "none";
+      runLoop();
+      setInterval(runLoop, LOOP);
+    }
+  };
+  if (reduced) {
+    typedEl.textContent = CMD; caret.style.display = "none";
+    script.forEach((s) => s.do());
+    /* leave the finished state on screen */
+  } else {
+    const heroIO = new IntersectionObserver((es) => {
+      if (es.some((e) => e.isIntersecting) && !started) { started = true; type(0); heroIO.disconnect(); }
+    }, { threshold: 0.3 });
+    heroIO.observe(document.querySelector(".stage"));
+  }
+
+  /* ---------- marquee: duplicate the track for a seamless loop ---------- */
+  const track = document.getElementById("mtrack");
+  track.innerHTML += track.innerHTML;
+})();
+</script>
+</body>
+</html>
