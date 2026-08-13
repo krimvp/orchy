@@ -10,6 +10,8 @@ named here.
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-08-13
+
 ### Added
 - A third harness adapter: `droid`, the coding agent of Factory. A flow writes
   `harness: droid` and the id droid reads, as
