@@ -28,7 +28,10 @@ const TOOLS: Record<ToolName, string[]> = {
   orchy: ["mcp__orchy"],
 };
 
-const CLI = join(import.meta.dirname, "cli.ts");
+// Orchy runs from source as TypeScript and from a published copy as JavaScript,
+// so a file it starts or loads takes the extension it is running under itself.
+const EXT = import.meta.filename.endsWith(".ts") ? ".ts" : ".js";
+const CLI = join(import.meta.dirname, `cli${EXT}`);
 
 interface Answer {
   subtype?: string;

@@ -37,6 +37,10 @@ import { type Change, type Snapshot, changed, take } from "./workspace.ts";
 
 const version = String(createRequire(import.meta.url)("../package.json").version);
 
+// Orchy runs from source as TypeScript and from a published copy as JavaScript,
+// so a file it starts or loads takes the extension it is running under itself.
+const EXT = import.meta.filename.endsWith(".ts") ? ".ts" : ".js";
+
 function contractProblem(step: Step, value: unknown): string | undefined {
   if (step.kind === "flow") return `step "${step.id}" is a flow that no one expanded`;
   const problem = schemaProblem(step.returns, value);
@@ -1156,7 +1160,7 @@ async function callModule(
   // A shipped component lives with Orchy, so its name is not a path. ADR 0026.
   const named = String(step.module);
   const path = named.startsWith("orchy:")
-    ? join(import.meta.dirname, "components", `${named.slice("orchy:".length)}.ts`)
+    ? join(import.meta.dirname, "components", `${named.slice("orchy:".length)}${EXT}`)
     : resolve(cwd, named);
   let module: { default?: unknown };
   try {

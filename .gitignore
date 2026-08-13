@@ -2,3 +2,4 @@ node_modules/
 .orchy/
 .probe/
 ui/dist/
+dist/
