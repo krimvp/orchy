@@ -10,7 +10,7 @@ named here.
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-08-13
+## [0.0.1] - 2026-08-13
 
 The first release on npm, as `@krimvp/orchy`. The bare name `orchy` belongs to
 another package, so the scope carries it; the command the package installs is
