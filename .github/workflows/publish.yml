@@ -1,0 +1,165 @@
+name: Publish to npm
+
+# Publishes @krimvp/orchy to the npm registry. The release is what starts it:
+# you publish a GitHub Release and this workflow derives the version from the
+# tag, checks the tree, builds the UI, and publishes. You never run npm version
+# or npm publish by hand.
+#
+#   GitHub UI: Releases -> "Draft a new release" -> set tag vX.Y.Z -> Publish.
+#   CLI:       gh release create vX.Y.Z --generate-notes
+#
+# It also runs from the Actions tab (workflow_dispatch) with the version given
+# by hand.
+#
+# After a publish, the `sync-version` job opens a PR that bumps package.json on
+# main to the released version, so the repo's version keeps step with npm.
+#
+# One-time setup (see .github/workflows/README.md):
+#   1. NPM_TOKEN     — an npm Automation token that may publish the package.
+#   2. RELEASE_TOKEN — a fine-grained PAT with contents + pull-requests write on
+#      this repository, so the sync PR runs CI. Optional: without it the release
+#      still publishes and only the sync PR is skipped.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to publish, such as 1.2.3, with no leading "v".
+        required: true
+
+concurrency:
+  group: publish-${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # npm provenance signs with this
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.18'
+          registry-url: https://registry.npmjs.org
+          cache: npm
+
+      # The release tag, such as v1.2.3, says which version this is. A manual
+      # run says it in the input instead.
+      - name: Resolve the version from the release tag
+        id: ver
+        run: |
+          RAW="${{ github.event.release.tag_name }}"
+          [ -n "$RAW" ] || RAW="${{ github.event.inputs.version }}"
+          VERSION="${RAW#v}"
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+].+)?$'; then
+            echo "::error::No valid semver version in '$RAW'."
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Publishing version $VERSION"
+
+      # A release nobody can read the notes of is a release nobody can use.
+      - name: Require a CHANGELOG.md entry for this version
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          if ! grep -q "^## \[$VERSION\]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md holds no '## [$VERSION]' entry — move the [Unreleased] lines under '## [$VERSION] - $(date +%F)' and release again."
+            exit 1
+          fi
+
+      - run: npm ci
+
+      - name: Check the types
+        run: npm run check
+
+      - name: Test
+        run: npm test
+
+      # The runner alone carries this version; main catches up through the PR
+      # that the sync-version job opens.
+      - name: Stamp the version
+        run: npm version "${{ steps.ver.outputs.version }}" --no-git-tag-version --allow-same-version
+
+      # The tarball holds dist, the compiled source, and ui/dist, the page the
+      # daemon serves. Git carries neither. The `prepack` script builds them
+      # again at publish time; this step stands here so a break fails under its
+      # own name rather than inside the publish.
+      - name: Build
+        run: |
+          npm run ui:build
+          npm run build
+          test -f ui/dist/index.html || { echo "::error::ui/dist/index.html is missing after ui:build."; exit 1; }
+          test -f dist/cli.js || { echo "::error::dist/cli.js is missing after build."; exit 1; }
+
+      - name: Publish
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # Bring main's package.json up to what was published. It uses RELEASE_TOKEN, a
+  # PAT, because a PR that the built-in GITHUB_TOKEN opens starts no workflow,
+  # so it would sit forever behind its required checks.
+  sync-version:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Look for RELEASE_TOKEN
+        id: gate
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          if [ -z "$RELEASE_TOKEN" ]; then
+            echo "::warning::RELEASE_TOKEN is not set — skipping the package.json sync PR. See .github/workflows/README.md."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out main
+        if: steps.gate.outputs.skip != 'true'
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          token: ${{ secrets.RELEASE_TOKEN }}
+
+      - uses: actions/setup-node@v7
+        if: steps.gate.outputs.skip != 'true'
+        with:
+          node-version: '22.18'
+
+      - name: Open the package.json sync PR
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          VERSION: ${{ needs.publish.outputs.version }}
+        run: |
+          CURRENT="$(node -p "require('./package.json').version")"
+          if [ "$CURRENT" = "$VERSION" ]; then
+            echo "package.json already stands at $VERSION — nothing to sync."
+            exit 0
+          fi
+          BRANCH="chore/sync-version-$VERSION"
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            echo "Branch $BRANCH exists — the sync PR is open already."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$BRANCH"
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          git commit -aqm "chore: sync package.json to $VERSION"
+          git push -u origin "$BRANCH"
+          gh pr create --base main --head "$BRANCH" \
+            --title "chore: sync package.json to $VERSION" \
+            --body "Automated: brings \`package.json\` to the published \`v$VERSION\` release, so the repository's version keeps step with npm. Merge once CI is green." \
+            || echo "::notice::Could not open the sync PR — bump package.json by hand."
+          gh pr merge "$BRANCH" --auto --squash \
+            || echo "::notice::Could not turn on auto-merge — merge the sync PR by hand once CI passes."

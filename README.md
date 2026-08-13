@@ -191,7 +191,7 @@ is wrong with it. It runs nothing and spends nothing.
 
 `orchy mcp` serves the Model Context Protocol on stdin and stdout, so a coding
 agent writes flows, hears every problem from `validate()`, runs them, and
-answers a gate. Register it with `claude mcp add orchy -- npx orchy mcp`. See
+answers a gate. Register it with `claude mcp add orchy -- npx @krimvp/orchy mcp`. See
 [docs/running.md](./docs/running.md#drive-orchy-from-an-agent).
 
 A `prompt` path and a `module` path are relative to the flow file. The working
@@ -309,16 +309,29 @@ gate and a crash recover the same way.
 
 ## Install
 
-Orchy needs Node 22.18 or later. Node strips the types, so there is no build
-step.
+Orchy needs Node 22.18 or later.
 
-Orchy is not on npm yet, and another package already holds the name. Install it
-from this repository.
+```bash
+npm install -g @krimvp/orchy
+orchy run flow.yaml
+```
+
+The bare name `orchy` on npm belongs to another package, so the scope carries
+this one. The command it installs is still `orchy`, and
+`npx @krimvp/orchy run flow.yaml` runs it without an install.
+
+From this repository instead. Node strips the types, so a clone needs no build
+to run:
 
 ```bash
 git clone https://github.com/krimvp/orchy && cd orchy && npm install
 node src/cli.ts run flow.yaml
 ```
+
+The published package holds JavaScript, because Node strips the types of a file
+it runs but refuses to strip the types of one under `node_modules`. So `npm run
+build` compiles `src` to `dist` before a publish, and a clone still runs the
+TypeScript as it stands.
 
 A run needs `ajv`, `yaml`, and the Pi SDK. Add `@sinclair/typebox` only to
 write a flow in TypeScript. A flow in YAML holds plain JSON Schema and needs
@@ -369,10 +382,17 @@ Node calls it experimental and prints a warning when it starts.
 ```bash
 npm test        # every test, with node --test
 npm run check   # the compiler
+npm run build   # compile src to dist, as a publish does
 ```
 
 CI runs both, and the page build, on every push to main and on every merge
 request. See [.github/workflows/ci.yml](./.github/workflows/ci.yml).
+
+A release goes out from GitHub. Move the lines under `## [Unreleased]` in
+[CHANGELOG.md](./CHANGELOG.md) to a version heading, then publish a GitHub
+Release whose tag is `vX.Y.Z`. Actions reads the version from the tag, builds,
+and publishes to npm with provenance. See
+[.github/workflows/README.md](./.github/workflows/README.md).
 
 A flow in TypeScript builds the same data as a file:
 
@@ -436,7 +456,8 @@ closed the question. A note arrives when the harness writes a line, so a step
 reports by the turn and not by the word. Two runs in one working directory
 disturb each other, and the code names that limit.
 
-The API can still change, and the name on npm belongs to another package.
+The API can still change, and the name on npm is `@krimvp/orchy`, because
+the bare name belongs to another package.
 
 ## Read next
 
@@ -450,5 +471,7 @@ The API can still change, and the name on npm belongs to another package.
 - [docs/adr](./docs/adr) — every decision that is hard to reverse, and why.
 - [CONTEXT.md](./CONTEXT.md) — the words this project uses.
 - [AGENTS.md](./AGENTS.md) — how to work in this repository.
+- [.github/workflows/README.md](./.github/workflows/README.md) — how a release
+  reaches npm.
 
 MIT. The text is in [LICENSE](./LICENSE).

@@ -12,7 +12,10 @@ import { type Store, type StoredEvent, due, metricsAt, open, rowOf } from "./sto
  */
 const RUNS = 4;
 
-const CLI = resolve(import.meta.dirname, "cli.ts");
+// Orchy runs from source as TypeScript and from a published copy as JavaScript,
+// so a file it starts or loads takes the extension it is running under itself.
+const EXT = import.meta.filename.endsWith(".ts") ? ".ts" : ".js";
+const CLI = resolve(import.meta.dirname, `cli${EXT}`);
 
 /**
  * How many notes a run keeps while it works. The output of a step is a view,
