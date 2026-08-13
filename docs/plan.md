@@ -77,7 +77,7 @@ needs a terminal.
 ## The API
 
 ```ts
-import { flow, agent } from "orchy";
+import { flow, agent } from "@krimvp/orchy";
 import { Type } from "@sinclair/typebox";
 
 export default flow("code-and-review", {
@@ -121,9 +121,10 @@ step that reads a ticket is an API call and spends no tokens. A step that writes
 code is an agent session.
 
 **Component** — the code that a step calls. Orchy supplies `agent`. A user adds
-a component as a TypeScript file that exports one function. Orchy loads it with
-the same loader that Pi uses, so a user writes TypeScript and does not compile
-it.
+a component as a TypeScript file that exports one function, and Orchy imports
+it: Node strips the types, so a user writes TypeScript and does not compile it.
+A component is also a command in any language, which Orchy runs as a process.
+See [ADR 0026](./adr/0026-a-component-is-a-process.md).
 
 **Gate** — a step that takes its value from a person. A gate is a kind of step,
 not a component, so it names no prompt and no module. The run writes its state
@@ -408,10 +409,10 @@ six in one flow.
 
 **M9 — the build, and the licence. Done.** Nothing ran the tests. A workflow now
 installs the packages, runs the tests, runs the compiler, and builds the page,
-on every push to main and on every merge request. So a broken example fails a
+on every push to main and on every pull request. So a broken example fails a
 build that exists. The project holds the MIT text, which it named in two places
-and did not hold. The version is 0.1.0, so a trajectory names the code that
-wrote it.
+and did not hold. A trajectory names the version of the code that wrote it,
+which `package.json` holds.
 
 **M10 — the daemon holds its own door. Done.** The daemon listens on
 `127.0.0.1`, and that is not a boundary against a browser. It now refuses a

@@ -291,6 +291,12 @@ every step, including the runs a cycle threw away. ATIF is a standard format,
 so a tool that already reads it turns the file into OpenTelemetry spans. Orchy
 ships no exporter.
 
+One field of that file is not the standard yet. ATIF v1.7 names the totals
+`total_prompt_tokens`, `total_completion_tokens`, `total_cached_tokens`, and
+`total_cost_usd`, and Orchy writes the per-step names there instead. Every other
+part of the file is ATIF, and a reader of `final_metrics` reads the short names
+until this closes. See [docs/sweep/observability.md](./docs/sweep/observability.md).
+
 ```bash
 jq .final_metrics .orchy/runs/<run id>/trajectory.json
 ```
@@ -485,6 +491,8 @@ the bare name belongs to another package.
   weak.
 - [docs/usability.md](./docs/usability.md) — one usability run over the whole
   product, and what it found.
+- [docs/sweep.md](./docs/sweep.md) — fifteen agents wrote 401 flows against the
+  product for an hour, and what the 167 findings closed.
 - [docs/adr](./docs/adr) — every decision that is hard to reverse, and why.
 - [CONTEXT.md](./CONTEXT.md) — the words this project uses.
 - [AGENTS.md](./AGENTS.md) — how to work in this repository.

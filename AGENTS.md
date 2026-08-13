@@ -212,6 +212,10 @@ Know these before you change the runner.
 - `docs/usability.md` reports one usability run over the whole product. It is a
   record, so it stays as it was written. Read it before you change an error
   message, the reporter, or the daemon.
+- `docs/sweep.md` reports the sweep: fifteen agents, 401 flows, and 167
+  findings, with the raw report of each agent under `docs/sweep/`. It is a
+  record as well. Its "What is closed" part holds the status, and the findings
+  under it stay as they were written.
 - `docs/shape.md` studies the flow data, and names where it is weak. Read it
   before you add a field or change one. It is the record of one study, so keep
   the study as it was written, hold its table of fields to the code, and say

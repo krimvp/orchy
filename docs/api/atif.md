@@ -21,6 +21,13 @@ at the close of a run to write `trajectory.json`.
   the version and records it in every trajectory rather than following it
   silently.
 
+  One deviation stands, and it is not closed: ATIF v1.7 names the fields of
+  `final_metrics` `total_prompt_tokens`, `total_completion_tokens`,
+  `total_cached_tokens`, and `total_cost_usd`, and `toAtif` writes the per-step
+  names (`prompt_tokens`, and so on) there. A root step's `metrics` also carries
+  the `total_steps` of the child trajectory it took them from, which is no
+  metric of that step.
+
 - `toAtif(state, version, toTrajectory): Trajectory` — the main conversion.
   Takes a `RunState` (from `run.ts`), the Orchy version string for the `agent`
   field, and a `ToTrajectory` callback that turns one step's trajectory handle

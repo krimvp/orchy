@@ -1,6 +1,6 @@
 # The sweep — 100 flows, ten batches
 
-Read `BRIEF.md` beside this file first; every rule there holds. This file says
+Read `00-brief.md` beside this file first; every rule there holds. This file says
 which flows exist and who writes them, so no two agents write the same one.
 
 Ten agents. Each writes **ten flows** of its own batch, in its own directory, and
@@ -35,7 +35,7 @@ Where a batch calls for agent steps, walk this list rather than picking one:
 
 Two files, both in `/tmp/claude-0/-home-user-orchy/b311d40f-dc91-564a-af5e-d08b95ea2a20/scratchpad/findings/`:
 
-1. `batch-<n>.md` — your findings, in the shape `BRIEF.md` gives, worst first.
+1. `batch-<n>.md` — your findings, in the shape `00-brief.md` gives, worst first.
 2. `batch-<n>.tsv` — one line per run you made, tab separated, no header:
 
 ```

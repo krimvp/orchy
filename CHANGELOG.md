@@ -16,6 +16,18 @@ named here.
   same door with the `orchy` tool, under the bound that `starts` declares.
 
 ### Fixed
+- The README, ADR 0003, and `docs/api/atif.md` promised the four ATIF names for
+  `final_metrics`, and `src/atif.ts` writes the per-step names there. The
+  trajectory is ATIF everywhere else. All three now name the deviation, which
+  the sweep recorded and nothing closed.
+- `docs/plan.md` mapped the package to the bare import `orchy`, said a component
+  loads through the loader Pi uses — Orchy imports it, and Node strips the types
+  — and named a version the project has left.
+- `docs/sweep.md` counted 568 runs of 545, and its last part read as the state
+  of the product where it is the record of the sweep. `docs/sweep/00-matrix.md`
+  sent a reader to `BRIEF.md`, which is `00-brief.md`.
+- Nothing but `docs/usability.md` linked `docs/sweep.md`. The README and
+  AGENTS.md name it now.
 - The landing page counted eight flows, and twenty ship: eight in `examples/`
   and twelve in `flows/`, which no document but `docs/usability.md` named. The
   README now points at them too.

@@ -26,6 +26,12 @@ tree, into ATIF. This conversion lives in the Pi adapter.
 ATIF is at version 1.7 and it still changes. Orchy pins the version and records
 it in `schema_version`.
 
+One field does not meet this decision yet. `src/atif.ts` writes the per-step
+names in `final_metrics` — `prompt_tokens`, `completion_tokens`,
+`cached_tokens`, `cost_usd` — where ATIF names the four totals above, so a tool
+that reads ATIF finds none of them. The sweep recorded it, and it is open. See
+[docs/sweep/observability.md](../sweep/observability.md).
+
 Sources: the [Harbor trajectory
 format](https://www.harborframework.com/docs/agents/trajectory-format) and the
 [NVIDIA NeMo Relay ATIF

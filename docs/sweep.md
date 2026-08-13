@@ -12,9 +12,9 @@ page, the developer's first hour, and what a run tells you while and after it
 works.
 
 - 401 flow files, and the modules and prompts they name.
-- 545 runs on disk. 568 of them recorded in the batch logs with the outcome
-  expected beforehand; **146 did not do what the agent expected**, and each of
-  those carries a finding.
+- 545 runs on disk, and 568 lines in the batch logs, each naming the outcome the
+  agent expected beforehand; **146 did not do what the agent expected**, and each
+  of those carries a finding.
 - 154 screenshots of the page, taken by a browser driven for the purpose.
 - **167 findings: 38 high, 81 medium, 48 low.** By area: 43 observability,
   35 functional, 34 developer experience, 28 experience, 27 page.
@@ -293,7 +293,8 @@ and passes nested.
 ## The rest
 
 81 medium and 48 low findings sit in the reports. The ones that shape a person's
-day:
+day, as the sweep wrote them and before any of it was fixed — [what is
+closed](#what-is-closed) above says which of these still stands:
 
 - **The page misses runs the command line started.** `store.index()` runs once, at
   boot (`src/daemon.ts:79`), so 22 runs on disk showed as 17 on the page, and a
