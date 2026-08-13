@@ -689,3 +689,8 @@ command said, so a cycle sends the reason back to the step it checks.
   returns: { type: object, required: [ok], properties: { ok: { type: boolean } } }
   cycle: { to: code, when: "failed", limit: 2, policy: escalate }
 ```
+
+On the claude harness, a step that a cycle sends back to mend a file needs
+`read` or `edit` beside `write`: the Write tool of that harness refuses a
+file it has not read, so a step with `write` alone gives up on its second
+attempt.

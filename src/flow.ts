@@ -770,7 +770,13 @@ function schemaFault(value: unknown): string | undefined {
     ajv.compile(value as TSchema);
     return undefined;
   } catch (error) {
-    return `which Ajv refuses: ${String(error instanceof Error ? error.message : error).split("\n")[0]}`;
+    const why = String(error instanceof Error ? error.message : error).split("\n")[0];
+    // Ajv speaks its own words here. The one a person meets most gets a fix
+    // in ours: strict mode refuses a required name that "properties" omits.
+    const hint = why?.includes("strictRequired")
+      ? ' Declare the name under "properties", or take it out of "required".'
+      : "";
+    return `which Ajv refuses: ${why}${hint}`;
   }
 }
 

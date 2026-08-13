@@ -49,7 +49,9 @@ that would answer it.
 
 Exit codes: `0` when the run ends in any status but `failed` (a `waiting` run
 exits `0` — pausing is not failing), `1` on a failed run or a thrown error,
-`2` for a usage mistake (no command, unknown harness).
+`2` for a usage mistake or a refusal at the door — no command, an unknown
+harness or flag, values the flow refuses, a resume nothing takes — where
+nothing ran and nothing changed.
 
 ## Exports
 

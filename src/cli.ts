@@ -7,7 +7,7 @@ import { type AdapterName, ADAPTERS, type Harness } from "./harness.ts";
 import { validate } from "./flow.ts";
 import { loadFlow } from "./load.ts";
 import { pi } from "./pi.ts";
-import { type RunEvent, type RunState, keep, list, resume, run } from "./run.ts";
+import { type RunEvent, type RunState, Refused, keep, list, resume, run } from "./run.ts";
 
 const VERSION = String(createRequire(import.meta.url)("../package.json").version);
 
@@ -38,7 +38,8 @@ writes flows and runs them here. It fires no schedule; the daemon does.
 
 The command writes the events to the error stream and the run state to the
 output stream. It ends with 0 when a run finishes, 1 when a run fails, 2 when
-the command itself is wrong, and 3 when a run waits for a person.
+the command, its values, or the flow it was given is wrong and nothing ran,
+and 3 when a run waits for a person.
 
 A model comes from the harness, not from Orchy. Pi reads
 ~/.pi/agent/models.json and its own login; Claude Code reads its own account.
@@ -230,6 +231,16 @@ if (command === "--version" || command === "-v") {
   process.exit(EXIT.done);
 }
 
+// A flag orchy does not know, or an argument beyond what the command takes,
+// used to pass in silence — and a typo like "--wiht" then ran a flow that
+// failed later for a missing value, naming the wrong fault.
+const strange = argv.filter((one) => one.startsWith("--"));
+if (strange.length > 0) wrong(`orchy does not know ${strange.join(", ")}.\n\n${USAGE}`);
+const most: Record<string, number> = { run: 2, resume: 3, check: 2, runs: 1, daemon: 1, mcp: 1 };
+if (command in most && argv.length > (most[command] as number)) {
+  wrong(`orchy ${command} does not take "${argv[most[command] as number]}".\n\n${USAGE}`);
+}
+
 const harness = HARNESSES[chosen as AdapterName];
 if (!harness) wrong(`unknown harness "${chosen}". Use one of: ${ADAPTERS.join(", ")}`);
 
@@ -321,7 +332,10 @@ try {
   }
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
-  if (error instanceof Wrong) wrong(message);
+  // A refusal at the door started no run and changed none, so it is a fault
+  // of the command, not of a run. A script that heard "failed" went looking
+  // for a failed run that did not exist.
+  if (error instanceof Wrong || error instanceof Refused) wrong(message);
   console.error(message);
   process.exit(EXIT.failed);
 }

@@ -2058,7 +2058,8 @@ test("a retry that reaches its limit asks a person for the value", async () => {
 
   assert.equal(state.status, "waiting");
   assert.equal(state.waitingFor, "flaky");
-  assert.match(state.question ?? "", /failed 2 times over: .*503/);
+  // The limit is 2 cycles, so the step failed three times: once, and twice more.
+  assert.match(state.question ?? "", /failed 3 times over: .*503/);
 
   const answered = await resume(state.runId, { summary: "a person wrote this" }, { cwd });
   assert.equal(answered.status, "done");

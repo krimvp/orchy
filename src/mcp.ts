@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import type { Daemon, Ticket } from "./daemon.ts";
-import { type Flow, validate } from "./flow.ts";
+import { COMPONENTS, type Flow, validate } from "./flow.ts";
 import { ADAPTERS, MODELS, SUPPLIES, TOOLS } from "./harness.ts";
 import { readFlow } from "./load.ts";
 import { read } from "./run.ts";
@@ -146,8 +146,7 @@ export function mcp(
   const tools: Tool[] = [
     {
       name: "check_flow",
-      description:
-        "Says what is wrong with a flow, given as YAML text. Empty lists mean the flow is valid. It runs nothing and spends nothing.",
+      description: `Says what is wrong with a flow, given as YAML text. Empty lists mean the flow is valid. It runs nothing and spends nothing. The call components Orchy ships: ${COMPONENTS.map((name) => `orchy:${name}`).join(", ")}.`,
       inputSchema: {
         type: "object",
         required: ["yaml"],
@@ -302,7 +301,7 @@ export function mcp(
     {
       name: "read_run",
       description:
-        "Reads a run: its status, the record of every step, its value, the runs its steps started, and — when it waits at a gate — the question to answer with resume_run. `wait` holds the answer up to that many seconds while the run works, so a poll costs fewer turns.",
+        "Reads a run: its status, the record of every step, its value, the runs its steps started, and — when it waits at a gate — the question to answer with resume_run. `row` is the one-line summary the index holds; `state` is the run itself, from disk. `wait` holds the answer up to that many seconds while the run works, so a poll costs fewer turns.",
       inputSchema: {
         type: "object",
         required: ["runId"],

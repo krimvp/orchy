@@ -228,7 +228,7 @@ export async function run(input: Flow, options: RunOptions = {}): Promise<RunSta
   // The values come before the first step, so a value that no step can use costs
   // no token.
   const takes = takesProblem(input, options.with, "this run");
-  if (takes) throw new Error(takes);
+  if (takes) throw new Refused(takes);
 
   const flow = expandFanout(input);
   // A sub-flow needs a file, so only the loader can expand one. Say so plainly.
@@ -270,20 +270,20 @@ export async function resume(
   // The two ways in exclude each other, and one taken in silence over the
   // other sent a run forward when a person meant to send it back.
   if (value !== undefined && options.from) {
-    throw new Error(
+    throw new Refused(
       `the resume holds a value and a step. A value answers the gate where the run waits, and "--from" goes back with none. Give one of the two.`,
     );
   }
 
   if (value !== undefined) {
     if (state.status !== "waiting" || !state.waitingFor) {
-      throw new Error(`the run ${runId} is ${state.status}, so it takes no value`);
+      throw new Refused(`the run ${runId} is ${state.status}, so it takes no value`);
     }
 
     const step = state.flow.steps.find((candidate) => candidate.id === state.waitingFor);
-    if (!step) throw new Error(`the run ${runId} waits for "${state.waitingFor}", which the flow does not hold`);
+    if (!step) throw new Refused(`the run ${runId} waits for "${state.waitingFor}", which the flow does not hold`);
     const problem = contractProblem(step, value);
-    if (problem) throw new Error(problem);
+    if (problem) throw new Refused(problem);
 
     const now = new Date().toISOString();
     state.steps[step.id] = { status: "done", startedAt: now, endedAt: now, value, answeredByPerson: true };
@@ -297,9 +297,9 @@ export async function resume(
   // A run that says it runs, and whose process has gone, is a run that died.
   // ADR 0005 makes a crash and a gate the same case, so `--from` opens it.
   if (state.status === "running") {
-    if (alive(state.pid)) throw new Error(`the run ${runId} is running, so there is nothing to continue`);
+    if (alive(state.pid)) throw new Refused(`the run ${runId} is running, so there is nothing to continue`);
     if (!options.from) {
-      throw new Error(
+      throw new Refused(
         `the run ${runId} says it runs, and the process that drove it has gone. Name the step to run again, with --from.`,
       );
     }
@@ -309,14 +309,14 @@ export async function resume(
   const sorted = order(state.flow.steps);
   if (options.from) {
     if (!state.flow.steps.some((step) => step.id === options.from)) {
-      throw new Error(`the run ${runId} holds no step "${options.from}", so it cannot go back to it`);
+      throw new Refused(`the run ${runId} holds no step "${options.from}", so it cannot go back to it`);
     }
     // The named step and every step after it run again. The rest keep their work.
     goBackTo(options.from, state, sorted);
   } else if (state.status === "waiting") {
-    throw new Error(`the run ${runId} waits for a value. Answer it, or name a step to go back to.`);
+    throw new Refused(`the run ${runId} waits for a value. Answer it, or name a step to go back to.`);
   } else if (state.status === "done") {
-    throw new Error(`the run ${runId} is done. Name the step to run again.`);
+    throw new Refused(`the run ${runId} is done. Name the step to run again, with --from.`);
   }
 
   // A failed record runs again, so its attempt goes to history and its cost
@@ -334,8 +334,16 @@ export async function resume(
   return execute(state, cwd, options);
 }
 
+/**
+ * A refusal at the door: the command, its values, or the flow it was given is
+ * wrong, and nothing ran or changed. The command line reads it apart from a
+ * run that failed, because a script that hears "failed" goes looking for a
+ * failed run that does not exist.
+ */
+export class Refused extends Error {}
+
 function refuse(problems: string[]): void {
-  if (problems.length > 0) throw new Error(`the flow is not valid:\n- ${problems.join("\n- ")}`);
+  if (problems.length > 0) throw new Refused(`the flow is not valid:\n- ${problems.join("\n- ")}`);
 }
 
 /** Whether a process still holds a run. A run with no pid is from an older Orchy. */
@@ -393,7 +401,7 @@ export function read(cwd: string, runId: string): RunState {
   try {
     return JSON.parse(readFileSync(file, "utf8")) as RunState;
   } catch {
-    throw new Error(`this directory holds no run "${runId}". Run "orchy runs" to see the runs it holds.`);
+    throw new Refused(`this directory holds no run "${runId}". Run "orchy runs" to see the runs it holds.`);
   }
 }
 
@@ -841,7 +849,7 @@ function retryOf(step: Step, state: RunState): { cycle: Cycle; key: string; coun
 
 function questionFor(step: Step, cycle: Cycle, record: StepRecord): string {
   if (cycle.when === "failed") {
-    return `Step "${step.id}" failed ${cycle.limit} times over: ${record.error}. Supply the value for "${step.id}".`;
+    return `Step "${step.id}" failed ${cycle.limit + 1} times over: ${record.error}. Supply the value for "${step.id}".`;
   }
   return `Step "${step.id}" reached its limit of ${cycle.limit} cycles back to "${cycle.to}" and still disagrees. Supply the value for "${step.id}".`;
 }
