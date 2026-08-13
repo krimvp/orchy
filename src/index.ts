@@ -51,3 +51,4 @@ export type { AdapterName, AgentRequest, AgentResult, Harness, Note, ToolName, W
 export { tail } from "./tail.ts";
 export { pi } from "./pi.ts";
 export { claude } from "./claude.ts";
+export { droid } from "./droid.ts";

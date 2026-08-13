@@ -2,8 +2,9 @@
 
 This module lets Orchy run a step of a flow under Pi, via its SDK
 (`@earendil-works/pi-coding-agent`), building an agent session in-process
-rather than spawning a command. It is one of the two harness adapters (the
-other is Claude Code, in `src/claude.ts`) and implements the `Harness`
+rather than spawning a command. It is one of the three harness adapters (the
+others are Claude Code, in `src/claude.ts`, and Droid, in `src/droid.ts`)
+and implements the `Harness`
 interface from `src/harness.ts`: run one agent step, and later turn that
 step's record into an ATIF `Trajectory` (the format defined in
 `src/atif.ts`).

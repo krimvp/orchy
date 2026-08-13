@@ -53,8 +53,7 @@ rules, and records what each step did.
 The loop: draft the flow, hear every problem from check_flow, write it with
 write_flow, start it with run_flow, and poll read_run until the status is
 done, failed, or waiting. A waiting run holds a question; answer it with
-resume_run. Agent steps spend money; "budget" (dollars) bounds one run, and a
-flow with no agent step takes none.
+resume_run. Agent steps spend money; "budget" (dollars) bounds one run.
 
 The root is ${root}. A flow path is relative to it; a prompt path and a
 module path, to the flow file.
@@ -86,12 +85,10 @@ match its "returns" schema.
 
 A call step holds "module" — a TypeScript default export (inputs, say,
 values) => value — or "command": any program. It takes { values, steps } as
-JSON on stdin, answers JSON on stdout, notes on stderr, and fails with a
-code that is not 0.
+JSON on stdin, answers JSON on stdout, and fails with a code that is not 0.
 
 {{ issue }} in a prompt or a gate question reads what the run takes, never a
-step value: those reach an agent prompt as an appended block and a call
-module as "inputs". A name nothing supplies fails the step when it runs.
+step value. A name nothing supplies fails the step when it runs.
 
 Agent tools: ${TOOLS.join(", ")}. Harnesses:
 ${ADAPTERS.map((name) => `- "${name}" supplies ${SUPPLIES[name].join(", ")}. ${MODELS[name].write}`).join("\n")}`;

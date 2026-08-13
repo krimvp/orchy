@@ -57,15 +57,18 @@ that no workspace can check, and a budget that is not a number of dollars.
 The runner talks to a harness through an adapter with two methods. `run(request)`
 returns the value of the step, a handle for the trajectory, and the cost when
 the harness reports one. `toTrajectory(handle)` reads that record. Orchy ships
-two adapters, for Pi and for the `claude` command. See [ADR
-0001](./adr/0001-embed-pi-through-the-sdk.md) and [ADR
+three adapters, for Pi, for the `claude` command, and for the `droid` command
+of Factory. See [ADR 0001](./adr/0001-embed-pi-through-the-sdk.md) and [ADR
 0002](./adr/0002-keep-a-harness-adapter.md).
 
 An adapter gives the contract to its harness whole, and Orchy parses no prose.
 The Pi adapter builds a `submit_result` tool whose parameters are the contract,
 adds that tool to the list, and reads the value out of the one call. The
 `claude` command takes the contract with `--json-schema` and answers with the
-value. So a contract shapes what the model sees.
+value. So a contract shapes what the model sees. The `droid` command takes no
+schema, so its adapter appends the contract to the system prompt and reads the
+one JSON value out of the answer — the nearest the command allows — and the
+runner checks that value against the real schema either way.
 
 The Pi adapter loads the resources of Pi itself, with a `DefaultResourceLoader`
 and a `SettingsManager`. Without this the extensions and the skills of the user

@@ -1,7 +1,8 @@
 # `src/harness.ts` — the contract between Orchy and its harness adapters
 
-This module defines what a harness adapter is, without being one. The two
-adapters (`src/pi.ts` and `src/claude.ts`) each drive a coding agent; this
+This module defines what a harness adapter is, without being one. The three
+adapters (`src/pi.ts`, `src/claude.ts`, and `src/droid.ts`) each drive a
+coding agent; this
 file holds the interface they implement, the request and result shapes they
 exchange, and three small tables of facts about them — which adapters exist,
 which tools each supplies, and what each accepts as a model name. The tables
@@ -17,7 +18,7 @@ is doing while it runs.
 
 Tables and their types:
 
-- `ADAPTERS` — `["pi", "claude"]`, the name of every adapter.
+- `ADAPTERS` — `["pi", "claude", "droid"]`, the name of every adapter.
   `AdapterName` is the union of those names.
 - `TOOLS` — the nine harness-neutral tool names a flow may declare
   (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, `web`, `orchy`);
@@ -25,12 +26,14 @@ Tables and their types:
   root, served over MCP (ADR 0025). `ToolName` is their union.
 - `SUPPLIES: Record<AdapterName, readonly ToolName[]>` — which of those
   tools each adapter supplies. Pi supplies everything but `web` and
-  `orchy`; Claude supplies all nine. `validate()` reads it to refuse a tool
+  `orchy`; Claude supplies all nine; Droid supplies everything but `orchy`.
+  `validate()` reads it to refuse a tool
   the harness lacks, and each adapter checks requests against its own row.
 - `MODELS: Record<AdapterName, { reads: RegExp; write: string }>` — the
   grammar of a model name per adapter (`reads`) and the message to show
   when a name fails it (`write`). Pi reads a `provider/model` pair like
-  `"openai/gpt-5"`; Claude reads a plain name like `"opus"`. Only the
+  `"openai/gpt-5"`; Claude reads a plain name like `"opus"`; Droid reads a
+  plain id like `"qwen3.5:397b"`. Only the
   grammar is checked here — which models exist is the harness's business
   (ADR 0019).
 

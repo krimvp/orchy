@@ -4231,7 +4231,7 @@ test("validate refuses a harness that does not exist, so a typo cannot turn the 
   // nothing and said nothing: three faults, one clean flow. The name itself is
   // the fault to report, and the flow is refused for it.
   assert.deepEqual(named("clade"), [
-    'step "a" names the harness "clade", which does not exist. Use one of: pi, claude',
+    'step "a" names the harness "clade", which does not exist. Use one of: pi, claude, droid',
   ]);
   assert.ok(named("").some((p) => p.includes('names the harness ""')));
   // A harness that is real gets read: pi has no web tool, and says so.

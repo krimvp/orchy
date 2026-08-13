@@ -81,12 +81,13 @@ flow` step supplies them with `with`. See [ADR
 
 ## Choose a harness
 
-Orchy ships two adapters. A flow names the one it needs. `--harness` sets the
+Orchy ships three adapters. A flow names the one it needs. `--harness` sets the
 default for a flow and a step that name none, and Pi is that default.
 
 ```bash
 orchy run flow.yaml                     # the harness the flow names, or pi
 orchy run flow.yaml --harness claude    # Claude Code, for a flow that names none
+orchy run flow.yaml --harness droid     # Droid, the same way
 ```
 
 A flow that names its harness runs on that harness. Edit the flow to change it,
@@ -97,10 +98,17 @@ The Claude Code adapter runs the `claude` command, so it needs that command on
 the path and a logged-in account. It passes a `model` on to `--model`, and it
 lets Claude choose when the flow names none.
 
-A tool name changes across the two harnesses, and Orchy maps it. `find` and `ls`
+The Droid adapter runs the `droid` command of Factory the same way, and a
+custom model in `~/.factory/config.json` needs no Factory account. See the
+Install part of [README.md](../README.md#a-model-comes-from-the-harness). Droid
+writes no dollars into its record, so a droid step reports no cost, and a flow
+that holds one declares no `budget`.
+
+A tool name changes across the harnesses, and Orchy maps it. `find` and `ls`
 both become `Glob`, because Claude has no separate list tool. So a step that
-declares `ls` gets `Glob`. The list still holds: a step reaches no tool that it
-did not declare.
+declares `ls` gets `Glob`. On droid, `write` becomes `Create` and `bash`
+becomes `Execute`. The list still holds: a step reaches no tool that it did
+not declare.
 
 ## A harness and a model for each flow, and for each step
 
@@ -121,7 +129,8 @@ steps:
 
 The `model` string means whatever the harness says it means. Claude takes a
 model name. Pi takes `provider/model`, because two providers can serve one
-model, for example `ollama/glm-5.2`.
+model, for example `ollama/glm-5.2`. Droid takes the id it lists, and a custom
+model reads best by its long name, as `custom:glm-5.2-[Ollama-Cloud]-0`.
 
 Name the harness on the flow when the flow needs one. `validate()` then refuses
 a tool that the harness does not supply, before the run spends a token. A flow

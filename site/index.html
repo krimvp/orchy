@@ -426,7 +426,7 @@ footer a { color: var(--text-2); }
       <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="title">flow.yaml</span><span class="right">the whole flow</span></div>
       <pre><code><span class="k">name</span><span class="p">:</span> <span class="s">code-and-review</span>
 <span class="k">workspace</span><span class="p">:</span> <span class="p">{</span> <span class="k">kind</span><span class="p">:</span> <span class="s">git</span><span class="p">,</span> <span class="k">path</span><span class="p">:</span> <span class="s">.</span> <span class="p">}</span>
-<span class="k">harness</span><span class="p">:</span> <span class="s">claude</span>           <span class="c"># or pi — mix per step</span>
+<span class="k">harness</span><span class="p">:</span> <span class="s">claude</span>           <span class="c"># or pi, droid — mix per step</span>
 <span class="k">model</span><span class="p">:</span> <span class="s">claude-opus-4-5</span>
 <span class="k">takes</span><span class="p">:</span>
   <span class="k">type</span><span class="p">:</span> <span class="s">object</span>
@@ -680,8 +680,9 @@ footer a { color: var(--text-2); }
         panel of reviewers is one block of YAML.</div>
       <div class="item" data-f="mix"><b>A harness and a model per step</b>
         Read with a cheap model and keep the big one for the step that earns
-        it. A step names its own harness too, so <code>claude</code> and
-        <code>pi</code> run side by side, local Ollama included.</div>
+        it. A step names its own harness too, so <code>claude</code>,
+        <code>pi</code>, and <code>droid</code> run side by side, local Ollama
+        included.</div>
       <div class="item" data-f="changes"><b>A promise: <code>changes</code></b>
         Bounds what a step may touch. The workspace record catches what
         <code>bash</code> does behind the tool list.</div>

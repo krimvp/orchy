@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { claude } from "./claude.ts";
+import { droid } from "./droid.ts";
 import { type AdapterName, ADAPTERS, type Harness } from "./harness.ts";
 import { validate } from "./flow.ts";
 import { loadFlow } from "./load.ts";
@@ -11,12 +12,12 @@ import { type RunEvent, type RunState, Refused, keep, list, resume, run } from "
 
 const VERSION = String(createRequire(import.meta.url)("../package.json").version);
 
-const USAGE = `use: orchy run <flow file> [--with <json>] [--harness pi|claude] [--events]
-     orchy check <flow file> [--harness pi|claude]
-     orchy resume <run id> [json value] [--from <step>] [--harness pi|claude] [--events]
+const USAGE = `use: orchy run <flow file> [--with <json>] [--harness pi|claude|droid] [--events]
+     orchy check <flow file> [--harness pi|claude|droid]
+     orchy resume <run id> [json value] [--from <step>] [--harness pi|claude|droid] [--events]
      orchy runs [--events]
      orchy daemon [--port 4000]
-     orchy mcp [--harness pi|claude]
+     orchy mcp [--harness pi|claude|droid]
      orchy --help | --version
 
 A flow file is TypeScript or YAML.
@@ -42,8 +43,8 @@ the command, its values, or the flow it was given is wrong and nothing ran,
 and 3 when a run waits for a person.
 
 A model comes from the harness, not from Orchy. Pi reads
-~/.pi/agent/models.json and its own login; Claude Code reads its own account.
-See the Install part of README.md.`;
+~/.pi/agent/models.json and its own login; Claude Code reads its own account;
+Droid reads ~/.factory/config.json. See the Install part of README.md.`;
 
 const PORT = 4000;
 
@@ -51,7 +52,7 @@ const PORT = 4000;
 const EXIT = { done: 0, failed: 1, usage: 2, waiting: 3 } as const;
 
 /** Typed by the names, so an adapter that goes missing fails the compiler. */
-const HARNESSES: Record<AdapterName, Harness> = { pi, claude };
+const HARNESSES: Record<AdapterName, Harness> = { pi, claude, droid };
 
 function report(event: RunEvent): void {
   switch (event.type) {

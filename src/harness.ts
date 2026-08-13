@@ -5,7 +5,7 @@ import type { TSchema } from "@sinclair/typebox";
  * The name of every adapter. The names live apart from the adapters, so the
  * server checks a name without loading the SDK of a harness.
  */
-export const ADAPTERS = ["pi", "claude"] as const;
+export const ADAPTERS = ["pi", "claude", "droid"] as const;
 
 export type AdapterName = (typeof ADAPTERS)[number];
 
@@ -27,6 +27,7 @@ export type ToolName = (typeof TOOLS)[number];
 export const SUPPLIES: Record<AdapterName, readonly ToolName[]> = {
   pi: ["read", "bash", "edit", "write", "grep", "find", "ls"],
   claude: TOOLS,
+  droid: ["read", "bash", "edit", "write", "grep", "find", "ls", "web"],
 };
 
 /**
@@ -39,6 +40,7 @@ export const SUPPLIES: Record<AdapterName, readonly ToolName[]> = {
 export const MODELS: Record<AdapterName, { reads: RegExp; write: string }> = {
   pi: { reads: /^[^/\s]+\/[^\s]+$/, write: 'Write the provider and the model, as "openai/gpt-5".' },
   claude: { reads: /^[^/\s]+$/, write: 'Write a plain model name, as "opus".' },
+  droid: { reads: /^[^/\s]+$/, write: 'Write the model id as droid reads it, as "qwen3.5:397b".' },
 };
 
 export interface AgentRequest {

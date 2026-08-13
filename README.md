@@ -154,19 +154,22 @@ Orchy drives a harness, and does not replace one.
 | --- | --- | --- |
 | `pi` | the [Pi](https://pi.dev) SDK | `provider/model`, such as `ollama/glm-5.2` |
 | `claude` | the `claude` command | a model name, such as `claude-opus-4-5` |
+| `droid` | the `droid` command of [Factory](https://factory.ai) | the id droid reads, such as `custom:glm-5.2-[Ollama-Cloud]-0` |
 
 A tool has one name in Orchy and another in each harness.
 
-| Orchy | Pi | Claude |
-| --- | --- | --- |
-| `read` `write` `edit` `bash` `grep` | the same names | `Read` `Write` `Edit` `Bash` `Grep` |
-| `find` `ls` | `find` `ls` | `Glob` |
-| `web` | none, and Pi says so | `WebSearch` `WebFetch` |
+| Orchy | Pi | Claude | Droid |
+| --- | --- | --- | --- |
+| `read` `write` `edit` `bash` `grep` | the same names | `Read` `Write` `Edit` `Bash` `Grep` | `Read` `Create` `Edit` `Execute` `Grep` |
+| `find` `ls` | `find` `ls` | `Glob` | `Glob` `LS` |
+| `web` | none, and Pi says so | `WebSearch` `WebFetch` | `WebSearch` `FetchUrl` |
+| `orchy` | none | `mcp__orchy` | none |
 
 A harness refuses a tool it cannot supply. It never drops one in silence.
 
-Adding a third harness costs one adapter with two methods. The runner, the flow
-data, and the five invariants took no edit when the second one arrived.
+Adding a harness costs one adapter with two methods. The runner, the flow
+data, and the five invariants took no edit when the second one arrived, and
+none when the third did.
 
 ## Commands
 
@@ -389,8 +392,35 @@ cannot measure. See [docs/running.md](./docs/running.md#what-a-run-may-spend).
 **Claude Code** reads the account that `claude` is logged in to. A flow writes a
 plain name: `model: opus`.
 
+**Droid** reads `~/.factory/config.json` for a custom model, and a custom model
+needs no Factory account. Install the command with
+`curl -fsSL https://app.factory.ai/cli | sh`. Ollama Cloud, a local Ollama
+server, or any OpenAI-compatible endpoint goes in that file:
+
+```json
+{
+  "custom_models": [
+    {
+      "model_display_name": "glm-5.2 [Ollama Cloud]",
+      "model": "glm-5.2",
+      "base_url": "https://ollama.com/v1/",
+      "api_key": "<your key>",
+      "provider": "generic-chat-completion-api",
+      "max_tokens": 32000
+    }
+  ]
+}
+```
+
+A flow writes the id droid reads: `model: "custom:glm-5.2-[Ollama-Cloud]-0"` —
+`custom:`, the display name, and the index of the entry. The bare `model` value
+works too, when no model of the Factory catalogue wears the same name. Droid
+writes no dollars into its record, so a droid step reports no cost, and a flow
+that holds one declares no `budget`.
+
 A flow that names no model takes the default of its harness, and the default of
-Pi is a model that most machines cannot reach. So name one.
+Pi is a model that most machines cannot reach. The default of droid is a model
+of the Factory catalogue, which needs a Factory account. So name one.
 
 The page needs a build, and its packages live under `ui/` and reach no run.
 
@@ -444,9 +474,10 @@ key that the step never returns.
 
 Early, and honest about it.
 
-**Run against a real model:** both harnesses, a cycle that carries its reason
-back, a gate and `orchy resume`, an escalation to a person, a panel of three
-models at once, a flow inside a flow, and a workspace that proves what changed.
+**Run against a real model:** all three harnesses, a cycle that carries its
+reason back, a gate and `orchy resume`, an escalation to a person, a panel of
+three models at once, a flow inside a flow, and a workspace that proves what
+changed.
 
 **Covered by a run of the whole flow, with a stand-in model:** the values a run
 takes and the value a flow returns, a name in a prompt, a step that declares
@@ -470,7 +501,7 @@ file outside its root.
 `release-notes`, `decision`, and `dependency-audit` examples. A test reads every
 example and holds it to `validate()`. It starts no run of one.
 
-**Not built:** an OpenTelemetry exporter, a third harness, a sandbox, a
+**Not built:** an OpenTelemetry exporter, a sandbox, a
 timeout for a step, a workspace for one step, a workspace for each run, and
 any user or password on the daemon. Invariant 1 names the sandbox gap
 rather than hiding it, and [ADR

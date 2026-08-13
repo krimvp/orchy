@@ -10,6 +10,16 @@ named here.
 
 ## [Unreleased]
 
+### Added
+- A third harness adapter: `droid`, the coding agent of Factory. A flow writes
+  `harness: droid` and the id droid reads, as
+  `model: "custom:glm-5.2-[Ollama-Cloud]-0"`. A custom model in
+  `~/.factory/config.json` — Ollama Cloud among them — serves a step without a
+  Factory account. Droid supplies every tool but `orchy`, reports no cost, and
+  its adapter reads the contract value out of the answer, because the `droid`
+  command takes no schema. The runner still checks the value against the real
+  schema.
+
 ### Changed
 - The landing page says what `orchy mcp` gives an agent — ten tools, and a flow
   refused at the write when it does not validate — and that a step reaches the

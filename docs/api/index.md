@@ -31,8 +31,8 @@ Grouped by the module each name comes from:
 - **`harness.ts` — what an agent step runs under.** The tables `ADAPTERS`,
   `MODELS`, `SUPPLIES`, and `TOOLS`, plus `notesOf`. Types: `Harness`,
   `AdapterName`, `ToolName`, `AgentRequest`, `AgentResult`, `Note`, `Watch`.
-- **`pi.ts` and `claude.ts` — the two shipped harnesses.** `pi` and `claude`,
-  each a ready `Harness` value to pass to `run`.
+- **`pi.ts`, `claude.ts`, and `droid.ts` — the three shipped harnesses.**
+  `pi`, `claude`, and `droid`, each a ready `Harness` value to pass to `run`.
 - **`workspace.ts` — what a step may change.** `take` and `changed`. Types:
   `Workspace`, `Snapshot`, `Change`.
 - **`daemon.ts`, `server.ts`, and `mcp.ts` — the long-running side.**

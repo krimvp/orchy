@@ -38,7 +38,7 @@ Six commands exist:
 `step`: the record of who started this run. The MCP door of a run passes it
 through the daemon; a person has no use for it.
 
-`run` and `resume` share two more flags. `--harness pi|claude` picks the
+`run` and `resume` share two more flags. `--harness pi|claude|droid` picks the
 adapter (default `pi`); the table of adapters is typed by `AdapterName`, so an
 adapter that goes missing fails the compiler, and an unknown name at the
 command line exits with the list of real ones. `--events` switches the output

@@ -1,7 +1,8 @@
 # `src/claude.ts` — the Claude Code harness adapter
 
 This module lets Orchy run a step of a flow under Claude Code. It is one of
-the two harness adapters (the other is Pi, in `src/pi.ts`) and implements the
+the three harness adapters (the others are Pi, in `src/pi.ts`, and Droid, in
+`src/droid.ts`) and implements the
 `Harness` interface from `src/harness.ts`: run one agent step, and later turn
 that step's record into an ATIF `Trajectory` (the format defined in
 `src/atif.ts`).
