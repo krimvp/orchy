@@ -75,10 +75,10 @@ Expanding:
   the `load` callback), prefixing inner ids with the step id so two uses
   never collide. Throws when the inner flow carries a budget, takes values
   the step does not supply, or ends in more than one step.
-- `resolvePaths(flow, directory)` — makes prompt, module, and `starts.flows`
-  paths absolute; a `command` and an `orchy:` name stay as they are; it also
-  makes other paths absolute
-  relative to the flow file's directory. Call it after loading from a file.
+- `resolvePaths(flow, directory)` — makes the `prompt`, `module`, and
+  `starts.flows` paths of every step, and of every member of a file-written
+  fanout, absolute against the flow file's own directory; a `command` and an
+  `orchy:` name stay as they are. Call it after loading from a file.
 
 Reading:
 
@@ -104,8 +104,10 @@ const review = flow("review", {
   harness: "claude",
   steps: [
     agent({
+      // A prompt is the path of a file, relative to the flow file, and not
+      // the text itself. `resolvePaths` makes it absolute after a load.
       id: "summarize",
-      prompt: "Read the diff and summarize it.",
+      prompt: "prompts/summarize.md",
       tools: ["read"],
       returns: Type.Object({ summary: Type.String(), risky: Type.Boolean() }),
     }),

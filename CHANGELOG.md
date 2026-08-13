@@ -16,6 +16,34 @@ named here.
   same door with the `orchy` tool, under the bound that `starts` declares.
 
 ### Fixed
+- The landing page counted eight flows, and twenty ship: eight in `examples/`
+  and twelve in `flows/`, which no document but `docs/usability.md` named. The
+  README now points at them too.
+- The run on the landing page showed steps that its own flow file does not
+  hold, a gate form under a contract the flow does not declare, a budget that
+  neither flow declares, and a value outside the contract shown beside it. It
+  shows what those flows really do. A step whose value fires a cycle is `done`,
+  not `failed`, so it no longer reads as a failure.
+- The landing page said `examples/code-review` runs two harnesses; it names one
+  harness and one model, and the cycle escalates to a person at its limit.
+- `docs/running.md` said a step cannot both fan out and cycle. ADR 0021 narrowed
+  that: a fanout cycles to itself, and each member retries its own work. It also
+  said Orchy uses one model for the whole flow, which a step has overridden
+  since ADR 0012.
+- `docs/api/index.md` mapped the package to the bare import `orchy`. It is
+  `@krimvp/orchy`.
+- `docs/api/cli.md` named four commands, and there are six: `check` and `runs`
+  were missing.
+- `docs/api/store.md` gave `runs()` a limit as its first argument, where it takes
+  a flow path; its example built an event of a type that no run emits; and it
+  cited ADR 0008 for the index, which is ADR 0009.
+- `docs/api/flow.md` passed prompt text where a prompt is the path of a file.
+- `docs/api/harness.md` left `prompt` out of the kinds a `Note` takes, and `run`
+  out of an `AgentRequest`. `docs/api/daemon.md` left the gate a resume names
+  out of `resume()`. `docs/api/server.md` named a `serve` command; it is
+  `orchy daemon`.
+- `docs/shape.md` claimed to name every field that runs, and named neither
+  `command` on a call step nor `starts` on an agent step.
 - The two flow files on the landing page now pass `validate()`. One fanned out
   with a syntax Orchy has never had, both wrote a contract that Ajv refuses in
   strict mode, and one asked `pi` for the `web` tool, which only `claude`

@@ -7,7 +7,7 @@ end of a run into an exit code. Everything it does, it does by calling the
 other modules — `loadFlow` from `src/load.ts`, `run` and `resume` from
 `src/run.ts`, `daemon` and `serve` from `src/daemon.ts` and `src/server.ts`.
 
-Four commands exist:
+Six commands exist:
 
 - `orchy run <flow file>` — load a flow (TypeScript or YAML) and run it.
   `--with <json>` supplies the values the flow takes, as one JSON object —
@@ -18,6 +18,11 @@ Four commands exist:
   run asked. `--from` names the step to continue from. With no value and no
   step, a failed run goes back to the step that failed, and a stopped run
   continues where it stood.
+- `orchy check <flow file>` — load a flow, and every flow it holds, and print
+  what `validate()` says about it. It runs nothing and spends nothing, and it
+  exits `2` with the list of problems when the flow is not valid.
+- `orchy runs` — list the runs under this directory, newest first, as a table;
+  with `--events`, one JSON row per line.
 - `orchy daemon [--port 4000]` — start the long-running engine over the
   current directory and serve its HTTP API. The daemon runs an agent on this
   machine, so it listens on `127.0.0.1` only, and it closes cleanly on

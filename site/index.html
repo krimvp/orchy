@@ -720,18 +720,19 @@ footer a { color: var(--text-2); }
           </div>
           <div class="ui-main">
             <h4>research</h4>
-            <div class="dim">took { "question": "is sqlite enough" } · $1.34 of $2.00</div>
+            <div class="dim">took { "question": "is sqlite enough" } · $1.34 of $10.00</div>
             <div class="ui-steps">
-              <div class="ui-step"><span class="st done"></span> plan <span class="live">returned 3 angles</span><span class="cost">$0.21</span></div>
-              <div class="ui-step"><span class="st done"></span> read[0..2] <span class="live">three readers, one wave</span><span class="cost">$0.87</span></div>
-              <div class="ui-step"><span class="st done"></span> check <span class="live">solid: true · changes: nothing ✓</span><span class="cost">$0.26</span></div>
+              <div class="ui-step"><span class="st done"></span> question <span class="live">returned 3 angles</span><span class="cost">$0.21</span></div>
+              <div class="ui-step"><span class="st done"></span> reader ×3 <span class="live">three readers, one wave</span><span class="cost">$0.60</span></div>
+              <div class="ui-step"><span class="st done"></span> brief <span class="live">wrote brief.md · 14 claims</span><span class="cost">$0.27</span></div>
+              <div class="ui-step"><span class="st done"></span> check <span class="live">approved: true · changes: nothing ✓</span><span class="cost">$0.26</span></div>
               <div class="ui-step"><span class="st waiting"></span> approve <span class="live">gate — waiting for you</span><span class="cost">—</span></div>
             </div>
             <div class="gate">
               <div class="q">approve · a form built from the gate's contract</div>
               <div class="form">
-                <button class="chip ok" id="gate-yes">approved: true</button>
-                <button class="chip" id="gate-no">approved: false ↩ cycle</button>
+                <button class="chip ok" id="gate-yes">ok: true</button>
+                <button class="chip" id="gate-no">ok: false</button>
               </div>
             </div>
           </div>
@@ -758,18 +759,21 @@ footer a { color: var(--text-2); }
 <section id="examples" class="wrap">
   <div class="reveal">
     <span class="eyebrow">what you can build</span>
-    <h2>Eight flows ship in the repo</h2>
-    <p class="lead">A test checks every one of them, and CI runs the tests on
-    every push — so a broken example fails the build.</p>
+    <h2>Twenty flows ship in the repo</h2>
+    <p class="lead">Eight in <code>examples/</code>, one for each construct, and
+    twelve more under <code>flows/</code>. A test checks every one of them, and
+    CI runs the tests on every push to main and every pull request — so a broken
+    flow fails the build.</p>
   </div>
 
   <div class="marquee reveal" aria-label="Example flows">
     <div class="track" id="mtrack">
       <a class="mcard" href="https://github.com/krimvp/orchy/tree/main/examples/code-review">
-        <b>code-review</b><span>One model writes the code, another reviews it
+        <b>code-review</b><span>One step writes the code, a second reviews it
         with no tool that can change a file, and a cycle sends it back until it
-        approves.</span>
-        <div class="tagrow"><span class="mtag">cycle</span><span class="mtag">two harnesses</span></div>
+        approves — or the limit hands the call to a person. Written twice, as
+        YAML and as TypeScript.</span>
+        <div class="tagrow"><span class="mtag">cycle</span><span class="mtag">escalate</span></div>
       </a>
       <a class="mcard" href="https://github.com/krimvp/orchy/tree/main/examples/research">
         <b>research</b><span>Three readers on the web at once, a budget in
@@ -931,10 +935,10 @@ footer a { color: var(--text-2); }
   /* ---------- gate buttons (a wink, not a backend) ---------- */
   const gate = document.querySelector(".gate .q");
   document.getElementById("gate-yes")?.addEventListener("click", () => {
-    gate.textContent = 'orchy resume <run id> \'{"approved":true}\' — the run continues';
+    gate.textContent = 'orchy resume <run id> \'{"ok":true}\' — the run continues';
   });
   document.getElementById("gate-no")?.addEventListener("click", () => {
-    gate.textContent = "approved: false — the cycle sends the work back to read";
+    gate.textContent = 'orchy resume <run id> \'{"ok":false}\' — the run ends with that value';
   });
 
   /* ---------- the live run: graph + terminal, one scripted loop ---------- */
@@ -973,8 +977,8 @@ footer a { color: var(--text-2); }
     { t: 3200, do: () => { status.textContent = "wave 2"; setEdge("fwd", "active");
         setNode("review", "running", "running · $0.00");
         line("run", "t-run", "review — pi · glm-5.2 · changes: nothing"); } },
-    { t: 5200, do: () => { setEdge("fwd"); setNode("review", "failed", "approved: false");
-        line("fail", "t-fail", 'review — { "approved": false, "findings": [2] }'); } },
+    { t: 5200, do: () => { setEdge("fwd"); setNode("review", "done", "approved: false");
+        line("done", "t-done", 'review — { "approved": false }'); } },
     { t: 5800, do: () => { setEdge("cycle", "cycling"); cycleLabel.classList.add("cycling");
         status.textContent = "cycle 1 of 3";
         line("cycle", "t-cycle", "review → code — when { approved: false } · 1 of 3"); } },
@@ -986,8 +990,8 @@ footer a { color: var(--text-2); }
         line("run", "t-run", "review — reads the diff again"); } },
     { t: 11000, do: () => { setEdge("fwd"); setEdge("out", "active");
         setNode("review", "done", "approved: true");
-        line("done", "t-done", 'review — { "approved": true, "findings": [] }'); } },
-    { t: 11800, do: () => { status.textContent = "finished · $2.31 of $5.00"; setEdge("out");
+        line("done", "t-done", 'review — { "approved": true }'); } },
+    { t: 11800, do: () => { status.textContent = "finished · $2.31"; setEdge("out");
         line("done", "t-done", 'flow — returns { "approved": true } · exit 0'); } },
   ];
   const LOOP = 15000;

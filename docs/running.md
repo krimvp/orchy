@@ -262,8 +262,11 @@ A step that breaks its contract is retried in the same way, because that is a
 failure too. At the limit, `escalate` asks a person for the value, and `accept`
 fails the run: a failure carries no value, so there is nothing to accept.
 
-A step cannot both fan out and cycle, because which member cycles is unclear.
-Put the cycle on the step that reads the members.
+A step that fans out cycles to itself, and no further: each member retries its
+own work, and keeps its own count. A cycle that leaves the step is refused,
+because a fanout has no one value to send back and which member cycles is
+unclear — put that cycle on the step that reads the members. See [ADR
+0021](./adr/0021-a-member-of-a-fanout-retries-itself.md).
 
 ### A flow inside a flow
 
@@ -352,8 +355,8 @@ own.
 
 This section is for Pi.
 
-Orchy does not choose a model. Pi does. Version 1 uses one model for the whole
-flow, so you set it once.
+Orchy does not choose a model. Pi does. A flow names the model once, and a step
+that wants another names it, as above.
 
 Declare a provider in `~/.pi/agent/models.json`. Declare it here, and not in a
 Pi extension. Pi resolves the model before an extension runs, so a provider that

@@ -49,7 +49,9 @@ the study did. **later** names what the work after it added.
 | step | `kind` | `agent`, `call`, `gate`, `flow` |
 | agent, call, gate | `when` | **new.** A match against the value of a step it needs |
 | agent | `prompt`, `tools`, `harness`, `model` | a path, a tool list, two names |
-| call | `module` | a path |
+| agent | `starts` | **later.** `{ flows, most }`, the bound on a step that holds the `orchy` tool |
+| call | `module` | a path, or `orchy:` and the name of a shipped component |
+| call | `command` | **later.** A program in any language |
 | gate | `question` | a string |
 | flow step | `flow` | a path |
 | flow step | `with` | **later.** The values the flow it names takes |
@@ -354,8 +356,8 @@ Row 5 adds one, and only for a flow that wants it.
 
 ## What later work closed
 
-The study left five things open. Two of them landed after it, and the other
-three are in the next section.
+The study left six things open. Two of them landed after it, and the other
+four are in the next section.
 
 - **A cycle throws away a branch it does not touch.** Closed in the runner. A
   cycle clears the target and the steps that need it, and it keeps the rest.
@@ -364,7 +366,7 @@ three are in the next section.
   step it reads holds a value. It is the one expansion the runner performs. See
   [ADR 0017](./adr/0017-a-fanout-over-a-value-the-run-computes.md).
 
-Four more shapes landed that the study did not ask for. Each one is a workflow
+Six more shapes landed that the study did not ask for. Each one is a workflow
 that had no shape:
 
 - **A flow takes values and returns one.** `orchy run --with` supplies them, a

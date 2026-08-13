@@ -108,7 +108,7 @@ the daemon serves that directory.
 
 - `npm test` runs everything. `npm run check` runs the compiler.
 - CI runs the tests, the compiler, and the page build on every push to main and
-  on every merge request. See `.github/workflows/ci.yml`. A change that breaks
+  on every pull request. See `.github/workflows/ci.yml`. A change that breaks
   an example breaks the build.
 - A test for the daemon uses a flow of `call` steps and a gate, so it needs no
   model. It drives the real API over HTTP.

@@ -3,8 +3,10 @@
 This module wraps a SQLite database (via `node:sqlite`) holding five tables:
 the flows a user has registered, one row per run, the events of each run, the
 schedules of flows that run by themselves, and the webhook tokens that start
-a flow from a POST. Its design premise is ADR 0008: the state on disk is the
-run, and this database is only an index of it plus what a directory cannot
+a flow from a POST. Its design premise is [ADR
+0009](../adr/0009-the-database-indexes-the-runs-on-disk.md): the state on disk
+is the run (ADR 0005), and this database is only an index of it plus what a
+directory cannot
 hold — the event stream, the flow registry, and what a person has attached to
 a flow. `index()` rebuilds every run row from the `state.json` files on disk,
 so losing the database file loses no run, only its events.
@@ -37,8 +39,8 @@ of every run stay on disk regardless (ADR 0009).
     right now.
   - `clearSchedule(flowId)` — removes a schedule.
   - `markScheduled(flowId, at)` — records when a schedule last fired.
-  - `runs(limit?)`, `run(runId)` — list runs newest first (default limit
-    `KEPT`), or fetch one.
+  - `runs(path?, limit = KEPT)`, `run(runId)` — list runs newest first, every
+    one or only those of one flow file, or fetch one by id.
   - `saveRun(row)` — inserts a `RunRow`, or updates its mutable fields
     (status, end time, waiting state, question, cost, tokens) if the run
     exists.
@@ -91,7 +93,7 @@ import { open, rowOf, metricsAt } from "./store.ts";
 const store = open("index.db");
 
 store.saveRun(rowOf(state, "flows/review.yaml", metricsAt(trajectoryFile)));
-store.addEvent(state.runId, { type: "step", stepId: "plan" });
+store.addEvent(state.runId, { type: "step_end", step: "plan", status: "done" });
 
 for (const event of store.events(state.runId)) {
   console.log(event.at, event.type);

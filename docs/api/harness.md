@@ -37,15 +37,18 @@ Tables and their types:
 Shapes:
 
 - `AgentRequest` — what a harness is asked to run: `step` (name), `prompt`,
-  `tools`, `returns` (a TypeBox schema for the structured output), `cwd`,
-  and an optional `model` string that only that harness reads.
+  `tools`, `returns` (the JSON Schema for the structured output), `cwd`,
+  an optional `model` string that only that harness reads, and an optional
+  `run` — the run this step belongs to, so a run the step starts through the
+  `orchy` tool records who asked (ADR 0025).
 - `AgentResult` — what comes back: the structured `value`, an optional
   `trajectory` handle that only the same harness understands (a file path,
   a session id), and an optional `cost` for adapters whose trajectory does
   not carry the spend.
-- `Note` — one thing a step did, while it did it: a `kind` (`"text"`,
-  `"reasoning"`, `"tool"`, or `"result"`) and a `text` of at most 400
-  characters. A note is a view, not a record; the trajectory holds the
+- `Note` — one thing a step did, while it did it: a `kind` (`"prompt"` —
+  what the step asked, after Orchy read its file and filled every name in it
+  — `"text"`, `"reasoning"`, `"tool"`, or `"result"`) and a `text` of at most
+  400 characters. A note is a view, not a record; the trajectory holds the
   whole of it.
 - `Watch` — `(note: Note) => void`, the callback for live notes.
 - `Harness` — the interface each adapter implements (ADR 0002):

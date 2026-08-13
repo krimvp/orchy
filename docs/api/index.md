@@ -1,8 +1,8 @@
 # `src/index.ts` — the public entry point
 
-This module is the package's front door. `package.json` maps the bare import
-`"orchy"` to this file, so everything a program uses from the library passes
-through here. It holds no code of its own — every line is a re-export from
+This module is the package's front door. `package.json` maps the package import
+`"@krimvp/orchy"` to this file — the bare name `orchy` on npm belongs to another
+package — so everything a program uses from the library passes through here. It holds no code of its own — every line is a re-export from
 one of the other modules under `src/` — but the selection is the point: what
 this file names is public API, and what it omits stays internal even when its
 home module exports it (the CLI in `src/cli.ts`, for example, or `flow.ts`
@@ -49,7 +49,7 @@ Load a flow from a YAML file, run it under the pi harness, and print each
 step as it finishes — using only names this module exports:
 
 ```ts
-import { loadFlow, pi, run } from "orchy";
+import { loadFlow, pi, run } from "@krimvp/orchy";
 
 const flow = await loadFlow("flows/review.yaml");
 const state = await run(flow, {

@@ -91,5 +91,5 @@ orchy.close();
 ```
 
 In a real deployment, `cli.ts` builds the daemon and calls `serve` for the
-`serve` command; the UI and anything else on the same machine speak to the
-daemon through these routes.
+`orchy daemon` command; the UI and anything else on the same machine speak to
+the daemon through these routes.

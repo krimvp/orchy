@@ -41,9 +41,11 @@ and the daemon marks the row `stopped`.
     optionally `with`, the values the flow takes; the child validates them.
     `startedBy` rides along when a step placed the order through the MCP
     door, and the child writes it into its state (ADR 0025).
-  - `resume(runId, value, harness, from?)` — continues a run, returning a
-    fresh `Ticket`. A `value` answers the gate of a run whose status is
-    `waiting`. No value continues a run that ended, from the step `from`
+  - `resume(runId, value, harness, from?, step?)` — continues a run,
+    returning a fresh `Ticket`. A `value` answers the gate of a run whose
+    status is `waiting`, checked against that gate's contract here at the
+    door; `step` names the gate the answer was written for, so a run that has
+    moved on refuses an answer meant for the question it has left. No value continues a run that ended, from the step `from`
     names or from where the run stood; a run that is `done` needs `from`.
     Throws when the index holds no such run, the run is still running or
     already queued, or the combination of value and status makes no sense.

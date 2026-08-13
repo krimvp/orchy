@@ -139,6 +139,13 @@ runs the tests on every push, so a broken example fails the build.
 | [dependency-audit](./examples/dependency-audit) | one prompt over a list, a value every member supplies, a retry, and a step a condition rules out |
 | [grilling](./examples/grilling) | a gate that asks a person a round of questions, over and over |
 
+Twelve more flows live in [flows](./flows) — work rather than teaching:
+`bugfix`, `qa`, `standup`, `pr-describe`, `test-writer`, `typo-hunt`,
+`api-docs`, `security-sweep`, `refactor-gate`, `planning-poker`,
+`translate-readme`, and `ship`. The same test checks each one, and
+[docs/usability.md](./docs/usability.md) reports what happened when every one
+of them ran against a real model.
+
 ## Harnesses
 
 Orchy drives a harness, and does not replace one.
@@ -395,7 +402,7 @@ npm run check   # the compiler
 npm run build   # compile src to dist, as a publish does
 ```
 
-CI runs both, and the page build, on every push to main and on every merge
+CI runs both, and the page build, on every push to main and on every pull
 request. See [.github/workflows/ci.yml](./.github/workflows/ci.yml).
 
 A release goes out from GitHub. Move the lines under `## [Unreleased]` in
