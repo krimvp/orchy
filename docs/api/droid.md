@@ -10,7 +10,7 @@ The adapter drives the `droid exec` command. A custom model in
 `~/.factory/config.json` — Ollama Cloud, a local Ollama server, or any
 OpenAI-compatible endpoint — serves a step without a Factory account.
 
-Four details are load-bearing:
+Five details are load-bearing:
 
 - **Only the declared tools exist.** Orchy's harness-neutral tool names are
   mapped to Droid's own (`Read`, `Create`, `Edit`, `Execute`, `Grep`, `Glob`,
@@ -32,6 +32,17 @@ Four details are load-bearing:
   slash, as `"qwen3.5:397b"` or `"custom:glm-5.2-[Ollama-Cloud]-0"`, not the
   `provider/model` pair that Pi wants. The check uses the same grammar that
   `validate()` reads before a run starts.
+- **The environment names the autonomy level.** The adapter passes
+  `--auto high`, because no one sits at the keyboard of a step: the tool list
+  bounds what exists, and the level approves what the list holds. An
+  organisation can cap the level of the `droid` command below `high`, and
+  every step then fails at the door of the command, so `ORCHY_DROID_AUTO`
+  lowers it to `low` or `medium`. The variable belongs to the machine and not
+  to the flow, because a flow is data that runs everywhere (ADR 0028). A
+  level below `high` takes work away from a step and adds none: droid asks,
+  no person answers, and the step fails or comes back short. When droid
+  refuses the level itself, the adapter adds one sentence to the error, which
+  names the variable.
 - **Droid names its own session.** The command tells its session id only at
   the end, so while the step runs the record is found, not asked for: the
   first new session file of the working directory whose title opens with this
@@ -57,10 +68,11 @@ The adapter, with the two methods the interface asks for.
 **`run(request, watch?)`** executes one step. It takes an `AgentRequest`
 (`step`, `prompt`, `tools`, a `returns` JSON Schema, `cwd`, optional `model`)
 and an optional `Watch` callback for live notes. It spawns `droid exec` in
-`request.cwd` with `--auto high`, because no one sits at the keyboard of a
-step, and resolves to an `AgentResult`: `value` is the JSON value of the
-answer and `trajectory` is the session id. It rejects when a requested tool
-has no mapping, when the tool list is empty, when the model id is not plain,
+`request.cwd` with the autonomy level that `autonomyOf()` reads — `high`
+unless `ORCHY_DROID_AUTO` names another — and resolves to an `AgentResult`:
+`value` is the JSON value of the answer and `trajectory` is the session id.
+It rejects when a requested tool has no mapping, when the tool list is empty,
+when the model id is not plain, when the environment names no autonomy level,
 when the command fails or answers something that is not JSON, or when the
 answer holds no JSON value.
 
@@ -104,6 +116,7 @@ const trajectory = droid.toTrajectory(result.trajectory!, "run-42/step-2", "0.1.
 ```
 
 In a real run, `src/run.ts` picks this adapter because the flow's step names
-`droid` as its harness, and `validate()` has already checked the tools and
-the model grammar against the tables in `src/harness.ts` before this module
-loads.
+`droid` as its harness, `validate()` has already checked the tools and the
+model grammar against the tables in `src/harness.ts` before this module loads,
+and the runner has already refused a value of `ORCHY_DROID_AUTO` that names no
+level.

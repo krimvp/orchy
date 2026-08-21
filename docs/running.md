@@ -104,6 +104,16 @@ Install part of [README.md](../README.md#a-model-comes-from-the-harness). Droid
 writes no dollars into its record, so a droid step reports no cost, and a flow
 that holds one declares no `budget`.
 
+Droid also runs a step under an autonomy level, and Orchy asks for `high`. An
+organisation can cap the level, and the command then refuses every step. Set
+`ORCHY_DROID_AUTO` to `low`, to `medium`, or to `high` to name the level the cap
+allows. The level belongs to the machine, so it is a variable and not a field of
+the flow. See [ADR
+0028](./adr/0028-the-environment-names-the-autonomy-level.md). A level below
+`high` takes work away from a step and adds none, because no person answers what
+droid asks. A run refuses a value that names no level, before the first step
+spends a token.
+
 A tool name changes across the harnesses, and Orchy maps it. `find` and `ls`
 both become `Glob`, because Claude has no separate list tool. So a step that
 declares `ls` gets `Glob`. On droid, `write` becomes `Create` and `bash`

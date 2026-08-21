@@ -29,7 +29,8 @@ Grouped by the module each name comes from:
   bring a YAML flow in from disk; `parseFlow` and `formatFlow` convert
   between text and the `Flow` data without touching disk.
 - **`harness.ts` — what an agent step runs under.** The tables `ADAPTERS`,
-  `MODELS`, `SUPPLIES`, and `TOOLS`, plus `notesOf`. Types: `Harness`,
+  `AUTONOMY`, `MODELS`, `SUPPLIES`, and `TOOLS`, plus `autonomyOf`,
+  `autonomyProblem`, and `notesOf`. Types: `Harness`,
   `AdapterName`, `ToolName`, `AgentRequest`, `AgentResult`, `Note`, `Watch`.
 - **`pi.ts`, `claude.ts`, and `droid.ts` — the three shipped harnesses.**
   `pi`, `claude`, and `droid`, each a ready `Harness` value to pass to `run`.

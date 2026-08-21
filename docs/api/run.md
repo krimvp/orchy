@@ -37,7 +37,9 @@ Functions:
   flow takes, expands static fanouts, and refuses a flow that still holds a
   `kind: "flow"` step (only loading a file expands one — use `loadFlow` from
   `src/load.ts`). It assigns a fresh `runId`, creates the run directory, and
-  executes until the run is `"done"`, `"failed"`, or `"waiting"`.
+  executes until the run is `"done"`, `"failed"`, or `"waiting"`. A run and a
+  resume both refuse a value of `ORCHY_DROID_AUTO` that names no autonomy
+  level, before any step starts (ADR 0028).
 
 - `resume(runId: string, value: unknown, options?: RunOptions & { from?: string }): Promise<RunState>`
   — continues a run, in two distinct ways. With a value, it answers the gate

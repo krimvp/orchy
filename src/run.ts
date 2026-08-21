@@ -30,7 +30,7 @@ import {
   takesProblem,
   validate,
 } from "./flow.ts";
-import { ADAPTERS, type Harness, type Note } from "./harness.ts";
+import { ADAPTERS, type Harness, type Note, autonomyProblem } from "./harness.ts";
 import { pi } from "./pi.ts";
 import { attempts, toAtif } from "./atif.ts";
 import { type Change, type Snapshot, changed, take } from "./workspace.ts";
@@ -426,6 +426,11 @@ function directoryOf(cwd: string, runId: string): string {
 }
 
 async function execute(state: RunState, cwd: string, options: RunOptions, answered?: Step): Promise<RunState> {
+  // The environment names the autonomy level, so a value that names no level
+  // fails here: before a step starts, and on a resume as well. ADR 0028.
+  const autonomy = autonomyProblem();
+  if (autonomy) throw new Refused(autonomy);
+
   const harness = options.harness ?? pi;
   const emit = options.onEvent ?? (() => {});
   // ADR 0005: the state on disk is the run. A gate and a crash recover the same way.

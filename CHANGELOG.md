@@ -10,6 +10,20 @@ named here.
 
 ## [Unreleased]
 
+### Added
+- `ORCHY_DROID_AUTO` names the autonomy level of a droid step: `low`, `medium`,
+  or `high`. The adapter asked for `high` and nothing could change it, so a
+  machine whose organisation caps the level failed every droid step at the door
+  of the command. `high` stays the level a step takes when the variable is
+  absent. The level belongs to the machine and not to the flow, because the same
+  flow runs everywhere. See [ADR
+  0028](./docs/adr/0028-the-environment-names-the-autonomy-level.md).
+
+### Changed
+- A run and a resume refuse a value of `ORCHY_DROID_AUTO` that names no level,
+  before the first step spends a token. When droid refuses the level itself, the
+  error of the step names the variable and the levels.
+
 ## [0.0.2] - 2026-08-13
 
 ### Added
