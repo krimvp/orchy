@@ -4,11 +4,13 @@ This module defines what a harness adapter is, without being one. The three
 adapters (`src/pi.ts`, `src/claude.ts`, and `src/droid.ts`) each drive a
 coding agent; this
 file holds the interface they implement, the request and result shapes they
-exchange, and three small tables of facts about them — which adapters exist,
-which tools each supplies, and what each accepts as a model name. The tables
-live here rather than inside the adapters so that `validate()` can refuse a
-bad flow — an unknown harness, a tool the harness lacks, a model name in the
-wrong grammar — without loading the SDK of any harness.
+exchange, and four small tables of facts about them — which adapters exist,
+which tools each supplies, what each accepts as a model name, and the autonomy
+level droid runs a step under. The tables
+live here rather than inside the adapters so that `validate()` and the runner
+can refuse a bad flow — an unknown harness, a tool the harness lacks, a model
+name in the wrong grammar, an autonomy level that is no level — without loading
+the SDK of any harness.
 
 It also owns the one piece of shared behavior: turning an ATIF `Step` into
 short `Note`s for live output, which both adapters use to report what a step
@@ -36,6 +38,12 @@ Tables and their types:
   plain id like `"qwen3.5:397b"`. Only the
   grammar is checked here — which models exist is the harness's business
   (ADR 0019).
+- `AUTONOMY` — `{ variable, levels, fallback }`: the environment variable
+  that names droid's autonomy level (`ORCHY_DROID_AUTO`), the three levels
+  the `droid` command reads (`low`, `medium`, `high`), and the level Orchy
+  takes when the variable is absent (`high`, because no one sits at the
+  keyboard of a step). Droid alone reads a level, so this is one row and not
+  a table (ADR 0028).
 
 Shapes:
 
@@ -59,8 +67,15 @@ Shapes:
   `toTrajectory(handle, trajectoryId, version)` turns the handle a `run`
   returned into an ATIF `Trajectory`, or `undefined` when no record exists.
 
-One function:
+Three functions:
 
+- `autonomyOf(env?): string` — the level a droid step runs under: the one the
+  environment names, trimmed and lowercased, or `high`. It throws when the
+  value names no level. `src/droid.ts` calls it to build `--auto`.
+- `autonomyProblem(env?): string | undefined` — the same rule as a message:
+  why the value the environment names is wrong, or `undefined` when it is
+  right or absent. `execute()` in `src/run.ts` reads it before a run and
+  before a resume, so a misspelled level costs no token.
 - `notesOf(step: Step): Note[]` — converts one ATIF `Step` into notes: its
   reasoning, its message (for agent steps), each tool call with its
   arguments, and each non-empty tool result, every one trimmed to 400
@@ -92,5 +107,6 @@ for (const note of notesOf(step)) {
 ```
 
 In a real run, `validate()` reads `ADAPTERS`, `SUPPLIES`, and `MODELS` from
-this module to check a flow before any harness loads, and `run.ts` then calls
-the chosen adapter through the `Harness` interface.
+this module to check a flow before any harness loads, `run.ts` reads
+`autonomyProblem()` before the first step, and `run.ts` then calls the chosen
+adapter through the `Harness` interface.

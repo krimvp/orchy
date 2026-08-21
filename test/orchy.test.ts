@@ -9,7 +9,7 @@ import type { TSchema } from "@sinclair/typebox";
 import { type AgentStep, type CallStep, type Flow, type GateStep, agent, call, expandFanout, expandFlows, flow, gate, resolvePaths, validate } from "../src/flow.ts";
 import { loadFlow } from "../src/load.ts";
 import type { AgentRequest, AgentResult, Harness } from "../src/harness.ts";
-import { notesOf } from "../src/harness.ts";
+import { autonomyOf, notesOf } from "../src/harness.ts";
 import { type RunEvent, type RunState, list, resume, run } from "../src/run.ts";
 import { tail } from "../src/tail.ts";
 import { claude } from "../src/claude.ts";
@@ -1640,6 +1640,32 @@ test("a harness refuses a tool it cannot supply, rather than drop it", async () 
     () => claude.run({ step: "a", prompt: "hi", tools: ["teleport"], returns: Summary, cwd: process.cwd() }),
     /claude has no tool for "teleport"/,
   );
+});
+
+test("the environment names the autonomy level of a droid step", () => {
+  // A step takes "high", because no one sits at the keyboard of one.
+  assert.equal(autonomyOf({}), "high");
+  // An organisation can cap the level, so the environment lowers it. ADR 0028.
+  assert.equal(autonomyOf({ ORCHY_DROID_AUTO: " Medium " }), "medium");
+});
+
+test("a run refuses an autonomy level that names no level of droid", async () => {
+  const cwd = workspace();
+  const before = process.env.ORCHY_DROID_AUTO;
+  process.env.ORCHY_DROID_AUTO = "highest";
+  try {
+    await assert.rejects(
+      () =>
+        run(flow("auto", { steps: [agent({ id: "a", prompt: "step.md", tools: ["read"], returns: Summary })] }), {
+          cwd,
+          harness: fakeHarness({ summary: "quiet" }),
+        }),
+      /ORCHY_DROID_AUTO is "highest", which names no autonomy level/,
+    );
+  } finally {
+    if (before === undefined) delete process.env.ORCHY_DROID_AUTO;
+    else process.env.ORCHY_DROID_AUTO = before;
+  }
 });
 
 test("the claude adapter turns one orchy tool into the tools claude has", () => {

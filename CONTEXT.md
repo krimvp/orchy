@@ -15,6 +15,13 @@ The code that connects Orchy to one harness. Orchy has three adapters, for Pi,
 for Claude Code, and for Droid.
 _Avoid_: Driver, backend, provider, integration
 
+**Autonomy level**:
+What a harness runs a step without a question. Droid holds three levels, and a
+step takes the highest, because no one sits at the keyboard of a step. The
+machine names the level, and not the flow. The level is not a tool list: the
+tool list bounds what exists.
+_Avoid_: Permission mode, approval level, sandbox, trust
+
 **Daemon**:
 The program that keeps runs on the way. It holds a queue, starts each run as a
 child process, serves the API, and serves the UI.

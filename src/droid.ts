@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { type Metrics, SCHEMA_VERSION, type Step, type Trajectory } from "./atif.ts";
-import { type AgentRequest, type Harness, MODELS, type ToolName, type Watch, notesOf } from "./harness.ts";
+import { AUTONOMY, type AgentRequest, type Harness, MODELS, type ToolName, type Watch, autonomyOf, notesOf } from "./harness.ts";
 import { tail } from "./tail.ts";
 
 const run = promisify(execFile);
@@ -71,6 +71,11 @@ export const droid: Harness = {
       throw new Error(`droid wants a plain model id, not "${request.model}"`);
     }
 
+    // No one sits at the keyboard of a step, so nothing may stop to ask, and a
+    // step needs the level that approves what the tool list holds. An
+    // organisation can cap the level, so the environment lowers it. ADR 0028.
+    const auto = autonomyOf();
+
     const args = [
       "exec",
       "--output-format",
@@ -79,10 +84,9 @@ export const droid: Harness = {
       // not know, so nothing here is dropped in silence.
       "--enabled-tools",
       tools.join(","),
-      // No one sits at the keyboard of a step, so nothing may stop to ask.
       // The tool list is the boundary; the level approves what the list holds.
       "--auto",
-      "high",
+      auto,
       // A skill is a tool the step did not declare, so none loads.
       "--disable-builtin-skills",
       "--append-system-prompt",
@@ -168,8 +172,9 @@ async function exec(args: string[], request: AgentRequest): Promise<Answer> {
   } catch (error) {
     const held = error as { stderr?: string; stdout?: string; code?: number };
     const why = (held.stderr ?? "").trim() || (held.stdout ?? "").trim().slice(0, 300) || `it ended with the code ${held.code ?? "unknown"}`;
+    const said = why.split("\n").slice(0, 3).join(" ").slice(0, 300);
     throw spent(
-      new Error(`step "${request.step}" could not run the droid command: ${why.split("\n").slice(0, 3).join(" ").slice(0, 300)}`),
+      new Error(`step "${request.step}" could not run the droid command: ${said}${hintOf(said)}`),
       sessionOf(held.stdout),
     );
   }
@@ -181,12 +186,24 @@ async function exec(args: string[], request: AgentRequest): Promise<Answer> {
     throw new Error(`the droid command answered something that is not JSON: ${stdout.trim().slice(0, 300)}`);
   }
   if (answer.is_error || answer.subtype !== "success") {
+    const said = String(answer.result).slice(0, 300);
     throw spent(
-      new Error(`step "${request.step}" ended as ${answer.subtype ?? "an error"}: ${String(answer.result).slice(0, 300)}`),
+      new Error(`step "${request.step}" ended as ${answer.subtype ?? "an error"}: ${said}${hintOf(said)}`),
       answer.session_id,
     );
   }
   return answer;
+}
+
+/**
+ * What to do, when droid refuses the autonomy level itself. An organisation can
+ * cap the level, and the command then fails before the step starts. Droid names
+ * the level in its own words, so those words ask for this. A reason that names
+ * no level costs the sentence and nothing else. ADR 0028.
+ */
+function hintOf(said: string): string {
+  if (!/autonom|--auto|auto level/i.test(said)) return "";
+  return ` Set ${AUTONOMY.variable} to the level your organisation allows: ${AUTONOMY.levels.join(", ")}.`;
 }
 
 /** The record of a step that failed rides on the error, as with claude. */

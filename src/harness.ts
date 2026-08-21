@@ -43,6 +43,48 @@ export const MODELS: Record<AdapterName, { reads: RegExp; write: string }> = {
   droid: { reads: /^[^/\s]+$/, write: 'Write the model id as droid reads it, as "qwen3.5:397b".' },
 };
 
+/**
+ * The autonomy level of the `droid` command, and the variable that names it.
+ * Droid alone reads a level, so this is one row and not a table. It lives here
+ * beside `SUPPLIES` and `MODELS`, and not in the adapter, so the runner refuses
+ * a value that names no level without loading the adapter.
+ *
+ * A step needs `high`, because no one sits at the keyboard of a step. An
+ * organisation can cap the level below `high`, and only the machine knows the
+ * cap, so the environment lowers it. See ADR 0028.
+ */
+export const AUTONOMY = {
+  variable: "ORCHY_DROID_AUTO",
+  levels: ["low", "medium", "high"],
+  fallback: "high",
+};
+
+/**
+ * Why the level that the environment names is wrong, or nothing when it is
+ * right or absent. The runner reads this before the first step, so a value that
+ * names no level costs no token, and the adapter reads the same rule when it
+ * starts the command.
+ */
+export function autonomyProblem(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const named = env[AUTONOMY.variable];
+  if (named === undefined) return undefined;
+  const level = named.trim().toLowerCase();
+  if (level === "") {
+    return `${AUTONOMY.variable} is set to nothing, which names no autonomy level. Leave it out to take "${AUTONOMY.fallback}".`;
+  }
+  if (!AUTONOMY.levels.includes(level)) {
+    return `${AUTONOMY.variable} is "${named}", which names no autonomy level. Use one of: ${AUTONOMY.levels.join(", ")}.`;
+  }
+  return undefined;
+}
+
+/** The level a droid step runs under: the one the environment names, or `high`. */
+export function autonomyOf(env: NodeJS.ProcessEnv = process.env): string {
+  const problem = autonomyProblem(env);
+  if (problem) throw new Error(problem);
+  return (env[AUTONOMY.variable] ?? AUTONOMY.fallback).trim().toLowerCase();
+}
+
 export interface AgentRequest {
   step: string;
   prompt: string;

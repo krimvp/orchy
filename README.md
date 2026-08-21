@@ -418,6 +418,23 @@ works too, when no model of the Factory catalogue wears the same name. Droid
 writes no dollars into its record, so a droid step reports no cost, and a flow
 that holds one declares no `budget`.
 
+Droid runs a step under an autonomy level. Orchy asks for `high`, because no one
+sits at the keyboard of a step: the tool list bounds what exists, and the level
+approves what the list holds. An organisation can cap the level, and every droid
+step then fails at the door of the command, so one variable lowers it:
+
+```bash
+ORCHY_DROID_AUTO=medium orchy run flow.yaml   # low, medium, or high
+```
+
+The level belongs to the machine and not to the flow, because the same flow runs
+on every machine. See [ADR
+0028](./docs/adr/0028-the-environment-names-the-autonomy-level.md). A level below
+`high` takes work away from a step and adds none: droid asks, no person answers,
+and the step fails or comes back short. It is the way to run where `high` is
+refused, and not a way to make a step safer. A run refuses a value that names no
+level, before the first step spends a token.
+
 A flow that names no model takes the default of its harness, and the default of
 Pi is a model that most machines cannot reach. The default of droid is a model
 of the Factory catalogue, which needs a Factory account. So name one.
