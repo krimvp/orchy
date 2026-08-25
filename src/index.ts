@@ -17,6 +17,8 @@ export {
   resolvePaths,
   validate,
 } from "./flow.ts";
+export { MOST, asKey, keyOf, lines, memoryProblems } from "./memory.ts";
+export type { Entry, Storage } from "./memory.ts";
 export { changed, take } from "./workspace.ts";
 export type { Change, Snapshot, Workspace } from "./workspace.ts";
 export type {
@@ -31,6 +33,7 @@ export type {
   GateStep,
   Match,
   Member,
+  Memory,
   Step,
   When,
 } from "./flow.ts";
@@ -45,7 +48,7 @@ export { metricsAt, open, rowOf } from "./store.ts";
 export type { FlowRow, RunRow, Store, StoredEvent } from "./store.ts";
 export { SCHEMA_VERSION, toAtif } from "./atif.ts";
 export type { Trajectory } from "./atif.ts";
-export type { RunEvent, RunOptions, RunState, StepRecord } from "./run.ts";
+export type { Called, RunEvent, RunOptions, RunState, StepRecord } from "./run.ts";
 export { ADAPTERS, MODELS, SUPPLIES, TOOLS, notesOf } from "./harness.ts";
 export type { AdapterName, AgentRequest, AgentResult, Harness, Note, ToolName, Watch } from "./harness.ts";
 export { tail } from "./tail.ts";

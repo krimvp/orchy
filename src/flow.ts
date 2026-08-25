@@ -2,6 +2,7 @@ import { isAbsolute, resolve } from "node:path";
 import type { Static, TSchema } from "@sinclair/typebox";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { ADAPTERS, type AdapterName, MODELS, SUPPLIES, TOOLS, type ToolName } from "./harness.ts";
+import { memoryProblems } from "./memory.ts";
 import type { Workspace } from "./workspace.ts";
 
 /**
@@ -139,6 +140,19 @@ export interface Computed {
 /** The members a file names, or where the run finds them. */
 export type Fanout = Member[] | Computed;
 
+/**
+ * What a run recovers before it starts, and where a step stores what it learns.
+ * `scope` is the key of one store: the word `none`, `flow`, or `user`, or a key
+ * the flow writes itself, which reads the values of the run as a prompt does —
+ * `ticket/{{ issue }}` gives each ticket a store of its own. A flow that
+ * declares no memory remembers nothing, which is the default. See ADR 0028.
+ */
+export interface Memory {
+  scope: string;
+  /** How many entries seed the prompt of a step. Twenty when the flow is silent. */
+  most?: number;
+}
+
 export interface AgentStep<S extends TSchema = TSchema> extends Common, Acts {
   kind: "agent";
   /** Runs this step once for each member. Orchy expands it before the run. */
@@ -155,6 +169,12 @@ export interface AgentStep<S extends TSchema = TSchema> extends Common, Acts {
   harness?: string;
   /** A string that only the harness reads. Pi wants `provider/model`. */
   model?: string;
+  /**
+   * `none` keeps the memory of the flow away from this step: it reads no seed,
+   * and the door refuses it recall and remember. A step that reviews the work
+   * of another must be able to say that it saw nothing but the work.
+   */
+  memory?: "none";
   /** A value the step holds. A fanout gives one to each member. */
   with?: Record<string, unknown>;
   /** The values that must reach the step. Invariant 2 guards what goes in. */
@@ -220,6 +240,8 @@ export interface Flow {
   returns?: TSchema;
   /** What the run may spend, in dollars. A run that reaches it stops. ADR 0019. */
   budget?: number;
+  /** What every step of the run recovers, and where a step stores. ADR 0028. */
+  memory?: Memory;
   /** How many steps run at once. Eight when the flow does not say. */
   parallel?: number;
   steps: Step[];
@@ -252,6 +274,7 @@ export function flow(name: string, definition: Definition): Flow {
   if (definition.takes) built.takes = definition.takes;
   if (definition.returns) built.returns = definition.returns;
   if (definition.budget !== undefined) built.budget = definition.budget;
+  if (definition.memory) built.memory = definition.memory;
   if (definition.parallel !== undefined) built.parallel = definition.parallel;
   return built;
 }
@@ -464,6 +487,15 @@ export async function expandFlows(flow: Flow, load: (path: string) => Promise<Fl
         `the flow at "${step.flow}" runs ${inner.parallel} steps at a time, and step "${step.id}" holds it. A width belongs to the run, so only the flow that the run starts sets one.`,
       );
     }
+    // A memory belongs to the run for the same reason, and one more: a scope
+    // reads the values of the run, and expansion turns the values of an inner
+    // flow into values of a step. So a scope that stood alone would resolve
+    // against another flow's values here, or against none. ADR 0028.
+    if (inner.memory !== undefined) {
+      throw new Error(
+        `the flow at "${step.flow}" remembers under "${inner.memory.scope}", and step "${step.id}" holds it. A memory belongs to the run, so only the flow that the run starts declares one.`,
+      );
+    }
     // One run acts in one workspace, so a flow that names the same one reads as
     // a flow that stands alone as well. A flow that names another one does not.
     if (inner.workspace && JSON.stringify(inner.workspace) !== JSON.stringify(flow.workspace)) {
@@ -544,6 +576,7 @@ const FLOW_HOLDS = [
   "returns",
   "budget",
   "parallel",
+  "memory",
   "steps",
 ];
 
@@ -555,7 +588,7 @@ const FLOW_HOLDS = [
 const HOLDS: Record<Step["kind"], { must: string[]; may: string[] }> = {
   agent: {
     must: ["prompt", "tools", "returns"],
-    may: ["needs", "when", "harness", "model", "with", "takes", "changes", "cycle", "fanout", "starts"],
+    may: ["needs", "when", "harness", "model", "with", "takes", "changes", "cycle", "fanout", "starts", "memory"],
   },
   call: {
     must: ["returns"],
@@ -575,7 +608,7 @@ const MEMBER_HOLDS: Record<"agent" | "call", string[]> = {
 const FANOUT_HOLDS = ["step", "key"];
 
 /** The components Orchy supplies, as `orchy:` and the name. ADR 0026. */
-export const COMPONENTS = ["check"] as const;
+export const COMPONENTS = ["check", "remember"] as const;
 
 const STARTS_HOLDS = ["flows", "most"];
 
@@ -671,6 +704,7 @@ function shapeProblems(flow: Flow): string[] {
       `the flow has a budget of ${JSON.stringify(flow.budget)}. A budget is a number of dollars, and zero means that no step of it may spend.`,
     );
   }
+  if (flow.memory !== undefined) problems.push(...memoryProblems(flow.memory, flow.takes));
   if (!Array.isArray(flow.steps)) return [...problems, "the flow has no steps"];
 
   for (const step of flow.steps) {
@@ -702,6 +736,12 @@ function shapeProblems(flow: Flow): string[] {
     const takesWrong = takes === undefined ? undefined : schemaFault(takes);
     if (takesWrong) problems.push(`step "${step.id}" takes ${JSON.stringify(takes)}, ${takesWrong}`);
     problems.push(...changesProblems(`step "${step.id}"`, (step as AgentStep).changes));
+    const remembers = (step as AgentStep).memory;
+    if (remembers !== undefined && remembers !== "none") {
+      problems.push(
+        `step "${step.id}" remembers ${JSON.stringify(remembers)}. A step says only "none", which keeps the memory of the flow away from it. The scope belongs to the flow.`,
+      );
+    }
     problems.push(...cycleProblems(step));
     problems.push(...memberProblems(step));
   }

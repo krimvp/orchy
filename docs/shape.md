@@ -45,6 +45,7 @@ the study did. **later** names what the work after it added.
 | flow | `returns` | **later.** JSON Schema. The value of the step the flow ends with |
 | flow | `budget` | **later.** A number of dollars. The run stops when it reaches it |
 | flow | `parallel` | a number, 8 when absent |
+| flow | `memory` | **later.** `{ scope, most }`. What every run of it recovers, and where a step stores |
 | step | `id`, `needs` | a name, and the names it waits for |
 | step | `kind` | `agent`, `call`, `gate`, `flow` |
 | agent, call, gate | `when` | **new.** A match against the value of a step it needs |
@@ -56,6 +57,7 @@ the study did. **later** names what the work after it added.
 | flow step | `flow` | a path |
 | flow step | `with` | **later.** The values the flow it names takes |
 | agent, call | `changes` | **changed.** `nothing`, `{ paths }`, or **later** `{ except }` |
+| agent | `memory` | **later.** The word `none`, which keeps the memory of the flow away from this step |
 | agent, call | `with` | **new.** A value the step holds |
 | agent, call | `takes` | **later.** JSON Schema. The values that must reach the step |
 | agent, call | `fanout` | a list of members, or **later** `{ step, key }` |
@@ -71,7 +73,9 @@ A match against one value is the value itself, or one operator: `is`, `not`,
 
 A prompt holds `{{ name }}`, and the name takes its value from what the run
 takes and what the step holds. See [ADR
-0015](./adr/0015-a-flow-takes-values-and-returns-one.md).
+0015](./adr/0015-a-flow-takes-values-and-returns-one.md). The scope of a memory
+reads a name the same way, so `ticket/{{ issue }}` gives each ticket a store of
+its own. See [ADR 0028](./adr/0028-memory-is-a-declared-scope.md).
 
 ## Finding 1 — a file states a field, and nothing checks it
 
@@ -383,7 +387,7 @@ that had no shape:
   path, and not only the path.
 - **A call step holds a command.** A component in any language: JSON on
   stdin and stdout, notes on stderr, a module or a command and exactly one.
-  Orchy ships `orchy:check`. See [ADR
+  Orchy ships `orchy:check` and `orchy:remember`. See [ADR
   0026](./adr/0026-a-component-is-a-process.md).
 - **A step declares what it may start.** `starts` on a step that holds the
   `orchy` tool, enforced by the door from the state on disk, refused where

@@ -31,6 +31,7 @@ import {
   validate,
 } from "./flow.ts";
 import { ADAPTERS, type Harness, type Note } from "./harness.ts";
+import { type Entry, MOST, keyOf, lines } from "./memory.ts";
 import { pi } from "./pi.ts";
 import { attempts, toAtif } from "./atif.ts";
 import { type Change, type Snapshot, changed, take } from "./workspace.ts";
@@ -130,6 +131,17 @@ function money(amount: number): string {
   return `$${Number(amount.toFixed(4))}`;
 }
 
+/**
+ * What a component learns about the run it works in: the run and the step it
+ * is, and the store the run reads, when the flow declares one. A component
+ * that wants none of it takes four arguments and ignores this. ADR 0028.
+ */
+export interface Called {
+  runId: string;
+  step: string;
+  memory?: { key: string; most: number };
+}
+
 export interface StepRecord {
   /** A condition ruled a skipped step out, or a step it needs was skipped. */
   status: "done" | "failed" | "skipped";
@@ -189,6 +201,13 @@ export interface RunState {
   feedback?: Array<{ step: string; to: string; value: unknown }>;
   /** Every step that a cycle dropped. A dropped attempt is still a cost. */
   history?: Array<{ step: string; record: StepRecord }>;
+  /**
+   * The store this run recovers from and writes to, when the flow declares one.
+   * The run resolves the key once, and keeps it here: a resume then reads the
+   * store the run really used, and not the one the flow file names today.
+   * ADR 0028.
+   */
+  memory?: { key: string; most: number };
   /**
    * The step each computed fanout was, before the run expanded it into members.
    * A cycle back past the step that gave the list expands it again from here.
@@ -253,6 +272,15 @@ export async function run(input: Flow, options: RunOptions = {}): Promise<RunSta
   // ADR 0005: the state on disk is the run, so a resume reads the values again.
   if (options.with) state.with = options.with;
   if (options.startedBy) state.startedBy = options.startedBy;
+  // A scope that reads a value nothing supplies is a fault of what the run was
+  // given, like the values themselves: it is heard here, before a directory
+  // exists and before a step spends anything.
+  try {
+    const key = keyOf(flow.memory, flow.name, options.with);
+    if (key) state.memory = { key, most: flow.memory?.most ?? MOST };
+  } catch (error) {
+    throw new Refused(error instanceof Error ? error.message : String(error));
+  }
   mkdirSync(directoryOf(cwd, state.runId), { recursive: true });
   return execute(state, cwd, options);
 }
@@ -974,7 +1002,7 @@ async function runStep(
     // past `fail()` and `close()`, and the run stayed at "running" for ever.
     before = take(state.flow.workspace, cwd);
     if (step.kind === "agent") {
-      prompt = buildPrompt(step, inputs, cwd, values, state.with);
+      prompt = buildPrompt(step, inputs, cwd, values, state.with, recalled(step, state, cwd));
       // The prompt is the whole of what the step was asked, and it lives in a
       // file that a value fills in. So the run says it once, before the work.
       watch({ kind: "prompt", text: prompt });
@@ -994,8 +1022,8 @@ async function runStep(
             watch,
           )
         : (step as CallStep).command !== undefined
-          ? { value: await callCommand(step as CallStep, inputs, cwd, watch, values) }
-          : { value: await callModule(step as CallStep, inputs, cwd, watch, values) };
+          ? { value: await callCommand(step as CallStep, inputs, cwd, watch, values, state) }
+          : { value: await callModule(step as CallStep, inputs, cwd, watch, values, state) };
   } catch (error) {
     // The message, and not the word "Error" in front of it. A reader of a
     // console reads the reason, not the class of the object that carried it.
@@ -1090,12 +1118,22 @@ function plain(path: string): string {
   return path.replace(/\/{2,}/g, "/").replace(/^(\.\/)+/, "").replace(/\/+$/, "");
 }
 
+/**
+ * What the memory of the run gives one step. A step that says `memory: none`
+ * gets nothing, and so does a flow that declares no scope. ADR 0028.
+ */
+function recalled(step: AgentStep, state: RunState, cwd: string): Entry[] {
+  if (!state.memory || step.memory === "none") return [];
+  return lines(cwd).recall(state.memory.key, state.memory.most);
+}
+
 function buildPrompt(
   step: AgentStep,
   inputs: Record<string, unknown>,
   cwd: string,
   values: Record<string, unknown>,
   takes?: Record<string, unknown>,
+  memories: Entry[] = [],
 ): string {
   const at = resolve(cwd, step.prompt);
   let text: string;
@@ -1112,6 +1150,10 @@ function buildPrompt(
   // A member of a fanout differs by this value, so the step must read it.
   if (step.with) parts.push(block("The values this step holds", step.with));
   if (Object.keys(inputs).length > 0) parts.push(block("The values of the steps before this one", inputs));
+  // The seed is part of the prompt, so the record of the step keeps what the
+  // step was really told, and a cycle asks again with the same words. A long
+  // turn can still compact it away, which is why the door has `recall_memory`.
+  if (memories.length > 0) parts.push(block("What earlier runs recorded", memories));
   return parts.join("\n\n");
 }
 
@@ -1156,6 +1198,7 @@ async function callModule(
   cwd: string,
   watch: (note: Note) => void,
   values: Record<string, unknown>,
+  state: RunState,
 ): Promise<unknown> {
   // A shipped component lives with Orchy, so its name is not a path. ADR 0026.
   const named = String(step.module);
@@ -1173,9 +1216,11 @@ async function callModule(
     throw new Error(`step "${step.id}" names the module "${path}", which exports no default function.`);
   }
   const say = (text: string) => watch({ kind: "text", text: String(text) });
-  // `cwd` rides fourth, so a shipped component acts where the steps act. A
-  // component that wants none of the last three ignores them, as before.
-  return (module.default as (...args: unknown[]) => unknown)(inputs, say, values, cwd);
+  // `cwd` rides fourth, so a shipped component acts where the steps act. The
+  // run rides fifth, so a component writes where the run reads. A component
+  // that wants none of the last four ignores them, as before. ADR 0028.
+  const run: Called = { runId: state.runId, step: step.id, ...(state.memory ? { memory: state.memory } : {}) };
+  return (module.default as (...args: unknown[]) => unknown)(inputs, say, values, cwd, run);
 }
 
 /**
@@ -1192,9 +1237,14 @@ function callCommand(
   cwd: string,
   watch: (note: Note) => void,
   values: Record<string, unknown>,
+  state: RunState,
 ): Promise<unknown> {
   return new Promise((keep, refuse) => {
-    const child = spawn(String(step.command), { cwd, shell: true, stdio: ["pipe", "pipe", "pipe"] });
+    // A command is a process, so it learns the store the way a process learns
+    // anything: `orchy memory add "$ORCHY_MEMORY_KEY" "..."` writes where the
+    // run reads. A flow that remembers nothing sets nothing. ADR 0026, ADR 0028.
+    const env = state.memory ? { ...process.env, ORCHY_MEMORY_KEY: state.memory.key } : process.env;
+    const child = spawn(String(step.command), { cwd, shell: true, stdio: ["pipe", "pipe", "pipe"], env });
     let out = "";
     let said = "";
     let rest = "";

@@ -6,10 +6,11 @@ status: accepted
 
 `orchy` is a tool a step declares, beside `read` and `bash`. A step that
 holds it reaches the MCP door of its own root: it authors flows, starts
-runs, reads them, and answers gates, through the same ten tools an outside
-agent holds (ADR 0024). The claude adapter opens the door with
-`--mcp-config`; the pi adapter cannot, and `validate()` refuses the tool
-there, from the `SUPPLIES` table.
+runs, reads them, and answers gates, through the same tools an outside
+agent holds (ADR 0024), and two more that only a step can use: `recall_memory`
+and `remember`, over the store its own run reads (ADR 0028). The claude
+adapter opens the door with `--mcp-config`; the pi adapter cannot, and
+`validate()` refuses the tool there, from the `SUPPLIES` table.
 
 A run a step starts records who asked. The adapter tells the door the run
 and the step, the door passes it down the same path a person's order takes,

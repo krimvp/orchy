@@ -61,6 +61,8 @@ export interface Step {
   model?: string;
   /** What a step that holds the `orchy` tool may start. The door enforces it. */
   starts?: { flows?: string[]; most?: number };
+  /** `none` keeps the memory of the flow away from this step. */
+  memory?: "none";
   with?: Record<string, unknown>;
   /** The values that must reach the step, as JSON Schema. */
   takes?: Schema;
@@ -97,6 +99,12 @@ export interface Flow {
   /** What the run may spend, in dollars. A run that reaches it stops. */
   budget?: number;
   parallel?: number;
+  /**
+   * What every run of the flow recovers, and where a step stores. The editor
+   * writes the same file, so this rides through a save whether or not a
+   * control draws it.
+   */
+  memory?: { scope: string; most?: number };
   steps: Step[];
 }
 

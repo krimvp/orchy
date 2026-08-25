@@ -459,7 +459,7 @@ found that no harness Orchy drives can hold one. See [ADR
 0018](./adr/0018-a-tool-list-is-not-a-sandbox.md).
 
 **M13 — an agent authors a flow through MCP. Done.** `orchy mcp` serves the
-Model Context Protocol on stdin and stdout: ten tools, so a coding agent
+Model Context Protocol on stdin and stdout: twelve tools, so a coding agent
 writes a flow, hears every problem from `validate()`, runs it, follows it,
 and answers a gate through the same contract check a person meets. The door
 is a sibling of the HTTP one — it translates a call to the daemon and adds no

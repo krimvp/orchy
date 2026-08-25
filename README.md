@@ -180,6 +180,7 @@ orchy run flow.yaml --harness claude       # for a flow that names none
 orchy resume <run id> '{"approved":true}'  # answer a gate
 orchy resume <run id>                      # continue a run that ended
 orchy resume <run id> --from <step>        # go back to a step, and run again
+orchy memory list ticket-412               # what runs recorded, and who
 orchy daemon                               # a queue, an API, and a page
 orchy mcp                                  # the same engine, for an agent
 ```
@@ -204,6 +205,11 @@ That is how the daemon reads a run.
 
 `orchy check <flow file>` reads a flow, and every flow it holds, and says what
 is wrong with it. It runs nothing and spends nothing.
+
+`orchy memory keys | list <scope> | add <scope> <text> | forget <scope> [id]`
+reads and writes what runs record. A scope is the key a flow declares. `forget`
+takes the id of one entry, and drops the whole scope without one. See
+[What a run remembers](#what-a-run-remembers).
 
 `orchy mcp` serves the Model Context Protocol on stdin and stdout, so a coding
 agent writes flows, hears every problem from `validate()`, runs them, and
@@ -303,6 +309,63 @@ until this closes. See [docs/sweep/observability.md](./docs/sweep/observability.
 ```bash
 jq .final_metrics .orchy/runs/<run id>/trajectory.json
 ```
+
+## What a run remembers
+
+A flow that says nothing remembers nothing. One that wants to says where:
+
+```yaml
+name: bugfix
+takes:
+  type: object
+  required: [issue]
+  properties:
+    issue: { type: string }
+memory:
+  scope: "ticket/{{ issue }}"   # none | flow | user | a key of your own
+  most: 20                      # how many entries seed a prompt
+```
+
+`scope` is the key of one store. `none` is the default and remembers nothing.
+`flow` is one store for every run of this flow, and `user` is the one global
+store — available, but you have to ask for it by name. Everything else is a key
+of your own, and it reads the values of the run the way a prompt does. So each
+ticket gets a store, and a follow-up flow that writes the same scope reads what
+the first run left.
+
+What the scope holds seeds the prompt of every step, beside the values of the
+run. A step that must judge the work and nothing else declines it:
+
+```yaml
+- id: review
+  kind: agent
+  memory: none
+```
+
+Four things write an entry, and they write the same entry:
+
+- a step that holds the `orchy` tool, through `remember` at the door of its run;
+- a `orchy:remember` step, which is bookkeeping the flow decides and not a
+  choice the model makes on the fly;
+- `orchy memory add`, for a person, and for a harness that holds no `orchy`
+  tool — a `command` step reads `$ORCHY_MEMORY_KEY` for the same reason;
+- a hand, in the file.
+
+A step reads past the seed with `recall_memory`, which takes a query and no key:
+the key comes from the state of the run, so a step cannot reach the store of
+another ticket, another flow, or another user. There is nothing to ask for.
+
+Every entry names the run and the step that wrote it, so a wrong one is found
+and dropped:
+
+```bash
+orchy memory list ticket-proj-14
+orchy memory forget ticket-proj-14 a41f9c02
+```
+
+The store is a line of JSON for each entry, under `.orchy/memory`, one file for
+each key. It is not the run: losing it loses no run. See [ADR
+0028](./docs/adr/0028-memory-is-a-declared-scope.md).
 
 ## How it works
 
@@ -484,7 +547,8 @@ takes and the value a flow returns, a name in a prompt, a step that declares
 what reaches it, a member that holds a value, a fanout over a list that a step
 computes, each of the five operators, a gate that sends the run back, a step
 that retries itself, a step that a condition rules out, a wave that holds a
-promise, two failures in one wave, and a budget that stops a run. See
+promise, two failures in one wave, a budget that stops a run, and a memory that
+one run writes and the next one reads. See
 [dependency-audit](./examples/dependency-audit).
 
 **Driven in a browser:** the daemon, the queue, the live events, the notes a
@@ -501,7 +565,8 @@ file outside its root.
 `release-notes`, `decision`, and `dependency-audit` examples. A test reads every
 example and holds it to `validate()`. It starts no run of one.
 
-**Not built:** an OpenTelemetry exporter, a sandbox, a
+**Not built:** a memory that expires or that ranks what it answers with, an
+OpenTelemetry exporter, a sandbox, a
 timeout for a step, a workspace for one step, a workspace for each run, and
 any user or password on the daemon. Invariant 1 names the sandbox gap
 rather than hiding it, and [ADR

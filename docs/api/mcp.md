@@ -46,6 +46,13 @@ flow runs code, with the authority of the user who started `orchy mcp`.
   | `list_runs` | `{ queue, runs }` — every pending ticket, and every run the index holds, newest first. |
   | `resume_run` | Continues a run. `value` answers the gate of a waiting run — as JSON text, as at the command line, so a boolean stays a boolean across every client — and the contract of the gate checks it here, at the door; `from` names a step of an ended run to go back to; `step` names the gate the answer was written for, so a run that moved on refuses it. A refusal the child writes — a step `from` does not name — answers the resume itself, not only the queue. |
   | `stop_run` | Stops a run where it stands, as `POST /api/runs/:id/stop` does. |
+  | `recall_memory` | What earlier runs recorded in the memory of this run: `{ scope, entries, of }`. `query` keeps the entries whose text or tags hold it, and `limit` bounds how many come back. Only a step of a run reaches it, and only over the store its own run reads. |
+  | `remember` | Records one entry in the memory of this run, naming the run and the step that wrote it. Refused for a step that declares `memory: none`, and for a flow that declares no memory. |
+
+  Neither memory tool takes a key. The scope comes from `state.memory` of the
+  run whose step opened the door, so a step cannot name the store of another
+  ticket, another flow, or another user — there is nothing to ask for. That is
+  the whole of the isolation (ADR 0028).
 
 The daemon behind this door asks for no schedule beat (`daemon(root, false)`),
 so it and the long daemon stand over one root without firing one schedule
@@ -69,7 +76,7 @@ Register the door with Claude Code, from the directory the flows live in:
 claude mcp add orchy -- npx @krimvp/orchy mcp
 ```
 
-The agent then holds the ten tools, and the guide tells it the loop: write
+The agent then holds the twelve tools, and the guide tells it the loop: write
 the flow as YAML, hear every problem from `check_flow`, write it with
 `write_flow`, start it with `run_flow`, and follow it with `read_run`. A run
 that waits at a gate holds a question, and the agent answers it with

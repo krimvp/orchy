@@ -10,6 +10,28 @@ named here.
 
 ## [Unreleased]
 
+### Added
+- A flow declares what it remembers, and where: `memory: { scope, most }`. The
+  scope is the key of one store — `none`, which is the default and remembers
+  nothing; `flow`; `user`; or a key of the flow's own, which reads the values of
+  the run as a prompt does, so `ticket/{{ issue }}` gives each ticket a store
+  and a follow-up flow reads what the first run left. What the scope holds seeds
+  the prompt of every step, and `most` bounds how much. A step writes
+  `memory: none` and reads none of it.
+- Four ways to record one entry, and they all write the same thing: `remember`
+  at the MCP door of a run, the `orchy:remember` call step, `orchy memory add`
+  at the command line, and a hand in the file. A `command` step reads the key as
+  `$ORCHY_MEMORY_KEY`. A step reads past the seed with `recall_memory`, which
+  takes a query and no key: the scope comes from the state of the run, so a step
+  cannot reach the store of another ticket, another flow, or another user.
+- `orchy memory keys | list | add | forget`, for a person correcting what a run
+  wrote, and for a harness that holds no `orchy` tool. Every entry names the run
+  and the step that wrote it, so a wrong one is found by its provenance and
+  dropped by its id.
+- The store is a line of JSON for each entry, under `.orchy/memory`, one file
+  for each key, behind a four-call `Storage` contract. It is not the run:
+  losing it loses no run. See ADR 0028.
+
 ## [0.0.2] - 2026-08-13
 
 ### Added

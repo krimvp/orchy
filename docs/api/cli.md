@@ -7,7 +7,7 @@ end of a run into an exit code. Everything it does, it does by calling the
 other modules — `loadFlow` from `src/load.ts`, `run` and `resume` from
 `src/run.ts`, `daemon` and `serve` from `src/daemon.ts` and `src/server.ts`.
 
-Six commands exist:
+Seven commands exist:
 
 - `orchy run <flow file>` — load a flow (TypeScript or YAML) and run it.
   `--with <json>` supplies the values the flow takes, as one JSON object —
@@ -23,6 +23,14 @@ Six commands exist:
   exits `2` with the list of problems when the flow is not valid.
 - `orchy runs` — list the runs under this directory, newest first, as a table;
   with `--events`, one JSON row per line.
+- `orchy memory keys | list <scope> | add <scope> <text> | forget <scope> [id]`
+  — read and write what runs recorded, under `.orchy/memory`. A scope is the
+  key a flow declares, and it is read the way the runner reads one, so
+  `ticket/PROJ-14` reaches the store a run wrote. `list` prints one entry a
+  line, or one JSON entry a line with `--events`. `forget` drops the entry an
+  id names, and the whole scope without one. This is the door for a person
+  correcting what a run wrote, and for a harness that holds no `orchy` tool
+  (ADR 0028).
 - `orchy daemon [--port 4000]` — start the long-running engine over the
   current directory and serve its HTTP API. The daemon runs an agent on this
   machine, so it listens on `127.0.0.1` only, and it closes cleanly on
