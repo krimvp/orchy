@@ -216,6 +216,10 @@ Know these before you change the runner.
   findings, with the raw report of each agent under `docs/sweep/`. It is a
   record as well. Its "What is closed" part holds the status, and the findings
   under it stay as they were written.
+- `docs/isolation.md` studies [issue
+  4](https://github.com/krimvp/orchy/issues/4): what a Pi step reads that no
+  flow names, and what closing that costs. It holds no decision. Read it before
+  you change what an adapter loads.
 - `docs/shape.md` studies the flow data, and names where it is weak. Read it
   before you add a field or change one. It is the record of one study, so keep
   the study as it was written, hold its table of fields to the code, and say
