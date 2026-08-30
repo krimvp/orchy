@@ -294,6 +294,11 @@ function Hero({
     const evidence = gate.needs
       .map((need) => ({ need, record: state.steps[need] }))
       .filter((one) => one.record && "value" in one.record);
+    // The why behind those answers lives one step further back, so it stands
+    // one unfold away instead of a walk through the drawing.
+    const deeper = behind(gate, state.flow.steps)
+      .map((need) => ({ need, record: state.steps[need] }))
+      .filter((one) => one.record && "value" in one.record);
     return (
       <div className="hero waiting" style={{ "--i": 1 } as CSSProperties}>
         <span className="badge">Your turn</span>
@@ -302,6 +307,14 @@ function Hero({
         {evidence.map(({ need, record }) => (
           <Value key={need} label={`What ${need} answered`} value={record?.value} />
         ))}
+        {deeper.length > 0 && (
+          <details className="behind">
+            <summary>What the steps further back answered</summary>
+            {deeper.map(({ need, record }) => (
+              <Value key={need} label={`What ${need} answered`} value={record?.value} />
+            ))}
+          </details>
+        )}
         <Contract schema={gate.returns ?? {}} label="Answer and continue" onSend={onAnswer} />
       </div>
     );
@@ -639,10 +652,14 @@ function Detail({
           <summary>
             {history.length} attempt{history.length === 1 ? "" : "s"} that a loop dropped
           </summary>
+          {/* An attempt that failed holds a reason, not a value, and the reason
+           * is what a person opens this fold to read. */}
           {history.map((one, index) => (
-            <pre key={index} className="small">
-              {JSON.stringify(one.value, null, 2)}
-            </pre>
+            <div key={index} className="past-attempt">
+              <span className={`pill ${one.status}`}>{one.status}</span>
+              {one.error && <pre className="bad small">{one.error}</pre>}
+              {one.value !== undefined && <pre className="small">{JSON.stringify(one.value, null, 2)}</pre>}
+            </div>
           ))}
         </details>
       )}
@@ -992,6 +1009,27 @@ function broken(state: RunState): [string, StepRecord] | undefined {
 }
 
 /**
+ * The steps behind the needs of a step, nearest first, each one once. The needs
+ * themselves stay out: their answers already stand open above the fold.
+ */
+function behind(step: Step, steps: Step[]): string[] {
+  const needsOf = new Map(steps.map((one) => [one.id, one.needs]));
+  const seen = new Set(step.needs);
+  const queue = [...step.needs];
+  const found: string[] = [];
+  while (queue.length > 0) {
+    const id = queue.shift() as string;
+    for (const need of needsOf.get(id) ?? []) {
+      if (seen.has(need)) continue;
+      seen.add(need);
+      found.push(need);
+      queue.push(need);
+    }
+  }
+  return found;
+}
+
+/**
  * The value the run returns: the value of the step it ends with. More ends
  * than one mean the flow returns nothing, and the reader picks a step instead.
  */
@@ -1024,7 +1062,10 @@ function say(event: RunEvent): string {
     case "step_start":
       return "started";
     case "step_end":
-      return `ended ${String(event.status)}`;
+      // The event carries the reason, so the feed says why instead of "failed".
+      return event.status === "failed" && event.error
+        ? `ended failed: ${String(event.error)}`
+        : `ended ${String(event.status)}`;
     case "skip":
       return `skipped, because ${String(event.why)}`;
     case "cycle":

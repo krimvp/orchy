@@ -164,7 +164,15 @@ export function FlowRuns({ id }: { id: number }) {
                 <span>
                   <span className={`pill ${run.status}`}>{run.status}</span>
                 </span>
-                <span className="name">{taken(run) ?? <em className="need">no values</em>}</span>
+                <span className="name">
+                  {taken(run) ?? <em className="need">no values</em>}
+                  {/* The reason rides the row, so a failed run says why right here. */}
+                  {run.error && (
+                    <span className="why" title={run.error}>
+                      {run.error}
+                    </span>
+                  )}
+                </span>
                 <span className="dim">{when(run.startedAt)}</span>
                 <span className="dim">{took(run)}</span>
                 <span className="dim">{run.cost ? `$${run.cost.toFixed(4)}` : "—"}</span>

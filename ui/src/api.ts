@@ -131,6 +131,8 @@ export interface RunRow {
   withJson: string | null;
   /** The run and the step that started this run, as JSON, when a step did. */
   startedByJson?: string | null;
+  /** Why the run failed, so a list says it without opening the run. */
+  error: string | null;
 }
 
 export interface Ticket {

@@ -10,6 +10,22 @@ named here.
 
 ## [Unreleased]
 
+### Added
+- A run's row carries `error`: why the run failed, as the fault of the run
+  itself or the failed step's error under the step's name. The runs list and a
+  flow's runs list show it on the row, so a person reads why without opening
+  the run. The index adds the column to a database from before it.
+- A gate folds the answers of the steps behind its needs under "What the steps
+  further back answered", so the why behind an answer stands one unfold away
+  instead of a walk through the drawing.
+- An attempt that a loop dropped shows what it ended as and, when it failed,
+  its reason — the reason is what a person opens that fold to read.
+- The feed says why a step failed, where it said only `ended failed`.
+
+### Changed
+- The planning-poker flow takes a task of at least one character, so an empty
+  task is refused at the door and not sized by three estimators.
+
 ## [0.0.2] - 2026-08-13
 
 ### Added

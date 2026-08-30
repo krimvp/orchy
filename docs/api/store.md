@@ -42,8 +42,8 @@ of every run stay on disk regardless (ADR 0009).
   - `runs(path?, limit = KEPT)`, `run(runId)` — list runs newest first, every
     one or only those of one flow file, or fetch one by id.
   - `saveRun(row)` — inserts a `RunRow`, or updates its mutable fields
-    (status, end time, waiting state, question, cost, tokens) if the run
-    exists.
+    (status, end time, waiting state, question, cost, tokens, error) if the
+    run exists.
   - `addEvent(runId, event, seq?)` — stamps a `RunEvent` with the current
     time and the given sequence number, stores it, and returns the
     `StoredEvent`.
@@ -65,6 +65,11 @@ of every run stay on disk regardless (ADR 0009).
   children of a run from the index alone. `children(runId)` gives them
   every one, unbounded by the page `runs()` shows, because the `starts`
   bound counts from it (ADR 0027).
+- A `RunRow` also carries `error` — why the run failed, when it did — so a
+  list says it without opening the run. It is the fault of the run itself
+  when the state holds one, and otherwise the failed step's error under the
+  step's name, as `review: the value does not match returns`. A run that did
+  not fail carries `null`, whatever its steps went through.
 - `rowOf(state, path, spend?)` — builds a `RunRow` from a `RunState`: the
   start time is the earliest step start, the end time is the latest step end
   (counting attempts a cycle or resume dropped to `history`) but only once

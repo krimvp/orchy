@@ -29,7 +29,8 @@ create table if not exists run (
   cost real,
   tokens integer,
   withJson text,
-  startedByJson text
+  startedByJson text,
+  error text
 );
 create table if not exists event (
   id integer primary key,
@@ -78,6 +79,11 @@ export interface RunRow {
   withJson: string | null;
   /** The run and the step that started this run, as JSON, when a step did. */
   startedByJson: string | null;
+  /**
+   * Why the run failed, so a list says it without opening the run: the fault of
+   * the run itself, or the failed step's error under its name.
+   */
+  error: string | null;
 }
 
 /**
@@ -121,11 +127,10 @@ export function open(file: string) {
   // `create table if not exists` leaves a table that is already there alone, so
   // a column added later arrives here. `index()` fills it from the state on disk.
   const columns = db.prepare("pragma table_info(run)").all() as Array<{ name: string }>;
-  if (!columns.some((column) => column.name === "withJson")) {
-    db.exec("alter table run add column withJson text");
-  }
-  if (!columns.some((column) => column.name === "startedByJson")) {
-    db.exec("alter table run add column startedByJson text");
+  for (const column of ["withJson", "startedByJson", "error"]) {
+    if (!columns.some((held) => held.name === column)) {
+      db.exec(`alter table run add column ${column} text`);
+    }
   }
 
   const all = <T>(sql: string, ...values: unknown[]): T[] =>
@@ -217,12 +222,12 @@ export function open(file: string) {
 
     saveRun(row: RunRow): void {
       db.prepare(
-        `insert into run (runId, flowName, path, status, startedAt, endedAt, waitingFor, question, cost, tokens, withJson, startedByJson)
-         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `insert into run (runId, flowName, path, status, startedAt, endedAt, waitingFor, question, cost, tokens, withJson, startedByJson, error)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          on conflict(runId) do update set
            status = excluded.status, endedAt = excluded.endedAt, waitingFor = excluded.waitingFor,
            question = excluded.question, cost = excluded.cost, tokens = excluded.tokens,
-           withJson = excluded.withJson, startedByJson = excluded.startedByJson`,
+           withJson = excluded.withJson, startedByJson = excluded.startedByJson, error = excluded.error`,
       ).run(
         row.runId,
         row.flowName,
@@ -236,6 +241,7 @@ export function open(file: string) {
         row.tokens,
         row.withJson,
         row.startedByJson,
+        row.error,
       );
     },
 
@@ -320,7 +326,14 @@ export function rowOf(state: RunState, path: string | null, spend?: { cost?: num
     tokens: spend?.tokens ?? null,
     withJson: state.with ? JSON.stringify(state.with) : null,
     startedByJson: state.startedBy ? JSON.stringify(state.startedBy) : null,
+    error: state.status === "failed" ? (state.error ?? said(state)) : null,
   };
+}
+
+/** The failed step's error, under the name of the step that holds it. */
+function said(state: RunState): string | null {
+  const fault = Object.entries(state.steps).find(([, record]) => record.status === "failed");
+  return fault ? `${fault[0]}: ${fault[1].error ?? "failed"}` : null;
 }
 
 function directories(path: string): string[] {
