@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { type Flow, expandFlows, resolvePaths, validate } from "./flow.ts";
 import type { Workspace } from "./workspace.ts";
@@ -13,6 +13,14 @@ export async function readFlow(file: string, from = process.cwd()): Promise<Flow
   const path = resolve(from, file);
   if (!existsSync(path)) {
     throw new Error(`there is no flow file at "${path}". Name a file that is there, as a path from this directory.`);
+  }
+  // A directory, or a file of another kind, met the loader of Node and got its
+  // words: "Directory import is not supported", or "needs an import attribute".
+  if (statSync(path).isDirectory()) {
+    throw new Error(`"${path}" is a directory. Name the flow file in it, as "${join(path, "flow.yaml")}".`);
+  }
+  if (!/\.(ya?ml|[cm]?[jt]s)$/.test(path)) {
+    throw new Error(`"${path}" is not a flow file. A flow file is TypeScript or YAML: flow.ts or flow.yaml.`);
   }
   if (/\.ya?ml$/.test(path)) return parseFlow(readFileSync(path, "utf8"), path);
   const flow = (await import(pathToFileURL(path).href)).default as Flow | undefined;
