@@ -317,7 +317,11 @@ export function rowOf(state: RunState, path: string | null, spend?: { cost?: num
     flowName: state.flow.name,
     path,
     status: state.status,
-    startedAt: records.map((record) => record.startedAt).sort()[0] ?? (times[0] as string) ?? new Date().toISOString(),
+    startedAt:
+      state.startedAt ??
+      records.map((record) => record.startedAt).sort()[0] ??
+      (times[0] as string) ??
+      new Date().toISOString(),
     // A run that waits has not ended, so it reports no length yet.
     endedAt: state.status === "done" || state.status === "failed" ? (times[times.length - 1] ?? null) : null,
     waitingFor: state.waitingFor ?? null,

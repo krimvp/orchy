@@ -1069,7 +1069,9 @@ function say(event: RunEvent): string {
     case "skip":
       return `skipped, because ${String(event.why)}`;
     case "cycle":
-      return `goes back to ${String(event.to)} (round ${String(event.count)})`;
+      return `goes back to ${String(event.to)} (round ${String(event.count)}${event.limit === undefined ? "" : ` of ${String(event.limit)}`})`;
+    case "accept":
+      return `still disagrees after ${String(event.limit)} rounds back to ${String(event.to)}, and the flow accepts that`;
     case "waiting":
       return "waits for a person";
     case "run_end":

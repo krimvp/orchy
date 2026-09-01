@@ -170,6 +170,11 @@ export interface RunState {
    * from here, and the door refuses one that stands too deep. ADR 0025.
    */
   startedBy?: { runId: string; step: string };
+  /**
+   * When the run started. A run that stops at a gate before any step runs has
+   * no step to date it by, and a list showed it with no time and sorted it last.
+   */
+  startedAt?: string;
   /** `stopped` is what a person or a dead daemon leaves; a run never writes it itself. */
   status: "running" | "waiting" | "done" | "failed" | "stopped";
   /**
@@ -206,7 +211,13 @@ export type RunEvent =
   | { type: "step_end"; step: string; status: "done" | "failed"; error?: string }
   /** A condition ruled the step out. It never starts, so it never ends. */
   | { type: "skip"; step: string; why: string }
-  | { type: "cycle"; step: string; to: string; count: number }
+  /** `count` is this pass, and `limit` is how many the flow allows. */
+  | { type: "cycle"; step: string; to: string; count: number; limit: number }
+  /**
+   * The cycle reached its limit and the policy accepted the disagreement. The
+   * run goes on, and a reader must not learn that from the state alone.
+   */
+  | { type: "accept"; step: string; to: string; limit: number }
   | { type: "waiting"; step: string; question: string }
   | { type: "run_end"; status: RunState["status"]; error?: string };
 
@@ -249,7 +260,14 @@ export async function run(input: Flow, options: RunOptions = {}): Promise<RunSta
   // a step spends anything. A workspace that goes wrong later is a fault of the
   // step that met it, and the step records it.
   take(flow.workspace, cwd);
-  const state: RunState = { runId: randomUUID(), flow, status: "running", steps: {}, cycles: {} };
+  const state: RunState = {
+    runId: randomUUID(),
+    flow,
+    startedAt: new Date().toISOString(),
+    status: "running",
+    steps: {},
+    cycles: {},
+  };
   // ADR 0005: the state on disk is the run, so a resume reads the values again.
   if (options.with) state.with = options.with;
   if (options.startedBy) state.startedBy = options.startedBy;
@@ -393,11 +411,18 @@ export function list(cwd: string): RunState[] {
   return runs.sort((one, other) => startOf(other).localeCompare(startOf(one)));
 }
 
-/** When a run started: the earliest step it holds, or nothing to sort it last. */
-function startOf(state: RunState): string {
-  return Object.values(state.steps)
-    .map((record) => record.startedAt)
-    .sort()[0] ?? "";
+/**
+ * When a run started. A run from before the state held it dates by the
+ * earliest step it holds, and one with no step of its own sorts last.
+ */
+export function startOf(state: RunState): string {
+  return (
+    state.startedAt ??
+    Object.values(state.steps)
+      .map((record) => record.startedAt)
+      .sort()[0] ??
+    ""
+  );
 }
 
 export function read(cwd: string, runId: string): RunState {
@@ -588,7 +613,7 @@ async function execute(state: RunState, cwd: string, options: RunOptions, answer
         // A step that goes back to a step it does not need keeps its own record.
         // Every attempt is a cost, so this one goes to history as well.
         goBackTo(step.id, state, sorted);
-        emit({ type: "cycle", step: step.id, to: retry.cycle.to, count: retry.count });
+        emit({ type: "cycle", step: step.id, to: retry.cycle.to, count: retry.count, limit: retry.cycle.limit });
       }
       save();
       continue;
@@ -832,6 +857,9 @@ function goBack(step: Step, state: RunState, sorted: Step[], emit: (event: RunEv
       return true;
     }
     record.disagreement = "accepted";
+    // The run goes on as if the step agreed, so this is the one place a
+    // reader of the console hears that it did not.
+    emit({ type: "accept", step: step.id, to: cycle.to, limit: cycle.limit });
     return false;
   }
 
@@ -839,7 +867,7 @@ function goBack(step: Step, state: RunState, sorted: Step[], emit: (event: RunEv
   // A cycle that drops the reason for it sends the step back blind.
   state.feedback = [{ step: step.id, to: cycle.to, value: record.value }];
   goBackTo(cycle.to, state, sorted);
-  emit({ type: "cycle", step: step.id, to: cycle.to, count });
+  emit({ type: "cycle", step: step.id, to: cycle.to, count, limit: cycle.limit });
   return false;
 }
 

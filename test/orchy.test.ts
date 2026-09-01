@@ -4576,3 +4576,45 @@ test("a flow that will not load ends the command as a wrong command, not a faile
   // `check` runs nothing and spends nothing, and says the same thing.
   assert.equal(await code(["check", "broken.yaml"]), 2);
 });
+
+test("a cycle event names its limit, and a cycle that stops under accept says so", async () => {
+  const cwd = workspace();
+  const events: RunEvent[] = [];
+
+  await run(reviewFlow(2, "accept"), {
+    cwd,
+    harness: fakeHarness({ summary: "v" }, { approved: false }),
+    onEvent: (event) => events.push(event),
+  });
+
+  const cycles = events.filter((event) => event.type === "cycle") as Array<{ count: number; limit: number }>;
+  assert.deepEqual(cycles.map((event) => [event.count, event.limit]), [[1, 2], [2, 2]]);
+  const accepted = events.find((event) => event.type === "accept");
+  assert.deepEqual(accepted, { type: "accept", step: "review", to: "code", limit: 2 });
+  // The run went on, so the console hears the disagreement before it hears "done".
+  assert.equal(events.indexOf(accepted as RunEvent), events.length - 2);
+});
+
+test("validate names the tools that exist, and the harness that has one, where it refuses a tool", () => {
+  const problems = validate({
+    name: "typo",
+    harness: "pi",
+    steps: [{ kind: "agent", id: "a", needs: [], prompt: "a.md", tools: ["teleport", "web"], returns: Summary } as never],
+  });
+
+  assert.ok(problems.some((p) => p.includes('the tool "teleport", which does not exist. Use one of: read, bash, edit')));
+  assert.ok(problems.some((p) => p.includes('the tool "web", and the harness "pi" has none. Only claude and droid supply it.')));
+});
+
+test("validate names the workspace of none where a promise cannot be checked, and the fix", () => {
+  const step = { kind: "agent", id: "a", needs: [], prompt: "a.md", tools: ["read"], returns: Summary, changes: "nothing" };
+  const none = validate({ name: "none", workspace: { kind: "none" }, steps: [step as never] });
+  assert.ok(none.some((p) => p.includes('the workspace of the flow is "none", which records no change. Write workspace:')));
+  const missing = validate({ name: "missing", steps: [step as never] });
+  assert.ok(missing.some((p) => p.includes("the flow has no workspace to check it. Write one, as workspace:")));
+});
+
+test("validate names the fields a flow holds where it refuses one", () => {
+  const problems = validate({ name: "x", step: [], steps: [] } as never);
+  assert.ok(problems.some((p) => p.includes('holds "step", which is not a field of a flow. A flow holds: name, workspace')));
+});
