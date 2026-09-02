@@ -13,17 +13,20 @@ named here.
 ### Added
 - A flow declares what it remembers, and where: `memory: { scope, most }`. The
   scope is the key of one store — `none`, which is the default and remembers
-  nothing; `flow`; `user`; or a key of the flow's own, which reads the values of
+  nothing; `flow`; `root`; or a key of the flow's own, which reads the values of
   the run as a prompt does, so `ticket/{{ issue }}` gives each ticket a store
   and a follow-up flow reads what the first run left. What the scope holds seeds
-  the prompt of every step, and `most` bounds how much. A step writes
-  `memory: none` and reads none of it.
+  the prompt of every step, and `most` bounds how many; an entry holds at most
+  2,000 characters, so the seed is bounded too. What this run records is its
+  own state, and the seed holds none of it. A step writes `memory: none` and
+  reads none of it.
 - Four ways to record one entry, and they all write the same thing: `remember`
   at the MCP door of a run, the `orchy:remember` call step, `orchy memory add`
-  at the command line, and a hand in the file. A `command` step reads the key as
-  `$ORCHY_MEMORY_KEY`. A step reads past the seed with `recall_memory`, which
+  at the command line, and a hand in the file. A `command`, claude, or droid
+  step reads the key as `$ORCHY_MEMORY_KEY` and who it is as
+  `$ORCHY_STARTED_BY`, and `orchy memory add` records that run and step. A step reads past the seed with `recall_memory`, which
   takes a query and no key: the scope comes from the state of the run, so a step
-  cannot reach the store of another ticket, another flow, or another user.
+  cannot reach the store of another ticket or another flow through the door.
 - `orchy memory keys | list | add | forget`, for a person correcting what a run
   wrote, and for a harness that holds no `orchy` tool. Every entry names the run
   and the step that wrote it, so a wrong one is found by its provenance and

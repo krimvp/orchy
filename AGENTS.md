@@ -26,8 +26,9 @@ The smallest change in the wrong place is a second bug, not a small one.
 - Do not write code for a need that does not exist yet.
 - Delete code before you add code.
 - Do not add an interface that has one implementation. [ADR
-  0002](./docs/adr/0002-keep-a-harness-adapter.md) is the one exception, and it
-  states the reason and the limit.
+  0002](./docs/adr/0002-keep-a-harness-adapter.md) and [ADR
+  0029](./docs/adr/0029-memory-is-a-declared-scope.md) are the two exceptions,
+  and each states the reason and the limit.
 - Do not add a dependency for work that a few lines of code do. Ajv, yaml, and
   the Pi SDK are the only ones a run needs. Count the cost of a new one out
   loud before you add it.

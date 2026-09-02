@@ -176,7 +176,7 @@ default.
 _Avoid_: Context, knowledge, state, history
 
 **Scope**:
-The key of one memory. A flow writes `none`, `flow`, `user`, or a key of its
+The key of one memory. A flow writes `none`, `flow`, `root`, or a key of its
 own, which reads the values of the run as a prompt does. A run reaches the store
 of its scope and no other.
 _Avoid_: Namespace, bucket, partition, tenant

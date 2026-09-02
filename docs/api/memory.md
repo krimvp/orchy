@@ -18,7 +18,7 @@ run writes and every run reads is a store where one mistake compounds.
 | --- | --- | --- |
 | absent, or `none` | none | remembers nothing |
 | `flow` | `flow-<name>` | one store for every run of this flow |
-| `user` | `user` | the one global store, asked for by name |
+| `root` | `root` | the one store of the root, asked for by name |
 | anything else | that, as a key | a key of your own |
 
 A key of your own reads the values of the run the way a prompt does, so
@@ -40,7 +40,8 @@ the flow file names today.
 - `Storage` — the contract, and the only one: `recall(key, most?)`,
   `remember(key, entry)`, `forget(key, id?)`, and `keys()`. `recall` with no
   `most` answers with every entry; with a number, the last that many; with `0`,
-  none.
+  none. `remember` refuses a text longer than `LONGEST`, so the seed of a
+  prompt is bounded by `most` entries of at most that many characters each.
 - `lines(root)` — the one implementation: a line of JSON for each entry, under
   `<root>/.orchy/memory`, one file for each key. A line a hand broke costs that
   line and not the store.
@@ -51,6 +52,7 @@ the flow file names today.
   this too, so a person types the scope their flow declares and reaches the
   store the run wrote.
 - `MOST` — how many entries seed a prompt when the flow names no number: 20.
+- `LONGEST` — how long one entry may be, in characters: 2000.
 - `memoryProblems(memory, takes)` — what a flow gets wrong about its memory, for
   `validate()`. A scope that reads a value the flow does not take is refused
   here, where `orchy check` says it and nothing has started.
@@ -58,18 +60,24 @@ the flow file names today.
 ## Who calls it
 
 - `src/run.ts` resolves the key in `run()`, seeds each agent prompt with what
-  the scope holds — a block named *What earlier runs recorded*, beside the
-  values of the run — and gives a `command` step the key as
-  `$ORCHY_MEMORY_KEY`. A step that declares `memory: none` gets no seed.
+  earlier runs left in the scope — a block named *What earlier runs recorded*,
+  beside the values of the run; what this run wrote is its own state, and the
+  block holds none of it — and puts the key on the request of the harness and
+  in the environment of a `command` step, as `$ORCHY_MEMORY_KEY`, beside
+  `$ORCHY_STARTED_BY`. A step that declares `memory: none` gets no seed and no
+  key. The claude and droid adapters pass both names to the process they run;
+  Pi runs inside the runner and gets neither.
 - `src/mcp.ts` serves `recall_memory` and `remember` to a step that holds the
   `orchy` tool. Neither takes a key: the door reads `state.memory` of the run
   whose step opened it, so a step cannot name the store of another ticket,
-  another flow, or another user.
+  or another flow through the door.
 - `src/components/remember.ts` is the `orchy:remember` call step, which makes
   the bookkeeping something the flow decides rather than something the model
   chooses on the fly.
 - `src/cli.ts` serves `orchy memory keys | list | add | forget`, for a person
-  and for a harness that holds no `orchy` tool.
+  and for a harness that holds no `orchy` tool. `add` reads `$ORCHY_STARTED_BY`
+  and records the run and the step it names, so an entry a command step or a
+  harness adds is not recorded as a person's.
 
 ## Example
 

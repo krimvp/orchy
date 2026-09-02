@@ -473,8 +473,8 @@ memory:
 ```
 
 `scope` is the key of one store. Three words are not keys: `none` remembers
-nothing, `flow` is one store for every run of this flow, and `user` is the one
-global store — available, but you write it by name. Everything else is a key of
+nothing, `flow` is one store for every run of this flow, and `root` is the one
+store of the whole root — available, but you write it by name. Everything else is a key of
 your own, and it reads the values of the run the way a prompt does. So each
 ticket gets a store, and a follow-up flow that writes the same scope reads what
 the first run left:
@@ -491,8 +491,9 @@ a run starts. A memory belongs to the run, as a budget does, so a flow held by a
 would resolve against another flow's values. A run resolves the key once, before its first step, and keeps it,
 so a resume reads the store the run really used.
 
-What the scope holds goes into the prompt of every step, under **What earlier
-runs recorded**, beside the values of the run. `most` bounds how many entries —
+What earlier runs left in the scope goes into the prompt of every step, under
+**What earlier runs recorded**, beside the values of the run. What this run
+records is its own state, and the block holds none of it. `most` bounds how many entries —
 twenty when the flow is silent, and `0` seeds none. A step that must judge the
 work and nothing else declines the lot:
 
@@ -525,14 +526,20 @@ the model ends with a step:
 With no `text` of its own it records the value of each step it needs, so an
 agent step that summarizes before it is the whole of what a flow has to write.
 The third way is the command line — `orchy memory add <scope> <text>` — which is
-also how a `command` step and a harness with no `orchy` tool reach the store; a
-command step reads the key as `$ORCHY_MEMORY_KEY`. The fourth is a hand, in the
-file: it is a line of JSON for each entry, under `.orchy/memory`.
+also how a `command` step and a harness with no `orchy` tool reach the store. A
+command step, and a claude or droid step, read the key as `$ORCHY_MEMORY_KEY`
+and who they are as `$ORCHY_STARTED_BY`, and `add` records that run and step.
+A Pi step runs inside the runner and reads neither, so a Pi flow records with
+the `orchy:remember` step. The fourth way is a hand, in the file: it is a line
+of JSON for each entry, under `.orchy/memory`. An entry holds at most 2,000
+characters, whichever way it comes in, so `most` entries is a bounded seed.
 
 A step reads past the seed with `recall_memory`, which takes a query and no
 key. The scope comes from the state of the run, so a step cannot reach the
-store of another ticket, another flow, or another user — there is nothing to
-ask for.
+store of another ticket or another flow through the door — there is nothing to
+ask for. The door is not a sandbox: a step that holds `bash` reaches every store
+of the root through `orchy memory`, the way a tool list is not a sandbox either.
+A flow that must not reach the store of another ticket runs in another root.
 
 Every entry names the run and the step that wrote it, so a wrong one is found
 and dropped:
@@ -547,7 +554,7 @@ Nothing expires, and nothing ranks: `recall_memory` matches a substring, in the
 text and in the tags. Durable project knowledge still belongs in reviewed,
 human-readable records in the repository — a store is where one run tells the
 next what it found. See [ADR
-0028](./adr/0029-memory-is-a-declared-scope.md).
+0029](./adr/0029-memory-is-a-declared-scope.md).
 
 ## Run
 

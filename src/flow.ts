@@ -142,7 +142,7 @@ export type Fanout = Member[] | Computed;
 
 /**
  * What a run recovers before it starts, and where a step stores what it learns.
- * `scope` is the key of one store: the word `none`, `flow`, or `user`, or a key
+ * `scope` is the key of one store: the word `none`, `flow`, or `root`, or a key
  * the flow writes itself, which reads the values of the run as a prompt does —
  * `ticket/{{ issue }}` gives each ticket a store of its own. A flow that
  * declares no memory remembers nothing, which is the default. See ADR 0029.

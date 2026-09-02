@@ -324,13 +324,13 @@ takes:
   properties:
     issue: { type: string }
 memory:
-  scope: "ticket/{{ issue }}"   # none | flow | user | a key of your own
+  scope: "ticket/{{ issue }}"   # none | flow | root | a key of your own
   most: 20                      # how many entries seed a prompt
 ```
 
 `scope` is the key of one store. `none` is the default and remembers nothing.
-`flow` is one store for every run of this flow, and `user` is the one global
-store — available, but you have to ask for it by name. Everything else is a key
+`flow` is one store for every run of this flow, and `root` is the one store of
+the whole root — available, but you have to ask for it by name. Everything else is a key
 of your own, and it reads the values of the run the way a prompt does. So each
 ticket gets a store, and a follow-up flow that writes the same scope reads what
 the first run left.
@@ -350,12 +350,15 @@ Four things write an entry, and they write the same entry:
 - a `orchy:remember` step, which is bookkeeping the flow decides and not a
   choice the model makes on the fly;
 - `orchy memory add`, for a person, and for a harness that holds no `orchy`
-  tool — a `command` step reads `$ORCHY_MEMORY_KEY` for the same reason;
+  tool — a `command`, claude, or droid step reads `$ORCHY_MEMORY_KEY` for the
+  same reason, and the entry names the step;
 - a hand, in the file.
 
 A step reads past the seed with `recall_memory`, which takes a query and no key:
 the key comes from the state of the run, so a step cannot reach the store of
-another ticket, another flow, or another user. There is nothing to ask for.
+another ticket or another flow through the door. There is nothing to ask for.
+The door is not a sandbox, though: a step that holds `bash` reaches every store
+of the root through `orchy memory`.
 
 Every entry names the run and the step that wrote it, so a wrong one is found
 and dropped:
@@ -367,7 +370,7 @@ orchy memory forget ticket-proj-14 a41f9c02
 
 The store is a line of JSON for each entry, under `.orchy/memory`, one file for
 each key. It is not the run: losing it loses no run. See [ADR
-0028](./docs/adr/0029-memory-is-a-declared-scope.md).
+0029](./docs/adr/0029-memory-is-a-declared-scope.md).
 
 ## How it works
 

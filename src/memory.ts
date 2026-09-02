@@ -36,6 +36,13 @@ export interface Storage {
 export const MOST = 20;
 
 /**
+ * How long one entry may be, in characters. `most` bounds how many entries
+ * seed a prompt, and this bounds each one, so the seed itself is bounded: a
+ * store of paragraphs is a document, and a document belongs in the repository.
+ */
+export const LONGEST = 2000;
+
+/**
  * The one storage: a line of JSON per entry, under `.orchy/memory`. A memory is
  * prose, and prose holds commas, quotes and newlines, so a line of JSON escapes
  * what a row of CSV would have to quote. The file stays greppable, appendable,
@@ -54,6 +61,11 @@ export function lines(root: string): Storage {
     },
 
     remember(key, entry) {
+      if (entry.text.length > LONGEST) {
+        throw new Error(
+          `an entry holds ${entry.text.length} characters, and the most is ${LONGEST}. Record a sentence or two, and leave the rest in the repository.`,
+        );
+      }
       const whole: Entry = { id: randomUUID().slice(0, 8), at: new Date().toISOString(), ...entry };
       mkdirSync(directory, { recursive: true });
       appendFileSync(fileOf(key), `${JSON.stringify(whole)}\n`);
@@ -116,7 +128,7 @@ function read(file: string): Entry[] {
 const NAMED = /\{\{([^{}]*)\}\}/g;
 
 /** The three words that are not keys. Everything else a flow writes is one. */
-const RESERVED = ["none", "flow", "user"];
+const RESERVED = ["none", "flow", "root"];
 
 /**
  * The key one run reads and writes, or nothing when the flow remembers none.
@@ -128,7 +140,7 @@ export function keyOf(memory: Memory | undefined, flowName: string, takes?: Reco
   const scope = memory.scope;
   if (scope === "none") return undefined;
   if (scope === "flow") return asKey(`flow-${flowName}`);
-  if (scope === "user") return "user";
+  if (scope === "root") return "root";
   return asKey(
     scope.replace(NAMED, (_all, inside: string) => {
       const name = inside.trim();
@@ -174,7 +186,7 @@ export function memoryProblems(memory: unknown, takes: unknown): string[] {
   }
   if (typeof held.scope !== "string" || held.scope.trim() === "") {
     problems.push(
-      `the memory of the flow has no scope. Write "none", "flow", "user", or a key of your own, such as "ticket/{{ issue }}".`,
+      `the memory of the flow has no scope. Write "none", "flow", "root", or a key of your own, such as "ticket/{{ issue }}".`,
     );
   }
   if (held.most !== undefined && (!Number.isInteger(held.most) || (held.most as number) < 0)) {
