@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { type Metrics, SCHEMA_VERSION, type Step, type Trajectory } from "./atif.ts";
-import { type AgentRequest, type Harness, MODELS, type ToolName, type Watch, notesOf } from "./harness.ts";
+import { type AgentRequest, type Harness, MODELS, type ToolName, type Watch, environmentOf, notesOf } from "./harness.ts";
 import { tail } from "./tail.ts";
 
 const run = promisify(execFile);
@@ -161,7 +161,7 @@ export const droid: Harness = {
 async function exec(args: string[], request: AgentRequest): Promise<Answer> {
   let stdout: string;
   try {
-    const command = run("droid", args, { cwd: request.cwd, maxBuffer: 64 * 1024 * 1024 });
+    const command = run("droid", args, { cwd: request.cwd, maxBuffer: 64 * 1024 * 1024, env: environmentOf(request) });
     // The command reads its input stream, and Orchy writes nothing to it.
     command.child.stdin?.end();
     ({ stdout } = await command);

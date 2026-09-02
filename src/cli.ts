@@ -6,6 +6,7 @@ import { claude } from "./claude.ts";
 import { droid } from "./droid.ts";
 import { type AdapterName, ADAPTERS, type Harness } from "./harness.ts";
 import { type Flow, validate } from "./flow.ts";
+import { type Entry, asKey, lines as storage } from "./memory.ts";
 import { loadFlow } from "./load.ts";
 import { pi } from "./pi.ts";
 import { type RunEvent, type RunState, Refused, keep, list, resume, run, startOf } from "./run.ts";
@@ -16,6 +17,7 @@ const USAGE = `use: orchy run <flow file> [--with <json>] [--harness pi|claude|d
      orchy check <flow file> [--harness pi|claude|droid]
      orchy resume <run id> [json value] [--from <step>] [--harness pi|claude|droid] [--events]
      orchy runs [--events]
+     orchy memory keys | list <scope> [--events] | add <scope> <text> | forget <scope> [id]
      orchy daemon [--port 4000]
      orchy mcp [--harness pi|claude|droid]
      orchy --help | --version
@@ -33,6 +35,12 @@ orchy check reads a flow, and every flow it holds, and says what is wrong with
 it. It runs nothing and spends nothing.
 
 orchy runs lists the runs of this directory, newest first.
+
+orchy memory reads and writes what runs record, under .orchy/memory. A scope is
+the key a flow declares, and a person writes the one their flow does. This is
+the door for a harness that holds no orchy tool, and for a person who has to
+correct what a run wrote: forget takes the id of one entry, and drops the whole
+scope without one.
 
 orchy mcp serves the Model Context Protocol on stdin and stdout, so an agent
 writes flows and runs them here. It fires no schedule; the daemon does.
@@ -241,7 +249,7 @@ function finish(state: RunState): never {
 /** The run this process drives, so a signal writes its state before it goes. */
 let running: { runId: string; cwd: string } | undefined;
 
-const [command, first, second] = argv;
+const [command, first, second, third] = argv;
 
 // `orchy run --help` asks for help as much as `orchy --help` does.
 if (argv.some((one) => one === "--help" || one === "-h") || command === "help" || command === undefined) {
@@ -267,7 +275,7 @@ if (command in FLAGS) {
   const misplaced = [...flags.keys()].filter((one) => !takes.includes(one));
   if (misplaced.length > 0) wrong(`orchy ${command} does not take ${misplaced.join(", ")}.\n\n${USAGE}`);
 }
-const most: Record<string, number> = { run: 2, resume: 3, check: 2, runs: 1, daemon: 1, mcp: 1 };
+const most: Record<string, number> = { run: 2, resume: 3, check: 2, runs: 1, daemon: 1, mcp: 1, memory: 4 };
 if (command in most && argv.length > (most[command] as number)) {
   wrong(`orchy ${command} does not take "${argv[most[command] as number]}".\n\n${USAGE}`);
 }
@@ -323,6 +331,53 @@ try {
     if (events) for (const state of runs) console.log(JSON.stringify(rowOf(state)));
     else console.log(runs.length === 0 ? "no run in this directory yet" : table(runs));
     process.exit(EXIT.done);
+  }
+
+  if (command === "memory") {
+    const store = storage(process.cwd());
+    const known = () => (store.keys().length === 0 ? "no scope holds anything yet" : store.keys().join("\n"));
+
+    if (first === "keys") {
+      console.log(known());
+      process.exit(EXIT.done);
+    }
+
+    // The way in is named before the scope is, so a typo says what the command
+    // does and not that it wants a scope for a thing it cannot do.
+    if (!first) throw new Wrong(`orchy memory wants keys, list, add, or forget.\n\n${USAGE}`);
+    if (first !== "list" && first !== "add" && first !== "forget") {
+      throw new Wrong(`orchy memory has no "${first}". Use keys, list, add, or forget.\n\n${USAGE}`);
+    }
+    if (!second) throw new Wrong(`orchy memory ${first} wants a scope.\n\n${USAGE}`);
+    const key = asKey(second);
+
+    if (first === "list") {
+      const entries = store.recall(key);
+      if (events) for (const entry of entries) console.log(JSON.stringify(entry));
+      else console.log(entries.length === 0 ? `the scope "${key}" holds nothing.\n\n${known()}` : shown(entries));
+      process.exit(EXIT.done);
+    }
+
+    if (first === "add") {
+      if (!third?.trim()) throw new Wrong(`orchy memory add wants the text to record.\n\n${USAGE}`);
+      // A command step reads the same variable the door does, so its entry
+      // names the run and the step. Without one, a person wrote this, and the
+      // record says so: an entry that cannot say where it came from is an
+      // entry nobody knows whether to trust.
+      const by = starterOf(process.env.ORCHY_STARTED_BY);
+      const entry = store.remember(key, { run: by?.runId ?? "-", step: by?.step ?? "a person", text: third.trim() });
+      console.log(`${entry.id} recorded in "${key}"`);
+      process.exit(EXIT.done);
+    }
+
+    if (first === "forget") {
+      const gone = store.forget(key, third);
+      if (gone === 0) {
+        throw new Wrong(third ? `the scope "${key}" holds no entry "${third}"` : `the scope "${key}" holds nothing`);
+      }
+      console.log(`${gone} ${gone === 1 ? "entry" : "entries"} forgotten in "${key}"`);
+      process.exit(EXIT.done);
+    }
   }
 
   if (command === "mcp") {
@@ -399,6 +454,13 @@ function rowOf(state: RunState) {
     ...(state.waitingFor ? { waitingFor: state.waitingFor } : {}),
     ...(state.status === "failed" && state.error ? { error: state.error } : {}),
   };
+}
+
+/** What `orchy memory list` shows: one entry a line, and the text after it. */
+function shown(entries: Entry[]): string {
+  return entries
+    .map((entry) => `${entry.id}  ${entry.at}  ${entry.step}${entry.tags?.length ? `  [${entry.tags.join(" ")}]` : ""}\n    ${entry.text.replace(/\n/g, "\n    ")}`)
+    .join("\n");
 }
 
 function table(runs: RunState[]): string {

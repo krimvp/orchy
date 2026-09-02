@@ -35,7 +35,8 @@ in the page falls behind.
 Types: `Flow`, `Step` (the union), `AgentStep`, `CallStep`, `GateStep`,
 `FlowStep`, `Cycle`, `When`, `Match`, `Matched`, `Operator`, `Changes`
 (`"nothing"`, `{ paths }`, or `{ except }` — what a step promises to change),
-`Member`, `Computed`, and `Fanout` (`Member[] | Computed`).
+`Memory` (`{ scope, most }` — what a run recovers and where it stores, ADR
+0028), `Member`, `Computed`, and `Fanout` (`Member[] | Computed`).
 
 Building:
 

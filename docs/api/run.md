@@ -73,13 +73,20 @@ Shapes:
   cycle counts, pending `feedback`, and a `history` of every record a cycle
   or a resume dropped (a dropped attempt still counts toward the budget).
   While waiting, `waitingFor` names the step and `question` says what to
-  supply.
+  supply. `memory` holds the store the run reads and writes — the key,
+  resolved once before the first step, and how many entries seed a prompt —
+  when the flow declares one (ADR 0029).
 
 - `StepRecord` — what one step did: `status` (`"done"`, `"failed"`, or
   `"skipped"`), timestamps, the `value`, an `error`, a `trajectory` handle,
   the `cost` its harness reported, each path it `changed`, and flags such as
   `answeredByPerson`, `votedToCycle`, `disagreement`, and why it was
   `skipped`.
+
+- `Called` — what a `call` step's module learns about the run it works in: the
+  `runId`, the `step` it is, and the run's `memory` when the flow declares one.
+  It rides fifth, after `cwd`, so a component that wants none of it takes four
+  arguments as before.
 
 - `RunEvent` — what `onEvent` hears, in order: `run_start`, then per step
   `step_start`, `output` (live notes while it works), and `step_end` — or

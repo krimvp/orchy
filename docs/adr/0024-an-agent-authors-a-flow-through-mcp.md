@@ -5,9 +5,10 @@ status: accepted
 # An agent authors a flow through MCP
 
 `orchy mcp` speaks the Model Context Protocol over stdio. A coding agent adds
-it as a server and holds ten tools: `check_flow`, `write_flow`, `read_flow`,
-`list_flows`, `run_flow`, `read_run`, `read_trajectory`, `list_runs`,
-`resume_run`, and `stop_run`. The agent writes a flow, hears every problem
+it as a server and holds twelve tools: `check_flow`, `write_flow`,
+`read_flow`, `list_flows`, `run_flow`, `read_run`, `read_trajectory`,
+`list_runs`, `resume_run`, `stop_run`, and — for a step of a run, over the
+memory its flow declares — `recall_memory` and `remember` (ADR 0029). The agent writes a flow, hears every problem
 from `validate()`, corrects the flow, runs it, follows the run, and answers a
 gate.
 

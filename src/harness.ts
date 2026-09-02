@@ -53,6 +53,27 @@ export interface AgentRequest {
   model?: string;
   /** The run this step belongs to, so a run the step starts records it. ADR 0025. */
   run?: string;
+  /**
+   * The key of the store the run reads, so a harness that runs a process gives
+   * it to the step as `ORCHY_MEMORY_KEY`. Absent when the flow remembers
+   * nothing, and when the step declines the memory. ADR 0029.
+   */
+  memory?: string;
+}
+
+/**
+ * What a process a step runs learns from its environment: which run and step
+ * it is, as `ORCHY_STARTED_BY`, and the key of the store, as
+ * `ORCHY_MEMORY_KEY`. The claude and droid adapters and a command step all
+ * build theirs here, so the three cannot drift, and `orchy memory add` and
+ * `orchy mcp` read the same two names back. ADR 0025, ADR 0029.
+ */
+export function environmentOf(who: { run?: string; step: string; memory?: string }): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    ...(who.run ? { ORCHY_STARTED_BY: JSON.stringify({ runId: who.run, step: who.step }) } : {}),
+    ...(who.memory ? { ORCHY_MEMORY_KEY: who.memory } : {}),
+  };
 }
 
 export interface AgentResult {

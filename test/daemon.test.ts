@@ -331,7 +331,7 @@ test("the health answer names every operator that a match holds, and what each o
     };
 
     // The editor hints the shipped components from here, so it holds no copy.
-    assert.deepEqual(health.components, ["orchy:check"]);
+    assert.deepEqual(health.components, ["orchy:check", "orchy:remember"]);
 
     // The editor draws the list from here, so a copy in the page cannot fall behind.
     assert.deepEqual(

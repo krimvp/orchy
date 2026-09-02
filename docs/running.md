@@ -455,6 +455,107 @@ steps report. Only the flow that the run starts holds a budget: a sub-flow with
 one is refused when the file loads. See [ADR
 0019](./adr/0019-a-run-has-a-budget.md).
 
+## What a run remembers
+
+A flow that says nothing remembers nothing, which is the default. One that
+wants to says where:
+
+```yaml
+name: bugfix
+takes:
+  type: object
+  required: [issue]
+  properties:
+    issue: { type: string }
+memory:
+  scope: "ticket/{{ issue }}"
+  most: 20
+```
+
+`scope` is the key of one store. Three words are not keys: `none` remembers
+nothing, `flow` is one store for every run of this flow, and `root` is the one
+store of the whole root — available, but you write it by name. Everything else is a key of
+your own, and it reads the values of the run the way a prompt does. So each
+ticket gets a store, and a follow-up flow that writes the same scope reads what
+the first run left:
+
+```yaml
+name: corrections
+memory:
+  scope: "ticket/{{ issue }}"
+```
+
+`orchy check` refuses a scope that reads a value the flow does not take, before
+a run starts. A memory belongs to the run, as a budget does, so a flow held by a
+`flow` step declares none: expansion would drop it, and a scope that stood alone
+would resolve against another flow's values. A run resolves the key once, before its first step, and keeps it,
+so a resume reads the store the run really used.
+
+What earlier runs left in the scope goes into the prompt of every step, under
+**What earlier runs recorded**, beside the values of the run. What this run
+records is its own state, and the block holds none of it. `most` bounds how many entries —
+twenty when the flow is silent, and `0` seeds none. A step that must judge the
+work and nothing else declines the lot:
+
+```yaml
+- id: review
+  kind: agent
+  needs: [code]
+  memory: none
+  prompt: prompts/review.md
+  tools: [read]
+```
+
+Four things write an entry. A step that holds the `orchy` tool calls `remember`
+at the door of its own run, mid-work. A flow that would rather not leave it to
+the model ends with a step:
+
+```yaml
+- id: record
+  kind: call
+  needs: [summarize]
+  module: orchy:remember
+  with: { tags: [handoff] }
+  returns:
+    type: object
+    required: [recorded]
+    properties:
+      recorded: { type: array, items: { type: string } }
+```
+
+With no `text` of its own it records the value of each step it needs, so an
+agent step that summarizes before it is the whole of what a flow has to write.
+The third way is the command line — `orchy memory add <scope> <text>` — which is
+also how a `command` step and a harness with no `orchy` tool reach the store. A
+command step, and a claude or droid step, read the key as `$ORCHY_MEMORY_KEY`
+and who they are as `$ORCHY_STARTED_BY`, and `add` records that run and step.
+A Pi step runs inside the runner and reads neither, so a Pi flow records with
+the `orchy:remember` step. The fourth way is a hand, in the file: it is a line
+of JSON for each entry, under `.orchy/memory`. An entry holds at most 2,000
+characters, whichever way it comes in, so `most` entries is a bounded seed.
+
+A step reads past the seed with `recall_memory`, which takes a query and no
+key. The scope comes from the state of the run, so a step cannot reach the
+store of another ticket or another flow through the door — there is nothing to
+ask for. The door is not a sandbox: a step that holds `bash` reaches every store
+of the root through `orchy memory`, the way a tool list is not a sandbox either.
+A flow that must not reach the store of another ticket runs in another root.
+
+Every entry names the run and the step that wrote it, so a wrong one is found
+and dropped:
+
+```bash
+orchy memory keys
+orchy memory list ticket-proj-14
+orchy memory forget ticket-proj-14 a41f9c02   # or the whole scope, with no id
+```
+
+Nothing expires, and nothing ranks: `recall_memory` matches a substring, in the
+text and in the tags. Durable project knowledge still belongs in reviewed,
+human-readable records in the repository — a store is where one run tells the
+next what it found. See [ADR
+0029](./adr/0029-memory-is-a-declared-scope.md).
+
 ## Run
 
 ```bash
@@ -631,7 +732,7 @@ live in — that directory is the root, as it is for the daemon:
 claude mcp add orchy -- npx @krimvp/orchy mcp
 ```
 
-The agent gets ten tools and a guide. The loop: it writes a flow as YAML,
+The agent gets twelve tools and a guide. The loop: it writes a flow as YAML,
 hears every problem from `check_flow`, corrects it, writes it with
 `write_flow`, starts it with `run_flow`, and follows it with `read_run`. A
 flow that does not validate is refused at the write, with every problem named,

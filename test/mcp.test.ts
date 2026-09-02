@@ -130,6 +130,8 @@ test("the door answers initialize with its guide, and lists every tool", async (
         "list_runs",
         "resume_run",
         "stop_run",
+        "recall_memory",
+        "remember",
       ],
     );
 
@@ -493,5 +495,89 @@ test("an agent writes a flow, runs it, answers the gate, and reads the value of 
     assert.match(wrong.refused as string, /no step "nope"/);
   } finally {
     site.close();
+  }
+});
+
+/** A run on disk that a step's door belongs to, so the door reads its store. */
+function standing(root: string, state: Record<string, unknown>): void {
+  const at = join(root, ".orchy", "runs", String(state.runId));
+  mkdirSync(at, { recursive: true });
+  writeFileSync(join(at, "state.json"), JSON.stringify(state));
+}
+
+const REMEMBERING = {
+  runId: "r1",
+  flow: {
+    name: "bugfix",
+    memory: { scope: "ticket/{{ issue }}" },
+    steps: [
+      { id: "code", kind: "agent", needs: [], prompt: "p.md", tools: ["read", "orchy"], returns: NUMBER },
+      { id: "review", kind: "agent", needs: ["code"], memory: "none", prompt: "p.md", tools: ["read", "orchy"], returns: NUMBER },
+    ],
+  },
+  status: "running",
+  steps: {},
+  cycles: {},
+  memory: { key: "ticket-proj-14", most: 20 },
+};
+
+test("a step records through the door, and reads back only the store of its own run", async () => {
+  const root = project();
+  standing(root, REMEMBERING);
+  // A second run, of another ticket, whose store the first must not reach.
+  standing(root, { ...REMEMBERING, runId: "r2", memory: { key: "ticket-proj-99", most: 20 } });
+
+  const site = talking(root, { runId: "r1", step: "code" });
+  const other = talking(root, { runId: "r2", step: "code" });
+  try {
+    const written = await site.call("remember", { text: "the parser lives in src/yaml.ts", tags: ["where"] });
+    assert.equal((written.body as { scope: string }).scope, "ticket-proj-14");
+    // The entry names the run and the step, so a wrong one is found and dropped.
+    const entry = (written.body as { entry: { run: string; step: string; id: string } }).entry;
+    assert.equal(entry.run, "r1");
+    assert.equal(entry.step, "code");
+
+    await site.call("remember", { text: "the review wanted a line, not a comma" });
+    const read = await site.call("recall_memory", {});
+    assert.equal((read.body as { of: number }).of, 2);
+
+    // A query keeps the entries that hold it, in the text or in a tag.
+    const found = await site.call("recall_memory", { query: "parser" });
+    assert.deepEqual((found.body as { entries: Array<{ text: string }> }).entries.map((one) => one.text), [
+      "the parser lives in src/yaml.ts",
+    ]);
+    const tagged = (await site.call("recall_memory", { query: "where" })).body as { entries: unknown[] };
+    assert.equal(tagged.entries.length, 1);
+
+    // The key comes from the state of the run, and never from the call, so a
+    // step cannot name the store of another ticket. There is nothing to ask for.
+    const elsewhere = (await other.call("recall_memory", {})).body as { of: number; scope: string };
+    assert.equal(elsewhere.of, 0);
+    assert.equal(elsewhere.scope, "ticket-proj-99");
+  } finally {
+    other.close();
+    site.close();
+  }
+});
+
+test("the door refuses a memory to a step that declares none, and to a flow that declares none", async () => {
+  const root = project();
+  standing(root, REMEMBERING);
+  standing(root, { ...REMEMBERING, runId: "quiet", flow: { name: "quiet", steps: [] }, memory: undefined });
+
+  // A step that says it saw nothing but the work cannot reach past that word.
+  const declined = talking(root, { runId: "r1", step: "review" });
+  const forgetful = talking(root, { runId: "quiet", step: "code" });
+  // A door an outside agent opened belongs to no run, so it has no store at all.
+  const outside = talking(root);
+  try {
+    assert.match((await declined.call("recall_memory", {})).refused as string, /declares memory: none/);
+    assert.match((await declined.call("remember", { text: "x" })).refused as string, /declares memory: none/);
+    assert.match((await forgetful.call("recall_memory", {})).refused as string, /declares no memory/);
+    assert.match((await outside.call("remember", { text: "x" })).refused as string, /belongs to a run/);
+  } finally {
+    outside.close();
+    forgetful.close();
+    declined.close();
   }
 });

@@ -169,6 +169,23 @@ a search. It holds the newest runs, and the events of a run that falls behind
 that list go. The state on disk stays the run.
 _Avoid_: Database, store, cache, registry
 
+**Memory**:
+What a run recovers before its first step, and what a step records for the runs
+that come after it. A flow declares one, or it remembers nothing, which is the
+default.
+_Avoid_: Context, knowledge, state, history
+
+**Scope**:
+The key of one memory. A flow writes `none`, `flow`, `root`, or a key of its
+own, which reads the values of the run as a prompt does. A run reaches the store
+of its scope and no other.
+_Avoid_: Namespace, bucket, partition, tenant
+
+**Entry**:
+One thing a run recorded. It names the run and the step that wrote it, so a
+wrong one is found and dropped.
+_Avoid_: Fact, memory, record, item
+
 **Note**:
 One thing a step says while it works. A note is a view, and the trajectory is
 the record.

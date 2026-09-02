@@ -43,7 +43,13 @@ Shapes:
   `tools`, `returns` (the JSON Schema for the structured output), `cwd`,
   an optional `model` string that only that harness reads, and an optional
   `run` — the run this step belongs to, so a run the step starts through the
-  `orchy` tool records who asked (ADR 0025).
+  `orchy` tool records who asked (ADR 0025) — and an optional `memory`, the key
+  of the store the run reads, absent when the flow remembers nothing or the
+  step declines (ADR 0029).
+- `environmentOf({ run, step, memory })` — the environment a process a step
+  runs gets: `ORCHY_STARTED_BY` and `ORCHY_MEMORY_KEY`. The claude and droid
+  adapters and a `command` step all build theirs here, so `orchy mcp` and
+  `orchy memory add` read the same two names back.
 - `AgentResult` — what comes back: the structured `value`, an optional
   `trajectory` handle that only the same harness understands (a file path,
   a session id), and an optional `cost` for adapters whose trajectory does

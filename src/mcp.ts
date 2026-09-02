@@ -2,9 +2,10 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import type { Daemon, Ticket } from "./daemon.ts";
-import { COMPONENTS, type Flow, validate } from "./flow.ts";
+import { type AgentStep, COMPONENTS, type Flow, validate } from "./flow.ts";
 import { ADAPTERS, MODELS, SUPPLIES, TOOLS } from "./harness.ts";
 import { readFlow } from "./load.ts";
+import { lines } from "./memory.ts";
 import { read } from "./run.ts";
 import { descriptionOf, harnessInFile, harnessOfRun, missing, start, under, unfilled } from "./server.ts";
 import { parseFlow } from "./yaml.ts";
@@ -138,6 +139,34 @@ export function mcp(
       throw new Error(`the file at "${path}" is outside the root "${root}". Use a path under the root.`);
     }
     return path;
+  };
+
+  /**
+   * The store this door may reach: the one of the run whose step opened it. The
+   * key comes from the state of that run on disk, and never from the call, so a
+   * step cannot name the store of another ticket or another flow through the
+   * door, and it costs no check. The door is not a sandbox: a step that holds
+   * `bash` reaches every store through `orchy memory`, as ADR 0018 says of a
+   * tool list. ADR 0029 states the limit.
+   */
+  const mine = (): { key: string; step: string; runId: string } => {
+    if (!startedBy) {
+      throw new Error(
+        "this door was not opened by a step of a run, so it has no memory of its own. A memory belongs to a run.",
+      );
+    }
+    const state = daemon.state(startedBy.runId);
+    if (!state) throw new Error(`this daemon holds no run ${startedBy.runId}`);
+    const step = state.flow.steps.find((one) => one.id === startedBy.step);
+    if ((step as AgentStep | undefined)?.memory === "none") {
+      throw new Error(`the step "${startedBy.step}" declares memory: none, so it reads and writes no memory.`);
+    }
+    if (!state.memory) {
+      throw new Error(
+        `the flow "${state.flow.name}" declares no memory, so there is nothing to read and nowhere to write. Give the flow a scope, as memory: { scope: "flow" }.`,
+      );
+    }
+    return { key: state.memory.key, step: startedBy.step, runId: startedBy.runId };
   };
 
   const tools: Tool[] = [
@@ -410,6 +439,51 @@ export function mcp(
         throw new Error(
           row ? `the run is already ${row.status}, so there is nothing to stop` : `this daemon holds no run ${runId}`,
         );
+      },
+    },
+
+    {
+      name: "recall_memory",
+      description:
+        "Reads what earlier runs recorded in the memory of this run. The scope belongs to the flow, so this reads that store and no other: there is no way to name another one. `query` keeps the entries whose text or tags hold it. The seed at the top of the prompt holds the most recent entries already; call this to look past it, or when the turn has grown long enough to have lost it.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Keeps the entries whose text or tags hold this, in any case." },
+          limit: { type: "number", description: "How many of the most recent entries to answer with. Twenty when absent." },
+        },
+      },
+      handle(args) {
+        const { key } = mine();
+        const query = String(args.query ?? "").trim().toLowerCase();
+        const all = lines(root).recall(key);
+        const found = query
+          ? all.filter((entry) => `${entry.text} ${(entry.tags ?? []).join(" ")}`.toLowerCase().includes(query))
+          : all;
+        const limit = Number.isInteger(args.limit) && Number(args.limit) > 0 ? Number(args.limit) : 20;
+        return { scope: key, entries: found.slice(-limit), of: all.length };
+      },
+    },
+
+    {
+      name: "remember",
+      description:
+        "Records one thing in the memory of this run, for the runs that come after it. Write what a later run could not work out for itself: a decision and why, a dead end, where something lives. The entry names this run and this step, so a wrong one is found and dropped. A flow that declares no memory records nothing, and says so.",
+      inputSchema: {
+        type: "object",
+        required: ["text"],
+        properties: {
+          text: { type: "string", description: "What to record, in a sentence or two." },
+          tags: { type: "array", items: { type: "string" }, description: "Words that recall_memory reads back." },
+        },
+      },
+      handle(args) {
+        const { key, step, runId } = mine();
+        const text = String(args.text ?? "").trim();
+        if (!text) throw new Error("a memory holds no text. Write what a later run should know.");
+        const tags = Array.isArray(args.tags) ? args.tags.map((one) => String(one)) : undefined;
+        const entry = lines(root).remember(key, { run: runId, step, text, ...(tags ? { tags } : {}) });
+        return { scope: key, entry };
       },
     },
   ];

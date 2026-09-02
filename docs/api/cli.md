@@ -7,7 +7,7 @@ end of a run into an exit code. Everything it does, it does by calling the
 other modules — `loadFlow` from `src/load.ts`, `run` and `resume` from
 `src/run.ts`, `daemon` and `serve` from `src/daemon.ts` and `src/server.ts`.
 
-Six commands exist:
+Seven commands exist:
 
 - `orchy run <flow file>` — load a flow (TypeScript or YAML) and run it.
   `--with <json>` supplies the values the flow takes, as one JSON object —
@@ -20,6 +20,18 @@ Six commands exist:
   continues where it stood.
 - `orchy check <flow file>` — load a flow, and every flow it holds, and print
   what `validate()` says about it. It runs nothing and spends nothing, and it
+  exits `2` with the list of problems when the flow is not valid.
+- `orchy runs` — list the runs under this directory, newest first, as a table;
+  with `--events`, one JSON row per line.
+- `orchy memory keys | list <scope> | add <scope> <text> | forget <scope> [id]`
+  — read and write what runs recorded, under `.orchy/memory`. A scope is the
+  key a flow declares, and it is read the way the runner reads one, so
+  `ticket/PROJ-14` reaches the store a run wrote. `list` prints one entry a
+  line, or one JSON entry a line with `--events`. `forget` drops the entry an
+  id names, and the whole scope without one. This is the door for a person
+  correcting what a run wrote, and for a harness that holds no `orchy` tool.
+  `add` reads `$ORCHY_STARTED_BY` and records the run and step it names, so a
+  step that adds is recorded as that step and a person as a person (ADR 0029).
   exits `2` with the list of problems when the flow is not valid. A valid flow
   that takes values gets them named, each with its type, so the `--with` that
   comes next is written once.
