@@ -691,7 +691,9 @@ function anyOf(kinds: string[]): string {
 function shapeProblems(flow: Flow): string[] {
   const problems: string[] = [];
   for (const key of Object.keys(flow)) {
-    if (!FLOW_HOLDS.includes(key)) problems.push(`the flow holds "${key}", which is not a field of a flow`);
+    if (!FLOW_HOLDS.includes(key)) {
+      problems.push(`the flow holds "${key}", which is not a field of a flow. A flow holds: ${FLOW_HOLDS.join(", ")}`);
+    }
   }
   problems.push(...workspaceProblems(flow.workspace));
   problems.push(...changesProblems("the flow", flow.changes));
@@ -1027,13 +1029,17 @@ export function validate(flow: Flow, harness?: string, adapters: readonly string
 
   const records = flow.workspace !== undefined && flow.workspace.kind !== "none";
   if (!records) {
+    // A flow that wrote `kind: none` was told it had no workspace, and went
+    // looking for the field it had just written. Name what it wrote.
+    const lacks = (it: string) =>
+      flow.workspace === undefined
+        ? `${it} has no workspace to check it. Write one, as workspace: { kind: git, path: "." }`
+        : 'the workspace of the flow is "none", which records no change. Write workspace: { kind: git, path: "." }';
     // One promise on the flow speaks for every step, so it answers once.
-    if (flow.changes !== undefined) {
-      problems.push("the flow promises what it changes, but it has no workspace to check it");
-    }
+    if (flow.changes !== undefined) problems.push(`the flow promises what it changes, but ${lacks("it")}`);
     for (const step of flow.steps) {
       if ((step.kind === "agent" || step.kind === "call") && step.changes !== undefined) {
-        problems.push(`step "${step.id}" promises what it changes, but the flow has no workspace to check it`);
+        problems.push(`step "${step.id}" promises what it changes, but ${lacks("the flow")}`);
       }
     }
   }
@@ -1078,9 +1084,13 @@ function toolProblems(flow: Flow, step: Step, fallback?: string): string[] {
   return wanted.flatMap(({ who, harness, tools }) => {
     const supplies = ADAPTERS.includes(harness as AdapterName) ? SUPPLIES[harness as AdapterName] : undefined;
     return tools.flatMap((name) => {
-      if (!TOOLS.includes(name)) return [`${who} asks for the tool "${name}", which does not exist`];
+      if (!TOOLS.includes(name)) {
+        return [`${who} asks for the tool "${name}", which does not exist. Use one of: ${TOOLS.join(", ")}`];
+      }
       if (supplies && !supplies.includes(name)) {
-        return [`${who} asks for the tool "${name}", and the harness "${harness}" has none`];
+        const has = ADAPTERS.filter((adapter) => SUPPLIES[adapter].includes(name));
+        const have = `${has.join(" and ")} ${has.length === 1 ? "supplies" : "supply"} it`;
+        return [`${who} asks for the tool "${name}", and the harness "${harness}" has none. Only ${have}.`];
       }
       return [];
     });

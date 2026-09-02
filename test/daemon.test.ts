@@ -419,6 +419,52 @@ test("a run that waits has no end, so it reports no length", () => {
   assert.equal(row.waitingFor, "ask");
 });
 
+test("a failed run's row says why, so a list answers without opening the run", () => {
+  const record = {
+    startedAt: "2026-01-01T00:00:00.000Z",
+    endedAt: "2026-01-01T00:00:01.000Z",
+  };
+  // The fault of one step reads under the name of the step that holds it.
+  const step = rowOf(
+    {
+      runId: "one",
+      flow: { name: "broken", steps: [] },
+      status: "failed",
+      steps: { review: { ...record, status: "failed", error: "the value does not match returns" } },
+      cycles: {},
+    },
+    "flow.yaml",
+  );
+  assert.equal(step.error, "review: the value does not match returns");
+
+  // A fault of the run itself outranks the steps: it is the nearer answer.
+  const run = rowOf(
+    {
+      runId: "two",
+      flow: { name: "broken", steps: [] },
+      status: "failed",
+      error: "the run reached its budget",
+      steps: { review: { ...record, status: "failed", error: "the value does not match returns" } },
+      cycles: {},
+    },
+    "flow.yaml",
+  );
+  assert.equal(run.error, "the run reached its budget");
+
+  // A run that did not fail carries no reason, whatever its steps went through.
+  const done = rowOf(
+    {
+      runId: "three",
+      flow: { name: "recovered", steps: [] },
+      status: "done",
+      steps: { review: { ...record, status: "done", value: { approved: true } } },
+      cycles: {},
+    },
+    "flow.yaml",
+  );
+  assert.equal(done.error, null);
+});
+
 test("a page on another site cannot start a run, because the daemon refuses its Origin", async () => {
   const site = await running(project());
   try {
@@ -509,6 +555,7 @@ test("the index drops the events of a run that falls behind the list, and keeps 
       tokens: null,
       withJson: null,
       startedByJson: null,
+      error: null,
     });
     store.addEvent(runId, { type: "run_start", runId });
   }

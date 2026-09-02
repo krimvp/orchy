@@ -174,9 +174,11 @@ none when the third did.
 ## Commands
 
 ```bash
+orchy check flow.yaml                      # say what is wrong, and what it takes
 orchy run flow.yaml                        # or flow.ts
 orchy run flow.yaml --with '{"issue":412}' # the values the flow takes
 orchy run flow.yaml --harness claude       # for a flow that names none
+orchy runs                                 # the runs of this directory, and why each ended
 orchy resume <run id> '{"approved":true}'  # answer a gate
 orchy resume <run id>                      # continue a run that ended
 orchy resume <run id> --from <step>        # go back to a step, and run again

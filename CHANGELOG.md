@@ -31,6 +31,50 @@ named here.
 - The store is a line of JSON for each entry, under `.orchy/memory`, one file
   for each key, behind a four-call `Storage` contract. It is not the run:
   losing it loses no run. See ADR 0028.
+- A cycle that reaches its limit under the `accept` policy says so: the run
+  emits an `accept` event, the console prints `≠`, and the page says the step
+  still disagrees. Before, the console printed `✓` and `— done`, and a reader
+  took that for agreement.
+- The `cycle` event carries `limit` beside `count`, so the console and the page
+  say `1 of 3` instead of `1`.
+- `orchy runs` prints a header, says why a failed run failed, and names the
+  step a waiting run waits for. The `--events` rows carry `error`.
+- `orchy check` names what a valid flow takes, each value with its type, and
+  the `--with` that supplies them.
+- A run that waits prints the contract its answer must match, beside the
+  `orchy resume` command that gives it.
+- The run state holds `startedAt`. A run that stopped at a gate before any
+  step ran had no time at all, and every list sorted it last.
+- `orchy run --help` prints the help, as `orchy --help` does.
+
+### Changed
+- A `validate()` refusal names the fix: a tool that does not exist lists the
+  tools that do, a tool the harness lacks names the harness that has it, a
+  field a flow cannot hold lists the fields it holds, and a promise under
+  `workspace: { kind: none }` says the workspace is `none` instead of sending
+  the reader to look for a field the flow has.
+
+### Fixed
+- A flag on a command that does not take it passed in silence: `orchy run
+  flow.yaml --from fix` ran the whole flow from the top. Every command now
+  refuses a flag it does not take, a flag given twice, and a flag with no value
+  after it, and ends with `2`.
+- A directory, or a file that is not a flow file, met the loader of Node and
+  got its words. Both are refused with the file to name.
+- A run's row carries `error`: why the run failed, as the fault of the run
+  itself or the failed step's error under the step's name. The runs list and a
+  flow's runs list show it on the row, so a person reads why without opening
+  the run. The index adds the column to a database from before it.
+- A gate folds the answers of the steps behind its needs under "What the steps
+  further back answered", so the why behind an answer stands one unfold away
+  instead of a walk through the drawing.
+- An attempt that a loop dropped shows what it ended as and, when it failed,
+  its reason — the reason is what a person opens that fold to read.
+- The feed says why a step failed, where it said only `ended failed`.
+
+### Changed
+- The planning-poker flow takes a task of at least one character, so an empty
+  task is refused at the door and not sized by three estimators.
 
 ## [0.0.2] - 2026-08-13
 

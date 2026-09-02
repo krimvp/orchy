@@ -31,6 +31,12 @@ Seven commands exist:
   id names, and the whole scope without one. This is the door for a person
   correcting what a run wrote, and for a harness that holds no `orchy` tool
   (ADR 0028).
+  exits `2` with the list of problems when the flow is not valid. A valid flow
+  that takes values gets them named, each with its type, so the `--with` that
+  comes next is written once.
+- `orchy runs` — list the runs under this directory, newest first, as a table
+  with a header; with `--events`, one JSON row per line. The row of a failed
+  run says why, and the row of a waiting run names the step it waits for.
 - `orchy daemon [--port 4000]` — start the long-running engine over the
   current directory and serve its HTTP API. The daemon runs an agent on this
   machine, so it listens on `127.0.0.1` only, and it closes cleanly on
@@ -54,11 +60,18 @@ contract: instead of the human report, every `RunEvent` goes to stdout as one
 JSON line, and nothing else may reach stdout, because a parent process is
 reading it.
 
+A flag a command does not take (`orchy run … --from`), a flag given twice, and
+a flag with no value after it are refused with `2`, because each of them once
+passed in silence and ran the wrong thing.
+
 Without `--events`, the run reports to stderr with one glyph per event kind
-(`◆` run start, `▶` step start, `✓`/`✗` step end, `↻` cycle, `⏸` waiting for
-a person, `—` run end), and the final `RunState` prints to stdout as pretty
-JSON. A run that ends `waiting` also prints the exact `orchy resume` command
-that would answer it.
+(`◆` run start, `▶` step start, `✎` the prompt a step asks, `✓`/`✗` step end,
+`⊘` a step a condition ruled out, `↻` cycle, with the pass and the limit as
+`(1 of 3)`, `≠` a cycle that stopped at its limit with the disagreement
+accepted, `⏸` waiting for a person, `—` run end), and the final `RunState`
+prints to stdout as pretty JSON. A run that ends `waiting` also prints the
+exact `orchy resume` command that would answer it, and the contract the answer
+must match.
 
 Exit codes: `0` when the run ends `done` or `stopped`, `1` on a failed run or a
 thrown error, `2` for a usage mistake or a refusal at the door — no command, an

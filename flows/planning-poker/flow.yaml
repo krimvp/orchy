@@ -4,10 +4,12 @@ harness: pi
 model: ollama/glm-5.2
 workspace: { kind: git, path: . }
 parallel: 3
+# An empty task passes `type: string` and sends three estimators to size
+# nothing, so the door refuses it before the first token is spent.
 takes:
   type: object
   required: [task]
-  properties: { task: { type: string } }
+  properties: { task: { type: string, minLength: 1 } }
 
 steps:
   - id: estimate

@@ -128,6 +128,12 @@ export function Runs() {
                 <span className="name">
                   {run.flowName}
                   {taken(run) && <span className="with">{taken(run)}</span>}
+                  {/* The reason rides the row, so a failed run says why right here. */}
+                  {run.error && (
+                    <span className="why" title={run.error}>
+                      {run.error}
+                    </span>
+                  )}
                 </span>
                 <span className="dim">{when(run.startedAt)}</span>
                 <span className="dim">{took(run)}</span>

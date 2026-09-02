@@ -65,7 +65,8 @@ Shapes:
 
 - `RunState` — the whole run: `runId`, the `flow` itself (held in full, so a
   resume needs no file), the run's `with` values, its `startedBy` when a
-  step started it, a `status` of `"running"`,
+  step started it, `startedAt` (when the run began, so a run that stopped at
+  a gate before any step ran still has a time), a `status` of `"running"`,
   `"waiting"`, `"done"`, `"failed"`, or `"stopped"` (what a person or a dead
   daemon leaves — a run never writes it itself), an `error` when the fault
   belongs to the run and not to one step, a `StepRecord` per settled step,
@@ -89,7 +90,9 @@ Shapes:
 
 - `RunEvent` — what `onEvent` hears, in order: `run_start`, then per step
   `step_start`, `output` (live notes while it works), and `step_end` — or
-  `skip` when a condition ruled it out — plus `cycle` when the run goes back,
+  `skip` when a condition ruled it out — plus `cycle` when the run goes back
+  (with `count`, this pass, and `limit`, how many the flow allows), `accept`
+  when a cycle reached its limit and the policy accepted the disagreement,
   `waiting` when it stops for a person, and `run_end` with the final status.
 
 ## Example

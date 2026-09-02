@@ -490,6 +490,15 @@ ul.list li::before {
   font-weight: 400;
 }
 
+/* Why a run failed, on its row. The row keeps one line, so a long reason ends
+ * in the ellipsis and stands whole in the title. */
+.line .why {
+  margin-left: 10px;
+  color: var(--red);
+  font-weight: 400;
+  font-size: 12px;
+}
+
 .card .name .with {
   display: block;
   margin: 0;
@@ -2210,6 +2219,20 @@ pre.wrap {
 
 .leavings {
   margin-top: 12px;
+}
+
+/* The answers behind the gate's needs, folded: the why one unfold away. */
+.hero .behind {
+  margin: 12px 0;
+}
+
+/* One attempt that a loop dropped: what it ended as, then the reason or value. */
+.panel .past-attempt {
+  margin-top: 10px;
+}
+
+.panel .past-attempt pre {
+  margin-top: 4px;
 }
 
 .leavings > summary {

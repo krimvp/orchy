@@ -5,11 +5,11 @@ import { join } from "node:path";
 import { claude } from "./claude.ts";
 import { droid } from "./droid.ts";
 import { type AdapterName, ADAPTERS, type Harness } from "./harness.ts";
-import { validate } from "./flow.ts";
+import { type Flow, validate } from "./flow.ts";
 import { type Entry, asKey, lines as storage } from "./memory.ts";
 import { loadFlow } from "./load.ts";
 import { pi } from "./pi.ts";
-import { type RunEvent, type RunState, Refused, keep, list, resume, run } from "./run.ts";
+import { type RunEvent, type RunState, Refused, keep, list, resume, run, startOf } from "./run.ts";
 
 const VERSION = String(createRequire(import.meta.url)("../package.json").version);
 
@@ -81,7 +81,13 @@ function report(event: RunEvent): void {
     case "skip":
       return console.error(`⊘ ${event.step} does not run\n  ${lines(event.why)}`);
     case "cycle":
-      return console.error(`↻ ${event.step} goes back to ${event.to} (${event.count})`);
+      return console.error(`↻ ${event.step} goes back to ${event.to} (${event.count} of ${event.limit})`);
+    // The run goes on, and the step it went on from still says no. A reader
+    // who saw only "✓" and "— done" took that for agreement.
+    case "accept":
+      return console.error(
+        `≠ ${event.step} still disagrees after ${event.limit} cycle${event.limit === 1 ? "" : "s"} back to ${event.to}, and the flow accepts that`,
+      );
     case "waiting":
       return console.error(`⏸ ${event.step} waits for a person\n  ${lines(event.question)}`);
     case "run_end":
@@ -111,41 +117,56 @@ function wrong(message: string): never {
   process.exit(EXIT.usage);
 }
 
-const argv = process.argv.slice(2);
-const events = take(argv, "--events");
-const at = argv.indexOf("--harness");
-const chosen = at === -1 ? "pi" : (argv[at + 1] ?? "");
-if (at !== -1) argv.splice(at, 2);
+/**
+ * The flags each command takes. A flag on the wrong command passed in silence:
+ * `orchy run flow.yaml --from fix` ran the whole flow from the top, and the
+ * person who wrote it read the wrong run for a while.
+ */
+const FLAGS: Record<string, string[]> = {
+  run: ["--with", "--harness", "--events", "--started-by"],
+  resume: ["--from", "--harness", "--events"],
+  check: ["--harness"],
+  runs: ["--events"],
+  daemon: ["--port"],
+  mcp: ["--harness"],
+};
 
-let given: string | undefined;
-let from: string | undefined;
+/** The flags that take a value. The rest stand alone. */
+const VALUED = ["--with", "--from", "--harness", "--port", "--started-by"];
+
+const argv: string[] = [];
+const flags = new Map<string, string | true>();
+for (let at = 0; at < process.argv.length - 2; at += 1) {
+  const one = process.argv[at + 2] as string;
+  if (!one.startsWith("--") || one === "--help" || one === "--version") {
+    argv.push(one);
+    continue;
+  }
+  // The first of two won in silence, and the second was the one just typed.
+  if (flags.has(one)) wrong(`${one} is given twice. Give it once.`);
+  if (!VALUED.includes(one)) {
+    flags.set(one, true);
+    continue;
+  }
+  const value = process.argv[at + 3];
+  // `--with` at the end of the line ran the flow with no values at all.
+  if (value === undefined || value.startsWith("--")) wrong(`${one} wants a value, and holds none.\n\n${USAGE}`);
+  flags.set(one, value);
+  at += 1;
+}
+
+const events = flags.has("--events");
+const chosen = (flags.get("--harness") as string | undefined) ?? "pi";
+const given = flags.get("--with") as string | undefined;
+const from = flags.get("--from") as string | undefined;
+const starter = flags.get("--started-by") as string | undefined;
 let port: number | undefined;
-let starter: string | undefined;
 try {
-  given = text(argv, "--with");
-  from = text(argv, "--from");
-  port = number(argv, "--port");
-  starter = text(argv, "--started-by");
+  port = number(flags.get("--port") as string | undefined);
 } catch (error) {
   wrong(error instanceof Error ? error.message : String(error));
 }
 
-function take(list: string[], flag: string): boolean {
-  const found = list.indexOf(flag);
-  if (found === -1) return false;
-  list.splice(found, 1);
-  return true;
-}
-
-function text(list: string[], flag: string): string | undefined {
-  const found = list.indexOf(flag);
-  if (found === -1) return undefined;
-  const value = list[found + 1];
-  list.splice(found, 2);
-  return value;
-}
-
-/** The values that the flow takes. One JSON object, so every key has a name. */
 /**
  * The flow a file holds. A file that will not load is a fault of what the
  * command was given, not of a run: it ends with the code for a wrong command,
@@ -159,6 +180,7 @@ async function read(file: string) {
   }
 }
 
+/** The values that the flow takes. One JSON object, so every key has a name. */
 function valuesOf(source: string | undefined): Record<string, unknown> | undefined {
   if (source === undefined) return undefined;
   let value: unknown;
@@ -192,14 +214,11 @@ function starterOf(source: string | undefined): { runId: string; step: string } 
  * A number the command line holds, or nothing. `--port abc` used to fall back
  * to the default in silence, and the daemon then listened where nobody looked.
  */
-function number(list: string[], flag: string): number | undefined {
-  const found = list.indexOf(flag);
-  if (found === -1) return undefined;
-  const source = list[found + 1];
-  list.splice(found, 2);
+function number(source: string | undefined): number | undefined {
+  if (source === undefined) return undefined;
   const value = Number(source);
-  if (source === undefined || !Number.isInteger(value) || value < 1 || value > 65535) {
-    throw new Wrong(`${flag} holds "${source ?? ""}". Write a whole number from 1 to 65535.`);
+  if (!Number.isInteger(value) || value < 1 || value > 65535) {
+    throw new Wrong(`--port holds "${source}". Write a whole number from 1 to 65535.`);
   }
   return value;
 }
@@ -216,7 +235,11 @@ function finish(state: RunState): never {
   if (!events) {
     console.log(JSON.stringify(state, null, 2));
     if (state.status === "waiting") {
-      console.error(`\nanswer with: orchy resume ${state.runId} '<json value>'`);
+      // The shape of the answer stands beside the command that gives it, so a
+      // person writes it once. The step a gate stands in for holds the shape.
+      const gate = state.flow.steps.find((step) => step.id === state.waitingFor);
+      const shape = gate && gate.kind !== "flow" ? `\nthe value matches: ${JSON.stringify(gate.returns)}` : "";
+      console.error(`\nanswer with: orchy resume ${state.runId} '<json value>'${shape}`);
     }
   }
   if (state.status === "failed") process.exit(EXIT.failed);
@@ -228,7 +251,8 @@ let running: { runId: string; cwd: string } | undefined;
 
 const [command, first, second, third] = argv;
 
-if (command === "--help" || command === "-h" || command === "help" || command === undefined) {
+// `orchy run --help` asks for help as much as `orchy --help` does.
+if (argv.some((one) => one === "--help" || one === "-h") || command === "help" || command === undefined) {
   // Help is what the reader asked for, so it goes to the output stream and ends
   // with 0. A wrong command is a fault, and it takes the error stream and 2.
   console.log(USAGE);
@@ -243,8 +267,14 @@ if (command === "--version" || command === "-v") {
 // A flag orchy does not know, or an argument beyond what the command takes,
 // used to pass in silence — and a typo like "--wiht" then ran a flow that
 // failed later for a missing value, naming the wrong fault.
-const strange = argv.filter((one) => one.startsWith("--"));
+const known = Object.values(FLAGS).flat();
+const strange = [...flags.keys()].filter((one) => !known.includes(one));
 if (strange.length > 0) wrong(`orchy does not know ${strange.join(", ")}.\n\n${USAGE}`);
+if (command in FLAGS) {
+  const takes = FLAGS[command] as string[];
+  const misplaced = [...flags.keys()].filter((one) => !takes.includes(one));
+  if (misplaced.length > 0) wrong(`orchy ${command} does not take ${misplaced.join(", ")}.\n\n${USAGE}`);
+}
 const most: Record<string, number> = { run: 2, resume: 3, check: 2, runs: 1, daemon: 1, mcp: 1, memory: 4 };
 if (command in most && argv.length > (most[command] as number)) {
   wrong(`orchy ${command} does not take "${argv[most[command] as number]}".\n\n${USAGE}`);
@@ -291,7 +321,8 @@ try {
     const flow = await read(first);
     const problems = validate(flow, chosen);
     if (problems.length > 0) throw new Wrong(`the flow is not valid:\n- ${problems.join("\n- ")}`);
-    console.log(`${first} is valid: ${flow.steps.length} step${flow.steps.length === 1 ? "" : "s"}`);
+    // What the flow takes is the next thing the person types, so say it here.
+    console.log(`${first} is valid: ${flow.steps.length} step${flow.steps.length === 1 ? "" : "s"}${takes(flow)}`);
     process.exit(EXIT.done);
   }
 
@@ -393,14 +424,32 @@ try {
   process.exit(EXIT.failed);
 }
 
-/** One row of `orchy runs`. */
+/**
+ * What a flow takes, for the line `orchy check` prints: each name and its
+ * type, and which are required. A person who reads it writes `--with` once.
+ */
+function takes(flow: Flow): string {
+  const schema = flow.takes as { properties?: Record<string, { type?: unknown }>; required?: string[] } | undefined;
+  const names = Object.keys(schema?.properties ?? {});
+  if (names.length === 0) return "";
+  const required = new Set(schema?.required ?? []);
+  const each = names.map((name) => {
+    const type = schema?.properties?.[name]?.type;
+    const kind = typeof type === "string" ? type : "value";
+    return `${name} (${kind}${required.has(name) ? "" : ", optional"})`;
+  });
+  return `. It takes: ${each.join(", ")}. Supply them with --with '{"${names[0]}": …}'.`;
+}
+
+/** One row of `orchy runs`. A failed run says why, and a waiting run says for whom. */
 function rowOf(state: RunState) {
   return {
     runId: state.runId,
     flowName: state.flow.name,
     status: state.status,
-    startedAt: Object.values(state.steps).map((record) => record.startedAt).sort()[0] ?? "",
+    startedAt: startOf(state),
     ...(state.waitingFor ? { waitingFor: state.waitingFor } : {}),
+    ...(state.status === "failed" && state.error ? { error: state.error } : {}),
   };
 }
 
@@ -413,10 +462,22 @@ function shown(entries: Entry[]): string {
 
 function table(runs: RunState[]): string {
   const rows = runs.map(rowOf);
-  const wide = Math.max(...rows.map((row) => row.flowName.length));
-  return rows
-    .map((row) => `${row.runId}  ${row.status.padEnd(7)}  ${row.flowName.padEnd(wide)}  ${row.startedAt}`)
-    .join("\n");
+  const wide = Math.max("flow".length, ...rows.map((row) => row.flowName.length));
+  const line = (id: string, status: string, flow: string, started: string, why: string) =>
+    `${id.padEnd(36)}  ${status.padEnd(7)}  ${flow.padEnd(wide)}  ${started.padEnd(24)}  ${why}`.trimEnd();
+  return [
+    line("run", "status", "flow", "started", ""),
+    ...rows.map((row) =>
+      line(
+        row.runId,
+        row.status,
+        row.flowName,
+        row.startedAt,
+        // The first line of the reason. The run holds the rest.
+        row.error ? (row.error.split("\n")[0] as string) : row.waitingFor ? `waits for "${row.waitingFor}"` : "",
+      ),
+    ),
+  ].join("\n");
 }
 
 /**

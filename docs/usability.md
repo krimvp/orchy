@@ -620,6 +620,11 @@ findings stay as they were written.
 | 10 — a failed pi step keeps no trajectory | The record rides on the error, so the step a reader most wants to read has its session. |
 | 11 — the SQLite warning on every run | The daemon loads `node:sqlite` when a person asks for the daemon, so a run prints nothing. |
 | the shipped flows | Every flow names a harness and a model. A `budget` stays only where the harness reports a cost. The prompts carry their own rules. The git modules take values instead of reading the environment. `examples/research` declares what it takes. |
+| 11 — three messages with no fix | A tool that does not exist lists the tools that do, a tool the harness lacks names the harness that has it, and a field a flow cannot hold lists the fields it holds. |
+| 11 — `kind: none` "has no workspace" | The message says the workspace is `none`, and what to write. |
+| 11 — a cycle at its limit prints nothing | The run emits `accept`, the console prints `≠`, and the cycle line says `1 of 3`. |
+| 11 — a gate never shows the shape of its answer | The `orchy resume` hint carries the contract. |
+| 11 — repeated and misplaced flags, a `.json` flow file | A flag a command does not take, a flag given twice, and a flag with no value are refused. A directory and a file that is not a flow file are refused with the file to name. |
 
 **Still open.** The rejection that Pi writes still does not name the values a
 contract allows, because Pi builds that message. A `changes` promise still sees
