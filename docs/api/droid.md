@@ -14,11 +14,13 @@ Four details are load-bearing:
 
 - **Only the declared tools exist.** Orchy's harness-neutral tool names are
   mapped to Droid's own (`Read`, `Create`, `Edit`, `Execute`, `Grep`, `Glob`,
-  `LS`, `FetchUrl`/`WebSearch`) and go to `--enabled-tools`, which blocks
-  every tool it does not name. A name with no mapping throws rather than
-  being dropped silently, and so does an empty list: an empty
-  `--enabled-tools` would enable the default set of the command, and that is
-  invariant 1 broken in silence. The `orchy` tool has no mapping, because
+  `LS`, `FetchUrl`/`WebSearch`) and go to `--restrict-tools`, which holds the
+  step to the names it lists and blocks every other tool — the `Skill` tool
+  and the `Task` tool, the subagent door, included. The earlier
+  `--enabled-tools` left `Task` open above the list under `--auto high`, so a
+  step could start a subagent that holds tools the step did not declare. A
+  name with no mapping throws rather than being dropped silently, and so does
+  an empty list, which Droid refuses. The `orchy` tool has no mapping, because
   Droid holds one MCP list for every session, so no per-step list can bound
   the door of the run's own root.
 - **The contract rides the system prompt.** The command takes no schema, so

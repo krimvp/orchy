@@ -58,6 +58,13 @@ named here.
   the reader to look for a field the flow has.
 
 ### Fixed
+- A droid step bounds to exactly its declared tools: the adapter names them
+  with `--restrict-tools`, not `--enabled-tools`. Under `--auto high`,
+  `--enabled-tools` left the `Task` tool, the subagent door, open above the
+  list, so a step could start a subagent that holds tools the step did not
+  declare. `--restrict-tools` shuts both the `Task` tool and the `Skill` tool,
+  so no step reaches past its list. The `--disable-builtin-skills` flag is gone
+  with it: `--restrict-tools` already blocks the `Skill` tool.
 - A flag on a command that does not take it passed in silence: `orchy run
   flow.yaml --from fix` ran the whole flow from the top. Every command now
   refuses a flag it does not take, a flag given twice, and a flag with no value

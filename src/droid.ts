@@ -60,8 +60,9 @@ export const droid: Harness = {
         }),
       ),
     ];
-    // An empty `--enabled-tools` enables the default set of the command, and
-    // that is invariant 1 broken in silence. So the empty list is refused.
+    // An empty `--restrict-tools` list restricts a step to nothing, and droid
+    // refuses it. That reads as invariant 1 broken, so the empty list is caught
+    // here with a reason a person can act on.
     if (tools.length === 0) {
       throw new Error(`step "${request.step}" declares no tools, and droid cannot bound a step to none. Declare a tool, or name another harness.`);
     }
@@ -75,16 +76,17 @@ export const droid: Harness = {
       "exec",
       "--output-format",
       "json",
-      // Invariant 1: the list bounds what exists. Droid refuses a name it does
-      // not know, so nothing here is dropped in silence.
-      "--enabled-tools",
+      // Invariant 1: the list bounds what exists. `--restrict-tools` holds the
+      // step to these names and nothing else, so the `Skill` tool and the
+      // `Task` tool, the subagent door, are both shut — `--enabled-tools` left
+      // `Task` open above the list under `--auto high`. Droid refuses a name it
+      // does not know, so nothing here is dropped in silence.
+      "--restrict-tools",
       tools.join(","),
       // No one sits at the keyboard of a step, so nothing may stop to ask.
       // The tool list is the boundary; the level approves what the list holds.
       "--auto",
       "high",
-      // A skill is a tool the step did not declare, so none loads.
-      "--disable-builtin-skills",
       "--append-system-prompt",
       contract(request.returns),
       ...(request.model ? ["--model", request.model] : []),
