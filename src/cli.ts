@@ -360,9 +360,12 @@ try {
 
     if (first === "add") {
       if (!third?.trim()) throw new Wrong(`orchy memory add wants the text to record.\n\n${USAGE}`);
-      // A person wrote this one, and the record says so: an entry that cannot
-      // say where it came from is an entry nobody knows whether to trust.
-      const entry = store.remember(key, { run: "-", step: "a person", text: third.trim() });
+      // A command step reads the same variable the door does, so its entry
+      // names the run and the step. Without one, a person wrote this, and the
+      // record says so: an entry that cannot say where it came from is an
+      // entry nobody knows whether to trust.
+      const by = starterOf(process.env.ORCHY_STARTED_BY);
+      const entry = store.remember(key, { run: by?.runId ?? "-", step: by?.step ?? "a person", text: third.trim() });
       console.log(`${entry.id} recorded in "${key}"`);
       process.exit(EXIT.done);
     }

@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { type Metrics, SCHEMA_VERSION, type Step, type Trajectory, totalMetrics } from "./atif.ts";
-import { type Harness, MODELS, type ToolName, type Watch, notesOf } from "./harness.ts";
+import { type Harness, MODELS, type ToolName, type Watch, environmentOf, notesOf } from "./harness.ts";
 import { tail } from "./tail.ts";
 
 const run = promisify(execFile);
@@ -108,7 +108,7 @@ export const claude: Harness = {
 
     let stdout: string;
     try {
-      const command = run("claude", args, { cwd: request.cwd, maxBuffer: 64 * 1024 * 1024 });
+      const command = run("claude", args, { cwd: request.cwd, maxBuffer: 64 * 1024 * 1024, env: environmentOf(request) });
       // The command reads its input stream, and Orchy writes nothing to it. Left
       // open, the command waits out its own timeout on every step of every flow.
       command.child.stdin?.end();

@@ -89,6 +89,22 @@ test("a person reads, writes, and corrects a store from the command line", () =>
   assert.match(orchy(root, "memory", "list", "ticket-proj-14").stdout, /holds nothing/);
 });
 
+test("a command step that records is recorded as the step, and a person as a person", () => {
+  const root = project();
+  const by = JSON.stringify({ runId: "r1", step: "say" });
+  const stepped = spawnSync(process.execPath, [CLI, "memory", "add", "flow-x", "found it"], {
+    cwd: root,
+    encoding: "utf8",
+    env: { ...process.env, ORCHY_STARTED_BY: by },
+  });
+  assert.equal(stepped.status, 0, stepped.stderr);
+  assert.equal(orchy(root, "memory", "add", "flow-x", "checked it").status, 0);
+
+  const listed = orchy(root, "memory", "list", "flow-x", "--events").stdout.trim().split("\n").map((line) => JSON.parse(line) as { run: string; step: string });
+  // Every entry names where it came from, whichever door it came through.
+  assert.deepEqual(listed.map((one) => [one.run, one.step]), [["r1", "say"], ["-", "a person"]]);
+});
+
 test("a memory command that is wrong says so, and writes nothing", () => {
   const root = project();
 

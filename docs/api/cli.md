@@ -29,8 +29,9 @@ Seven commands exist:
   `ticket/PROJ-14` reaches the store a run wrote. `list` prints one entry a
   line, or one JSON entry a line with `--events`. `forget` drops the entry an
   id names, and the whole scope without one. This is the door for a person
-  correcting what a run wrote, and for a harness that holds no `orchy` tool
-  (ADR 0029).
+  correcting what a run wrote, and for a harness that holds no `orchy` tool.
+  `add` reads `$ORCHY_STARTED_BY` and records the run and step it names, so a
+  step that adds is recorded as that step and a person as a person (ADR 0029).
   exits `2` with the list of problems when the flow is not valid. A valid flow
   that takes values gets them named, each with its type, so the `--with` that
   comes next is written once.

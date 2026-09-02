@@ -30,7 +30,7 @@ import {
   takesProblem,
   validate,
 } from "./flow.ts";
-import { ADAPTERS, type Harness, type Note } from "./harness.ts";
+import { ADAPTERS, type Harness, type Note, environmentOf } from "./harness.ts";
 import { type Entry, MOST, keyOf, lines } from "./memory.ts";
 import { pi } from "./pi.ts";
 import { attempts, toAtif } from "./atif.ts";
@@ -1046,6 +1046,9 @@ async function runStep(
               cwd,
               model: modelOf(state.flow, step),
               run: state.runId,
+              // The key, so a harness that runs a process gives it to the
+              // step. A step that declines the memory gets no key. ADR 0029.
+              ...(state.memory && step.memory !== "none" ? { memory: state.memory.key } : {}),
             },
             watch,
           )
@@ -1152,7 +1155,11 @@ function plain(path: string): string {
  */
 function recalled(step: AgentStep, state: RunState, cwd: string): Entry[] {
   if (!state.memory || step.memory === "none") return [];
-  return lines(cwd).recall(state.memory.key, state.memory.most);
+  // What this run wrote is the state of this run, and the values of its steps
+  // already carry it. The block says "earlier runs", so it holds only those,
+  // and a cycle asks again with the same words whatever the run recorded since.
+  const earlier = lines(cwd).recall(state.memory.key).filter((entry) => entry.run !== state.runId);
+  return state.memory.most <= 0 ? [] : earlier.slice(-state.memory.most);
 }
 
 function buildPrompt(
@@ -1268,11 +1275,17 @@ function callCommand(
   state: RunState,
 ): Promise<unknown> {
   return new Promise((keep, refuse) => {
-    // A command is a process, so it learns the store the way a process learns
+    // A command is a process, so it learns who it is the way a process learns
     // anything: `orchy memory add "$ORCHY_MEMORY_KEY" "..."` writes where the
-    // run reads. A flow that remembers nothing sets nothing. ADR 0026, ADR 0029.
-    const env = state.memory ? { ...process.env, ORCHY_MEMORY_KEY: state.memory.key } : process.env;
-    const child = spawn(String(step.command), { cwd, shell: true, stdio: ["pipe", "pipe", "pipe"], env });
+    // run reads, and records this run and this step as the writer, from the
+    // same variable the door reads. A flow that remembers nothing sets no key.
+    // ADR 0026, ADR 0029.
+    const child = spawn(String(step.command), {
+      cwd,
+      shell: true,
+      stdio: ["pipe", "pipe", "pipe"],
+      env: environmentOf({ run: state.runId, step: step.id, memory: state.memory?.key }),
+    });
     let out = "";
     let said = "";
     let rest = "";

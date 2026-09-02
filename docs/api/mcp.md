@@ -51,7 +51,7 @@ flow runs code, with the authority of the user who started `orchy mcp`.
 
   Neither memory tool takes a key. The scope comes from `state.memory` of the
   run whose step opened the door, so a step cannot name the store of another
-  ticket, another flow, or another user — there is nothing to ask for. That is
+  ticket or another flow — there is nothing to ask for. That is
   the whole of the isolation (ADR 0029).
 
 The daemon behind this door asks for no schedule beat (`daemon(root, false)`),
