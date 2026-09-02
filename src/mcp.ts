@@ -145,7 +145,7 @@ export function mcp(
    * The store this door may reach: the one of the run whose step opened it. The
    * key comes from the state of that run on disk, and never from the call, so a
    * step cannot name the store of another ticket, another flow, or another
-   * user. That is the whole of the isolation, and it costs no check. ADR 0028.
+   * user. That is the whole of the isolation, and it costs no check. ADR 0029.
    */
   const mine = (): { key: string; step: string; runId: string } => {
     if (!startedBy) {

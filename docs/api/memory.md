@@ -3,7 +3,7 @@
 This module holds the memory of a run: the store a flow declares, the key that
 names it, and the one implementation behind the contract. The runner recovers
 from it before a step, four doors write to it, and none of them knows the shape
-of the file. See [ADR 0028](../adr/0028-memory-is-a-declared-scope.md) for the
+of the file. See [ADR 0029](../adr/0029-memory-is-a-declared-scope.md) for the
 decision and its limits.
 
 A flow that declares nothing remembers nothing. That is the default, and it is

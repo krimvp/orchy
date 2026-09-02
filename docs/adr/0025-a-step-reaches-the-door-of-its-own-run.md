@@ -8,7 +8,7 @@ status: accepted
 holds it reaches the MCP door of its own root: it authors flows, starts
 runs, reads them, and answers gates, through the same tools an outside
 agent holds (ADR 0024), and two more that only a step can use: `recall_memory`
-and `remember`, over the store its own run reads (ADR 0028). The claude
+and `remember`, over the store its own run reads (ADR 0029). The claude
 adapter opens the door with `--mcp-config`; the pi adapter cannot, and
 `validate()` refuses the tool there, from the `SUPPLIES` table.
 

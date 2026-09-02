@@ -7,7 +7,7 @@ import type { Memory } from "./flow.ts";
  * One thing a run recorded. Every entry names the run and the step that wrote
  * it, because a store that cannot say where a claim came from is a store nobody
  * can correct: a wrong entry is found by its provenance and dropped by its id.
- * See ADR 0028.
+ * See ADR 0029.
  */
 export interface Entry {
   id: string;
@@ -21,7 +21,7 @@ export interface Entry {
 /**
  * Recover before the run, store while it runs. The contract, and the only one.
  * The shape behind it is not the point: a line per entry today, a table
- * tomorrow, and the runner reads neither. See ADR 0028.
+ * tomorrow, and the runner reads neither. See ADR 0029.
  */
 export interface Storage {
   /** The last `most` entries of one key, or every one of them when `most` is absent. */
@@ -121,7 +121,7 @@ const RESERVED = ["none", "flow", "user"];
 /**
  * The key one run reads and writes, or nothing when the flow remembers none.
  * The run resolves this once and keeps it, so a resume reads the same store
- * even when the file it came from has moved on. See ADR 0028.
+ * even when the file it came from has moved on. See ADR 0029.
  */
 export function keyOf(memory: Memory | undefined, flowName: string, takes?: Record<string, unknown>): string | undefined {
   if (!memory) return undefined;
@@ -162,7 +162,7 @@ export function asKey(text: string): string {
   return (flat || "memory").slice(0, 100);
 }
 
-/** What a flow gets wrong about its memory, for `validate()`. See ADR 0028. */
+/** What a flow gets wrong about its memory, for `validate()`. See ADR 0029. */
 export function memoryProblems(memory: unknown, takes: unknown): string[] {
   const problems: string[] = [];
   if (typeof memory !== "object" || memory === null || Array.isArray(memory)) {

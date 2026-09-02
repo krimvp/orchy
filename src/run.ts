@@ -134,7 +134,7 @@ function money(amount: number): string {
 /**
  * What a component learns about the run it works in: the run and the step it
  * is, and the store the run reads, when the flow declares one. A component
- * that wants none of it takes four arguments and ignores this. ADR 0028.
+ * that wants none of it takes four arguments and ignores this. ADR 0029.
  */
 export interface Called {
   runId: string;
@@ -210,7 +210,7 @@ export interface RunState {
    * The store this run recovers from and writes to, when the flow declares one.
    * The run resolves the key once, and keeps it here: a resume then reads the
    * store the run really used, and not the one the flow file names today.
-   * ADR 0028.
+   * ADR 0029.
    */
   memory?: { key: string; most: number };
   /**
@@ -1148,7 +1148,7 @@ function plain(path: string): string {
 
 /**
  * What the memory of the run gives one step. A step that says `memory: none`
- * gets nothing, and so does a flow that declares no scope. ADR 0028.
+ * gets nothing, and so does a flow that declares no scope. ADR 0029.
  */
 function recalled(step: AgentStep, state: RunState, cwd: string): Entry[] {
   if (!state.memory || step.memory === "none") return [];
@@ -1246,7 +1246,7 @@ async function callModule(
   const say = (text: string) => watch({ kind: "text", text: String(text) });
   // `cwd` rides fourth, so a shipped component acts where the steps act. The
   // run rides fifth, so a component writes where the run reads. A component
-  // that wants none of the last four ignores them, as before. ADR 0028.
+  // that wants none of the last four ignores them, as before. ADR 0029.
   const run: Called = { runId: state.runId, step: step.id, ...(state.memory ? { memory: state.memory } : {}) };
   return (module.default as (...args: unknown[]) => unknown)(inputs, say, values, cwd, run);
 }
@@ -1270,7 +1270,7 @@ function callCommand(
   return new Promise((keep, refuse) => {
     // A command is a process, so it learns the store the way a process learns
     // anything: `orchy memory add "$ORCHY_MEMORY_KEY" "..."` writes where the
-    // run reads. A flow that remembers nothing sets nothing. ADR 0026, ADR 0028.
+    // run reads. A flow that remembers nothing sets nothing. ADR 0026, ADR 0029.
     const env = state.memory ? { ...process.env, ORCHY_MEMORY_KEY: state.memory.key } : process.env;
     const child = spawn(String(step.command), { cwd, shell: true, stdio: ["pipe", "pipe", "pipe"], env });
     let out = "";

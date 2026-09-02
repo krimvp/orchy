@@ -145,7 +145,7 @@ export type Fanout = Member[] | Computed;
  * `scope` is the key of one store: the word `none`, `flow`, or `user`, or a key
  * the flow writes itself, which reads the values of the run as a prompt does —
  * `ticket/{{ issue }}` gives each ticket a store of its own. A flow that
- * declares no memory remembers nothing, which is the default. See ADR 0028.
+ * declares no memory remembers nothing, which is the default. See ADR 0029.
  */
 export interface Memory {
   scope: string;
@@ -240,7 +240,7 @@ export interface Flow {
   returns?: TSchema;
   /** What the run may spend, in dollars. A run that reaches it stops. ADR 0019. */
   budget?: number;
-  /** What every step of the run recovers, and where a step stores. ADR 0028. */
+  /** What every step of the run recovers, and where a step stores. ADR 0029. */
   memory?: Memory;
   /** How many steps run at once. Eight when the flow does not say. */
   parallel?: number;
@@ -490,7 +490,7 @@ export async function expandFlows(flow: Flow, load: (path: string) => Promise<Fl
     // A memory belongs to the run for the same reason, and one more: a scope
     // reads the values of the run, and expansion turns the values of an inner
     // flow into values of a step. So a scope that stood alone would resolve
-    // against another flow's values here, or against none. ADR 0028.
+    // against another flow's values here, or against none. ADR 0029.
     if (inner.memory !== undefined) {
       throw new Error(
         `the flow at "${step.flow}" remembers under "${inner.memory.scope}", and step "${step.id}" holds it. A memory belongs to the run, so only the flow that the run starts declares one.`,

@@ -75,7 +75,7 @@ Shapes:
   While waiting, `waitingFor` names the step and `question` says what to
   supply. `memory` holds the store the run reads and writes — the key,
   resolved once before the first step, and how many entries seed a prompt —
-  when the flow declares one (ADR 0028).
+  when the flow declares one (ADR 0029).
 
 - `StepRecord` — what one step did: `status` (`"done"`, `"failed"`, or
   `"skipped"`), timestamps, the `value`, an `error`, a `trajectory` handle,

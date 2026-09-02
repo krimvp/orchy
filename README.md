@@ -367,7 +367,7 @@ orchy memory forget ticket-proj-14 a41f9c02
 
 The store is a line of JSON for each entry, under `.orchy/memory`, one file for
 each key. It is not the run: losing it loses no run. See [ADR
-0028](./docs/adr/0028-memory-is-a-declared-scope.md).
+0028](./docs/adr/0029-memory-is-a-declared-scope.md).
 
 ## How it works
 

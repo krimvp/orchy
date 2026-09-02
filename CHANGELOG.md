@@ -30,7 +30,7 @@ named here.
   dropped by its id.
 - The store is a line of JSON for each entry, under `.orchy/memory`, one file
   for each key, behind a four-call `Storage` contract. It is not the run:
-  losing it loses no run. See ADR 0028.
+  losing it loses no run. See ADR 0029.
 - A cycle that reaches its limit under the `accept` policy says so: the run
   emits an `accept` event, the console prints `≠`, and the page says the step
   still disagrees. Before, the console printed `✓` and `— done`, and a reader

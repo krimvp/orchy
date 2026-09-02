@@ -75,7 +75,7 @@ A prompt holds `{{ name }}`, and the name takes its value from what the run
 takes and what the step holds. See [ADR
 0015](./adr/0015-a-flow-takes-values-and-returns-one.md). The scope of a memory
 reads a name the same way, so `ticket/{{ issue }}` gives each ticket a store of
-its own. See [ADR 0028](./adr/0028-memory-is-a-declared-scope.md).
+its own. See [ADR 0029](./adr/0029-memory-is-a-declared-scope.md).
 
 ## Finding 1 — a file states a field, and nothing checks it
 

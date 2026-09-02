@@ -4,7 +4,7 @@ import { lines } from "../memory.ts";
 /**
  * Records what the run learned, in the store the flow declares. Bookkeeping is
  * a step and not a choice: a flow that ends with this one always records, where
- * an agent told to remember sometimes does. ADR 0028.
+ * an agent told to remember sometimes does. ADR 0029.
  *
  * `with: { text: "..." }` records that text. With no text it records the value
  * of each step it needs, one entry each, so a summarizing step before it is the

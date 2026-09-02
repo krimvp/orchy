@@ -8,7 +8,7 @@ status: accepted
 it as a server and holds twelve tools: `check_flow`, `write_flow`,
 `read_flow`, `list_flows`, `run_flow`, `read_run`, `read_trajectory`,
 `list_runs`, `resume_run`, `stop_run`, and — for a step of a run, over the
-memory its flow declares — `recall_memory` and `remember` (ADR 0028). The agent writes a flow, hears every problem
+memory its flow declares — `recall_memory` and `remember` (ADR 0029). The agent writes a flow, hears every problem
 from `validate()`, corrects the flow, runs it, follows the run, and answers a
 gate.
 

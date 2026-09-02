@@ -547,7 +547,7 @@ Nothing expires, and nothing ranks: `recall_memory` matches a substring, in the
 text and in the tags. Durable project knowledge still belongs in reviewed,
 human-readable records in the repository — a store is where one run tells the
 next what it found. See [ADR
-0028](./adr/0028-memory-is-a-declared-scope.md).
+0028](./adr/0029-memory-is-a-declared-scope.md).
 
 ## Run
 
