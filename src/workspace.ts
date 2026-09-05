@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { lstatSync, readFileSync, readlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 /**
@@ -37,7 +37,7 @@ export function take(workspace: Workspace | undefined, cwd: string): Snapshot | 
     throw new Error(`the workspace at "${at}" is not a git repository`);
   }
 
-  return { head: git(["rev-parse", "HEAD"], at).trim(), files: status(at) };
+  return { head: git(["rev-parse", "--verify", "HEAD"], at, true).trim(), files: status(at) };
 }
 
 export function changed(before: Snapshot | undefined, after: Snapshot | undefined): Change[] {
@@ -63,13 +63,14 @@ function changeOf(path: string, state: string | undefined): Change {
   return { path: path.slice(0, at), to: path.slice(at + RENAME.length), how };
 }
 
-/** Git writes a rename as two paths in one line. */
-const RENAME = " -> ";
+/** A file name cannot hold NUL, so it keeps the two names of a rename apart. */
+const RENAME = "\0";
 
 /** The status letters, in the order they alarm a reader. The first one wins. */
 const HOW: Array<[string, Change["how"]]> = [
   ["D", "deleted"],
   ["R", "renamed"],
+  ["C", "added"],
   ["?", "added"],
   ["A", "added"],
 ];
@@ -90,11 +91,14 @@ function howOf(status: string | undefined): Change["how"] {
  * characters, and the first is a space for a file that only the working tree
  * changed. Trimming here eats the first letter of that path.
  */
-function git(args: string[], cwd: string): string {
+function git(args: string[], cwd: string, allowFailure = false): string {
   try {
     return execFileSync("git", args, { cwd, encoding: "utf8", stdio: "pipe" });
-  } catch {
-    return "";
+  } catch (error) {
+    if (allowFailure) return "";
+    const detail = error as { stderr?: Buffer | string; message?: string };
+    const reason = String(detail.stderr ?? detail.message ?? error).trim();
+    throw new Error(`git could not record the workspace${reason ? `: ${reason}` : ""}`);
   }
 }
 
@@ -110,13 +114,19 @@ function git(args: string[], cwd: string): string {
  */
 function status(at: string): Record<string, string> {
   const files: Record<string, string> = {};
-  for (const line of git(["status", "--porcelain", "-uall"], at).split("\n")) {
-    if (line.length < 4) continue;
-    const path = line.slice(3);
+  const fields = git(["status", "--porcelain=v1", "-z", "-uall"], at).split("\0");
+  for (let index = 0; index < fields.length; index += 1) {
+    const field = fields[index] as string;
+    if (field.length < 4) continue;
+    const state = field.slice(0, 2);
+    const to = field.slice(3);
+    const paired = state.includes("R") || state.includes("C");
+    // Under `-z`, Git writes the new name first and the old name in the next field.
+    const from = paired ? (fields[(index += 1)] as string | undefined) : undefined;
+    const path = state.includes("R") && from !== undefined ? `${from}${RENAME}${to}` : to;
     // The run state of Orchy is not the work of the step.
-    if (path.startsWith(".orchy/")) continue;
-    const state = line.slice(0, 2);
-    files[path] = `${state} ${hashOf(at, path)}`;
+    if (to === ".orchy" || to.startsWith(".orchy/")) continue;
+    files[path] = `${state} ${hashOf(at, to)}`;
   }
   return files;
 }
@@ -126,10 +136,18 @@ function status(at: string): Record<string, string> {
  * that is a rename, hash to nothing: the status characters carry those.
  */
 function hashOf(at: string, path: string): string {
-  if (path.includes(RENAME)) return "";
   try {
-    return createHash("sha1").update(readFileSync(join(at, path))).digest("hex").slice(0, 16);
-  } catch {
-    return "";
+    const full = join(at, path);
+    const stat = lstatSync(full);
+    const value = stat.isSymbolicLink() ? readlinkSync(full) : stat.isFile() ? readFileSync(full) : Buffer.alloc(0);
+    // Git records the executable bit. Include it so two mode changes are visible.
+    return createHash("sha1")
+      .update(stat.isSymbolicLink() ? "link\0" : `file\0${stat.mode & 0o111}\0`)
+      .update(value)
+      .digest("hex")
+      .slice(0, 16);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+    throw new Error(`the workspace cannot hash "${path}": ${error instanceof Error ? error.message : String(error)}`);
   }
 }

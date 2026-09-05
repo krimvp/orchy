@@ -1,13 +1,15 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import type { Daemon, Ticket } from "./daemon.ts";
 import { type AgentStep, COMPONENTS, type Flow, validate } from "./flow.ts";
 import { ADAPTERS, MODELS, SUPPLIES, TOOLS } from "./harness.ts";
-import { readFlow } from "./load.ts";
+import { checkFlowPaths, readFlow } from "./load.ts";
 import { lines } from "./memory.ts";
 import { read } from "./run.ts";
-import { descriptionOf, harnessInFile, harnessOfRun, missing, start, under, unfilled } from "./server.ts";
+import { descriptionOf, harnessInFile, harnessOfRun, missing, start, unfilled } from "./server.ts";
+import { withinRoot } from "./root.ts";
 import { parseFlow } from "./yaml.ts";
 
 const VERSION = String(createRequire(import.meta.url)("../package.json").version);
@@ -133,13 +135,7 @@ export function mcp(
   const root = resolve(daemon.root);
 
   /** The one rule of the daemon, at this door too: a path stays under the root. */
-  const within = (given: string): string => {
-    const path = resolve(root, given);
-    if (!under(root, path)) {
-      throw new Error(`the file at "${path}" is outside the root "${root}". Use a path under the root.`);
-    }
-    return path;
-  };
+  const within = (given: string): string => withinRoot(root, given);
 
   /**
    * The store this door may reach: the one of the run whose step opened it. The
@@ -221,6 +217,7 @@ export function mcp(
         const path = within(String(args.path ?? ""));
         if (!/\.ya?ml$/.test(path)) throw new Error("a flow is a YAML file, so its path ends with .yaml");
         const flow = parseFlow(String(args.yaml ?? ""), path);
+        checkFlowPaths(flow, path, root);
         const problems = validate(flow, harness);
         if (problems.length > 0) throw new Error(`the flow is not valid:\n- ${problems.join("\n- ")}`);
         // Every path is checked before anything is written, so a refusal
@@ -256,7 +253,9 @@ export function mcp(
         const path = within(String(args.path ?? ""));
         if (!existsSync(path)) throw new Error(`there is no flow file at "${path}"`);
         const yaml = readFileSync(path, "utf8");
-        return { path, yaml, files: /\.ya?ml$/.test(path) ? filesOf(parseFlow(yaml, path), path) : {} };
+        const flow = /\.ya?ml$/.test(path) ? parseFlow(yaml, path) : undefined;
+        if (flow) checkFlowPaths(flow, path, root);
+        return { path, yaml, files: flow ? filesOf(flow, path, root) : {} };
       },
     },
 
@@ -267,12 +266,15 @@ export function mcp(
       handle() {
         daemon.catchUp();
         const runs = daemon.store.runs();
-        return daemon.store.flows().map((row) => ({
-          ...row,
-          harness: harnessInFile(row.path) ?? row.harness,
-          description: descriptionOf(row.path),
-          lastRun: runs.find((run) => run.path === row.path) ?? null,
-        }));
+        return daemon.store.flows().map((row) => {
+          const path = withinRoot(root, row.path);
+          return {
+            ...row,
+            harness: harnessInFile(path) ?? row.harness,
+            description: descriptionOf(path),
+            lastRun: runs.find((run) => run.path === row.path) ?? null,
+          };
+        });
       },
     },
 
@@ -308,19 +310,34 @@ export function mcp(
             `the step "${startedBy?.step}" starts only: ${bound.flows.join(", ")}. This flow is not one of them.`,
           );
         }
-        if (bound?.most !== undefined && startedBy) {
-          const already = childrenOf(daemon, startedBy.runId).filter((one) => one.step === startedBy.step).length;
-          if (already >= bound.most) {
+        const row =
+          daemon.store.flowAt(path) ??
+          daemon.store.addFlow(path, (await readFlow(path, process.cwd(), root)).name || path, harnessInFile(path) ?? harness);
+        const reservation = bound?.most !== undefined && startedBy ? randomUUID() : undefined;
+        const plannedRunId = reservation ? randomUUID() : undefined;
+        if (reservation && startedBy && bound?.most !== undefined) {
+          const held = daemon.store.reserveStart(startedBy.runId, startedBy.step, bound.most, reservation, plannedRunId);
+          if (!held.accepted) {
             throw new Error(
-              `the step "${startedBy.step}" starts at most ${bound.most} run${bound.most === 1 ? "" : "s"}, and it has started ${already}. Every run counts, including one that failed.`,
+              `the step "${startedBy.step}" starts at most ${bound.most} run${bound.most === 1 ? "" : "s"}, and it has started ${held.count}. Every run counts, including one that failed.`,
             );
           }
         }
-        const row =
-          daemon.store.flowAt(path) ??
-          daemon.store.addFlow(path, (await readFlow(path)).name || path, harnessInFile(path) ?? harness);
-        const ticket = await start(daemon, row, args.with as Record<string, unknown> | undefined, undefined, startedBy);
-        return started(daemon, ticket);
+        try {
+          const ticket = await start(
+            daemon,
+            row,
+            args.with as Record<string, unknown> | undefined,
+            undefined,
+            startedBy,
+            reservation,
+            plannedRunId,
+          );
+          return started(daemon, ticket);
+        } catch (error) {
+          if (reservation) daemon.store.releaseStart(reservation);
+          throw error;
+        }
       },
     },
 
@@ -362,7 +379,7 @@ export function mcp(
         required: ["runId"],
         properties: { runId: { type: "string" } },
       },
-      handle(args) {
+      async handle(args) {
         const trajectory = daemon.trajectory(String(args.runId ?? ""));
         if (!trajectory) throw new Error(`the run ${String(args.runId)} has written no trajectory yet`);
         return trajectory;
@@ -399,6 +416,10 @@ export function mcp(
             description:
               "The gate this answer was written for. A run that has moved on to another gate then refuses it, instead of taking it for a question the answerer never read.",
           },
+          revision: {
+            type: "number",
+            description: "The revision read with the question. A stale answer cannot move a later state.",
+          },
         },
       },
       handle(args) {
@@ -418,7 +439,8 @@ export function mcp(
         }
         const from = typeof args.from === "string" && args.from !== "" ? args.from : undefined;
         const step = typeof args.step === "string" && args.step !== "" ? args.step : undefined;
-        const ticket = daemon.resume(runId, value, harnessOfRun(daemon, runId), from, step);
+        const revision = Number.isInteger(args.revision) ? Number(args.revision) : undefined;
+        const ticket = daemon.resume(runId, value, harnessOfRun(daemon, runId), from, step, revision);
         return resumed(daemon, ticket, runId);
       },
     },
@@ -431,10 +453,10 @@ export function mcp(
         required: ["runId"],
         properties: { runId: { type: "string" } },
       },
-      handle(args) {
+      async handle(args) {
         const runId = String(args.runId ?? "");
-        if (daemon.stop(runId)) return { stopped: true };
-        if (daemon.abandon(runId)) return { stopped: true, abandoned: true };
+        if (await daemon.stop(runId)) return { stopped: true };
+        if (await daemon.abandon(runId)) return { stopped: true, abandoned: true };
         const row = daemon.store.run(runId);
         throw new Error(
           row ? `the run is already ${row.status}, so there is nothing to stop` : `this daemon holds no run ${runId}`,
@@ -659,12 +681,12 @@ function childrenOf(daemon: Daemon, runId: string): Array<{ runId: string; step:
 }
 
 /** The files a flow names that are there, each under the path the flow uses for it. */
-function filesOf(flow: Flow, flowPath: string): Record<string, string> {
+function filesOf(flow: Flow, flowPath: string, root: string): Record<string, string> {
   const base = dirname(flowPath);
   const files: Record<string, string> = {};
   const keep = (path?: string) => {
     if (!path || files[path] !== undefined) return;
-    const at = resolve(base, path);
+    const at = withinRoot(root, resolve(base, path));
     if (existsSync(at)) files[path] = readFileSync(at, "utf8");
   };
   // The union of step kinds narrows each field away; this read takes them loosely.

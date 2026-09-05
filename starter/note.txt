@@ -1,0 +1,1 @@
+Orchy runs each declared step and records its result.

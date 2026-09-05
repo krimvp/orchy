@@ -2,6 +2,7 @@ import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { alive, keep, type RunEvent, type RunState } from "./run.ts";
+import { ownerLives, processIdentity } from "./claim.ts";
 
 /**
  * ADR 0008: the state on disk is the run. This database is an index of it, and
@@ -50,6 +51,16 @@ create table if not exists hook (
   flowId integer primary key,
   token text not null unique,
   addedAt text not null
+);
+create table if not exists start_reservation (
+  token text primary key,
+  parentRunId text not null,
+  step text not null,
+  ownerPid integer not null,
+  ownerIdentity text not null,
+  createdAt text not null,
+  childRunId text,
+  ownerKind text not null default 'door'
 );
 `;
 
@@ -131,6 +142,13 @@ export function open(file: string) {
     if (!columns.some((held) => held.name === column)) {
       db.exec(`alter table run add column ${column} text`);
     }
+  }
+  const reservationColumns = db.prepare("pragma table_info(start_reservation)").all() as Array<{ name: string }>;
+  if (!reservationColumns.some((held) => held.name === "childRunId")) {
+    db.exec("alter table start_reservation add column childRunId text");
+  }
+  if (!reservationColumns.some((held) => held.name === "ownerKind")) {
+    db.exec("alter table start_reservation add column ownerKind text not null default 'door'");
   }
 
   const all = <T>(sql: string, ...values: unknown[]): T[] =>
@@ -220,6 +238,77 @@ export function open(file: string) {
       });
     },
 
+    /** Atomically holds one child slot across every daemon over this root. */
+    reserveStart(
+      parentRunId: string,
+      step: string,
+      most: number,
+      token: string,
+      childRunId?: string,
+    ): { accepted: boolean; count: number } {
+      db.exec("begin immediate");
+      try {
+        const held = all<{
+          token: string;
+          ownerPid: number;
+          ownerIdentity: string;
+          childRunId: string | null;
+          ownerKind: string;
+        }>(
+          "select token, ownerPid, ownerIdentity, childRunId, ownerKind from start_reservation",
+        );
+        for (const reservation of held) {
+          const indexed = reservation.childRunId && this.run(reservation.childRunId);
+          const dead = !ownerLives({ pid: reservation.ownerPid, identity: reservation.ownerIdentity });
+          // An accepted start with a planned child but a dead door is unknown.
+          // Keep its slot. Releasing it could let a child that still starts pass
+          // `most`. A child owner that died without a run is known not to start.
+          if (indexed || (dead && (!reservation.childRunId || reservation.ownerKind === "child"))) {
+            db.prepare("delete from start_reservation where token = ?").run(reservation.token);
+          }
+        }
+        const runs = one<{ count: number }>(
+          `select count(*) as count from run
+           where json_extract(startedByJson, '$.runId') = ? and json_extract(startedByJson, '$.step') = ?`,
+          parentRunId,
+          step,
+        )?.count ?? 0;
+        const reservations = one<{ count: number }>(
+          "select count(*) as count from start_reservation where parentRunId = ? and step = ?",
+          parentRunId,
+          step,
+        )?.count ?? 0;
+        const count = runs + reservations;
+        if (count >= most) {
+          db.exec("commit");
+          return { accepted: false, count };
+        }
+        db.prepare(
+          `insert into start_reservation
+             (token, parentRunId, step, ownerPid, ownerIdentity, createdAt, childRunId, ownerKind)
+           values (?, ?, ?, ?, ?, ?, ?, 'door')`,
+        ).run(token, parentRunId, step, process.pid, processIdentity(), new Date().toISOString(), childRunId ?? null);
+        db.exec("commit");
+        return { accepted: true, count };
+      } catch (error) {
+        try {
+          db.exec("rollback");
+        } catch {}
+        throw error;
+      }
+    },
+
+    releaseStart(token: string): void {
+      db.prepare("delete from start_reservation where token = ?").run(token);
+    },
+
+    /** Transfers a reservation from the daemon to the child that owns the start. */
+    attachStart(token: string, runId: string, pid: number, identity: string): void {
+      db.prepare(
+        "update start_reservation set childRunId = ?, ownerPid = ?, ownerIdentity = ?, ownerKind = 'child' where token = ?",
+      ).run(runId, pid, identity, token);
+    },
+
     saveRun(row: RunRow): void {
       db.prepare(
         `insert into run (runId, flowName, path, status, startedAt, endedAt, waitingFor, question, cost, tokens, withJson, startedByJson, error)
@@ -282,7 +371,7 @@ export function open(file: string) {
      * runs is one of those, and the page did not show it at all until a
      * restart, because this ran once and never again.
      */
-    index(runs: string, all = true): number {
+    index(runs: string, all = true, stopping = new Set<string>()): number {
       let found = 0;
       for (const runId of directories(runs)) {
         if (!all) {
@@ -295,7 +384,7 @@ export function open(file: string) {
         // died. A run whose process is alive belongs to that process: the state
         // on disk is the run, and this index must never rewrite a live one.
         // ADR 0008.
-        if (state.status === "running" && !alive(state.pid)) {
+        if (state.status === "running" && !stopping.has(runId) && !alive(state.pid, state.processGroup)) {
           state.status = "stopped";
           keep(join(runs, runId), state);
         }

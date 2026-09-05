@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import test from "node:test";
 import { Type } from "@sinclair/typebox";
 import type { TSchema } from "@sinclair/typebox";
@@ -16,6 +16,7 @@ import { tail } from "../src/tail.ts";
 import { claude } from "../src/claude.ts";
 import { costOf, pi } from "../src/pi.ts";
 import { formatFlow, parseFlow } from "../src/yaml.ts";
+import { changed, take } from "../src/workspace.ts";
 
 const Summary = Type.Object({ summary: Type.String() });
 
@@ -84,6 +85,41 @@ test("validate accepts a flow that is in order", () => {
   });
 
   assert.deepEqual(validate(good), []);
+});
+
+test("validate returns a problem for every malformed JSON value", () => {
+  const values: unknown[] = [
+    null,
+    [],
+    true,
+    7,
+    "flow",
+    { name: "bad", steps: null },
+    { name: "bad", steps: [null] },
+    { name: "bad", steps: [{ id: "one", kind: "call", needs: null, command: "true", returns: {} }] },
+    { name: "bad", steps: [{ id: "one", kind: "agent", needs: [], prompt: "p.md", tools: null, returns: {} }] },
+    { name: "bad", steps: [{ id: "one", kind: "agent", needs: [], prompt: "p.md", tools: [], starts: null, returns: {} }] },
+    { name: "bad", steps: [{ id: "one", kind: "call", needs: [], command: "true", with: [], returns: {} }] },
+    { name: "bad", steps: [{ id: "one", kind: "call", needs: [], command: "true", fanout: false, returns: {} }] },
+    { name: "bad", steps: [{ id: "one", kind: "gate", needs: [], question: null, returns: {} }] },
+    { name: "bad", steps: [{ id: "one", kind: "call", needs: [], command: "true", fanout: [null], returns: {} }] },
+  ];
+
+  for (const value of values) {
+    assert.doesNotThrow(() => validate(value));
+    assert.ok(validate(value).length > 0, `validate accepted ${JSON.stringify(value)}`);
+  }
+});
+
+test("validate names the paths of a null step and a null fanout member", () => {
+  assert.match(validate({ name: "bad", steps: [null] }).join("\n"), /"\/steps\/0"/);
+  assert.match(
+    validate({
+      name: "bad",
+      steps: [{ id: "one", kind: "call", needs: [], command: "true", fanout: [null], returns: {} }],
+    }).join("\n"),
+    /"\/steps\/0\/fanout\/0"/,
+  );
 });
 
 test("run refuses a flow that is not valid", async () => {
@@ -3243,6 +3279,39 @@ test("a step that writes a file the workspace already changed breaks its promise
   assert.match(state.steps.a?.error ?? "", /promises to change nothing, but it changed step\.md/);
 });
 
+test("a workspace records a repeated change to a quoted Unicode path", () => {
+  const cwd = gitWorkspace();
+  const name = 'notes/one "quoted" ü\nline.md';
+  mkdirSync(join(cwd, "notes"));
+  writeFileSync(join(cwd, name), "first");
+  execFileSync("git", ["add", name], { cwd, stdio: "pipe" });
+  execFileSync("git", ["commit", "-qm", "odd path"], { cwd, stdio: "pipe" });
+  writeFileSync(join(cwd, name), "changed before");
+
+  const before = take({ kind: "git", path: "." }, cwd);
+  writeFileSync(join(cwd, name), "changed by the step");
+
+  assert.deepEqual(changed(before, take({ kind: "git", path: "." }, cwd)), [{ path: name, how: "changed" }]);
+});
+
+test("a workspace hashes a symbolic link itself on repeated changes", () => {
+  const cwd = gitWorkspace();
+  writeFileSync(join(cwd, "one.txt"), "same");
+  writeFileSync(join(cwd, "two.txt"), "same");
+  writeFileSync(join(cwd, "three.txt"), "same");
+  symlinkSync("one.txt", join(cwd, "held"));
+  execFileSync("git", ["add", "one.txt", "two.txt", "three.txt", "held"], { cwd, stdio: "pipe" });
+  execFileSync("git", ["commit", "-qm", "link"], { cwd, stdio: "pipe" });
+  unlinkSync(join(cwd, "held"));
+  symlinkSync("two.txt", join(cwd, "held"));
+
+  const before = take({ kind: "git", path: "." }, cwd);
+  unlinkSync(join(cwd, "held"));
+  symlinkSync("three.txt", join(cwd, "held"));
+
+  assert.deepEqual(changed(before, take({ kind: "git", path: "." }, cwd)), [{ path: "held", how: "changed" }]);
+});
+
 test("a step that renames a file out of the paths it promises breaks its promise", async () => {
   const cwd = gitWorkspace();
   mkdirSync(join(cwd, "docs"));
@@ -4393,6 +4462,112 @@ test("a gate asks its question with the names in it filled in", async () => {
   assert.equal(state.question, "Does ticket ORC-41 look right?");
 });
 
+test("a nested gate asks the same question once with the values of its flow step", async () => {
+  const cwd = workspace();
+  const Ticket = Type.Object({ ticket: Type.String() });
+  const inner = flow("asked", {
+    takes: Ticket,
+    steps: [gate({ id: "approve", question: "Approve {{ ticket }}?", returns: Verdict })],
+  });
+  const ticket = "ORC-42 {{ literal }}";
+
+  const standalone = await run(inner, { cwd, with: { ticket } });
+  const expanded = await expandFlows(
+    flow("outer", {
+      steps: [{ id: "review", kind: "flow", needs: [], flow: "asked.yaml", with: { ticket } }],
+    }),
+    async () => inner,
+  );
+  const nested = await run(expanded, { cwd });
+
+  assert.deepEqual((expanded.steps[0] as GateStep).with, { ticket });
+  assert.equal(standalone.question, "Approve ORC-42 {{ literal }}?");
+  assert.equal(nested.question, standalone.question);
+});
+
+test("the values of a nested gate override the values of its flow step", async () => {
+  const Ticket = Type.Object({ ticket: Type.String() });
+  const inner = flow("asked", {
+    takes: Ticket,
+    steps: [
+      gate({
+        id: "approve",
+        question: "Approve {{ ticket }}?",
+        with: { ticket: "the inner ticket" },
+        returns: Verdict,
+      }),
+    ],
+  });
+
+  const expanded = await expandFlows(
+    flow("outer", {
+      steps: [
+        { id: "review", kind: "flow", needs: [], flow: "asked.yaml", with: { ticket: "the outer ticket" } },
+      ],
+    }),
+    async () => inner,
+  );
+
+  assert.deepEqual((expanded.steps[0] as GateStep).with, { ticket: "the inner ticket" });
+});
+
+test("a condition and a cycle of a nested gate keep their inner step ids", async () => {
+  const cwd = workspace();
+  writeFileSync(join(cwd, "ready.ts"), "export default () => ({ ready: true });\n");
+  const Ticket = Type.Object({ ticket: Type.String() });
+  const Ready = Type.Object({ ready: Type.Boolean() });
+  const inner = flow("asked", {
+    takes: Ticket,
+    steps: [
+      call({ id: "prepare", module: "ready.ts", returns: Ready }),
+      gate({
+        id: "approve",
+        needs: ["prepare"],
+        when: { prepare: { ready: true } },
+        question: "Approve {{ ticket }}?",
+        returns: Verdict,
+        cycle: { to: "approve", when: { approved: false }, limit: 1, policy: "accept" },
+      }),
+    ],
+  });
+  const expanded = await expandFlows(
+    flow("outer", {
+      steps: [
+        { id: "review", kind: "flow", needs: [], flow: "asked.yaml", with: { ticket: "ORC-43" } },
+      ],
+    }),
+    async () => inner,
+  );
+  const approve = expanded.steps[1] as GateStep;
+
+  assert.deepEqual(approve.when, { "review/prepare": { ready: true } });
+  assert.equal(approve.cycle?.to, "review/approve");
+  assert.deepEqual(validate(expanded), []);
+
+  const first = await run(expanded, { cwd });
+  assert.equal(first.status, "waiting");
+  const second = await resume(first.runId, { approved: false }, { cwd });
+  assert.equal(second.status, "waiting");
+  assert.equal(second.question?.startsWith("Approve ORC-43?"), true);
+  const done = await resume(first.runId, { approved: true }, { cwd });
+  assert.equal(done.status, "done");
+});
+
+test("a missing value in a gate question fails the run instead of becoming the question", async () => {
+  const state = await run(
+    flow("asked", {
+      steps: [gate({ id: "approve", question: "Approve {{ ticket }}?", returns: Verdict })],
+    }),
+    { cwd: workspace() },
+  );
+
+  assert.equal(state.status, "failed");
+  assert.equal(state.question, undefined);
+  assert.match(state.error ?? "", /reads "\{\{ ticket \}\}" in its question/);
+  assert.match(state.error ?? "", /Add it to "takes" on the flow/);
+  assert.doesNotMatch(state.error ?? "", /"with" on the step/);
+});
+
 test("a call step runs a command in any language, and reads its value from stdout", async () => {
   const cwd = workspace();
   const notes: string[] = [];
@@ -4446,6 +4621,93 @@ test("a command that answers no JSON is told where notes go", async () => {
 
   assert.equal(state.status, "failed");
   assert.match(state.steps.talk?.error ?? "", /notes to stderr/);
+});
+
+test("a command that writes too much output fails before it fills the run state", async () => {
+  const state = await run(
+    flow("loud", {
+      steps: [
+        call({
+          id: "talk",
+          command: `${process.execPath} -e 'process.stdout.write("x".repeat(4 * 1024 * 1024 + 1))'`,
+          returns: Type.Object({}),
+        }),
+      ],
+    }),
+    { cwd: workspace() },
+  );
+
+  assert.equal(state.status, "failed");
+  assert.match(state.steps.talk?.error ?? "", /more than 4 MiB/);
+});
+
+test("a run passes cancellation to its harness and records stopped", async () => {
+  const cwd = workspace();
+  const control = new AbortController();
+  const harness: Harness = {
+    toTrajectory: () => undefined,
+    async run(_request, _watch, signal) {
+      signal?.throwIfAborted();
+      throw new Error("the harness received no stop");
+    },
+  };
+
+  const state = await run(
+    flow("stopping", {
+      steps: [agent({ id: "work", prompt: "step.md", tools: ["read"], returns: Summary })],
+    }),
+    {
+      cwd,
+      harness,
+      signal: control.signal,
+      onEvent: (event) => event.type === "step_start" && control.abort(new Error("the run was stopped")),
+    },
+  );
+
+  assert.equal(state.status, "stopped");
+  assert.equal(JSON.parse(readFileSync(join(cwd, ".orchy", "runs", state.runId, "state.json"), "utf8")).status, "stopped");
+});
+
+test("direct adapter cancellation ends a command descendant", async () => {
+  const cwd = workspace();
+  const bin = join(cwd, "bin");
+  mkdirSync(bin);
+  const command = join(bin, "claude");
+  writeFileSync(
+    command,
+    [
+      `#!${process.execPath}`,
+      `const { spawn } = require("node:child_process");`,
+      `const fs = require("node:fs");`,
+      `fs.writeFileSync("adapter-started", "yes");`,
+      `const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setTimeout(() => require('node:fs').writeFileSync('adapter-late', 'yes'), 1500); setTimeout(() => {}, 5000)"], { stdio: "ignore" });`,
+      `child.unref();`,
+      `setTimeout(() => {}, 5000);`,
+      "",
+    ].join("\n"),
+  );
+  chmodSync(command, 0o755);
+  const path = process.env.PATH;
+  process.env.PATH = `${bin}${delimiter}${path ?? ""}`;
+  const control = new AbortController();
+
+  try {
+    const running = claude.run(
+      { step: "work", prompt: "Wait.", tools: [], returns: Type.Object({}), cwd },
+      undefined,
+      control.signal,
+    );
+    for (let count = 0; count < 100 && !existsSync(join(cwd, "adapter-started")); count += 1) {
+      await new Promise((wait) => setTimeout(wait, 20));
+    }
+    assert.equal(existsSync(join(cwd, "adapter-started")), true);
+    control.abort(new Error("the run was stopped"));
+    await assert.rejects(running, /could not run the claude command/);
+    await new Promise((wait) => setTimeout(wait, 2000));
+    assert.equal(existsSync(join(cwd, "adapter-late")), false);
+  } finally {
+    process.env.PATH = path;
+  }
 });
 
 test("the orchy check passes on a clean exit, and fails with what the command said", async () => {
@@ -4513,6 +4775,109 @@ test("a resume takes a value or a step to go back to, not both", async () => {
     () => resume(stopped.runId, { approved: true }, { cwd, from: "confirm" }),
     /a value and a step/,
   );
+});
+
+test("one state revision takes one gate answer", async () => {
+  const cwd = workspace();
+  const stopped = await run(
+    flow("gated-once", { steps: [gate({ id: "confirm", question: "Ship it?", returns: Type.Boolean() })] }),
+    { cwd },
+  );
+  const revision = stopped.revision as number;
+
+  const answers = await Promise.allSettled([
+    resume(stopped.runId, true, { cwd, gate: "confirm", revision }),
+    resume(stopped.runId, false, { cwd, gate: "confirm", revision }),
+  ]);
+
+  assert.equal(answers.filter((one) => one.status === "fulfilled").length, 1);
+  assert.equal(answers.filter((one) => one.status === "rejected").length, 1);
+  const saved = JSON.parse(
+    readFileSync(join(cwd, ".orchy", "runs", stopped.runId, "state.json"), "utf8"),
+  ) as RunState;
+  assert.equal(saved.status, "done");
+});
+
+test("a claim without a live owner fails closed until a person removes it", async () => {
+  const cwd = workspace();
+  const stopped = await run(
+    flow("stale-claim", { steps: [gate({ id: "confirm", question: "Ship it?", returns: Type.Boolean() })] }),
+    { cwd },
+  );
+  const claim = join(cwd, ".orchy", "runs", stopped.runId, "claim");
+  mkdirSync(claim);
+  await assert.rejects(
+    () => resume(stopped.runId, true, { cwd, gate: "confirm", revision: stopped.revision }),
+    /claim with no live owner/,
+  );
+  rmSync(claim, { recursive: true });
+  writeFileSync(claim, JSON.stringify({ pid: 2_147_483_646, identity: "a dead process", token: "old" }));
+
+  await assert.rejects(
+    () => resume(stopped.runId, true, { cwd, gate: "confirm", revision: stopped.revision }),
+    /remove it only when no Orchy process drives the run/,
+  );
+  rmSync(claim);
+
+  const state = await resume(stopped.runId, true, {
+    cwd,
+    gate: "confirm",
+    revision: stopped.revision,
+  });
+
+  assert.equal(state.status, "done");
+});
+
+test("a component that throws null leaves a failed run", async () => {
+  const cwd = workspace();
+  writeFileSync(join(cwd, "null.ts"), "export default () => { throw null; };\n");
+
+  const state = await run(
+    flow("null-fault", { steps: [call({ id: "work", module: "null.ts", returns: Summary })] }),
+    { cwd },
+  );
+
+  assert.equal(state.status, "failed");
+  assert.match(state.steps.work?.error ?? "", /null/);
+  assert.equal(state.pid, undefined);
+});
+
+test("a post-step snapshot fault leaves a failed run", async () => {
+  const cwd = gitWorkspace();
+  writeFileSync(
+    join(cwd, "remove-git.ts"),
+    `import { rmSync } from 'node:fs'; export default () => { rmSync(${JSON.stringify(join(cwd, ".git"))}, { recursive: true }); return { summary: 'x' }; };\n`,
+  );
+  execFileSync("git", ["add", "remove-git.ts"], { cwd });
+  execFileSync("git", ["commit", "-m", "add component"], { cwd, stdio: "ignore" });
+
+  const state = await run(
+    flow("snapshot-fault", {
+      workspace: { kind: "git", path: "." },
+      steps: [call({ id: "work", module: "remove-git.ts", returns: Summary })],
+    }),
+    { cwd },
+  );
+
+  assert.equal(state.status, "failed");
+  assert.match(state.steps.work?.error ?? "", /not a git repository/);
+});
+
+test("a step value that changes in JSON persistence fails", async () => {
+  const cwd = workspace();
+  writeFileSync(join(cwd, "undefined.ts"), "export default () => ({ summary: undefined });\n");
+
+  const state = await run(
+    flow("json-only", { steps: [call({ id: "work", module: "undefined.ts", returns: Summary })] }),
+    { cwd },
+  );
+
+  assert.equal(state.status, "failed");
+  assert.match(state.steps.work?.error ?? "", /undefined, which is not JSON/);
+  const saved = JSON.parse(
+    readFileSync(join(cwd, ".orchy", "runs", state.runId, "state.json"), "utf8"),
+  ) as RunState;
+  assert.equal(saved.steps.work?.status, "failed");
 });
 
 test("the question of a gate carries the values of the steps it needs", async () => {

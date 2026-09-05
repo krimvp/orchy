@@ -14,13 +14,17 @@ three go through one checked `start`: the flow must validate, every file it
 names (a prompt, a module, an inner flow) must exist, and no question or
 prompt may read a brace name that nothing supplies (`unfilled`), before a
 child spends money on it. Every route that touches a file resolves the path
-against the daemon's root and refuses one that steps outside it.
+against the daemon's root. It also resolves symbolic links. An existing file
+must have a canonical path inside the root. A new file must have its nearest
+existing parent there.
 
 The server trusts no one but its own pages. It has no user and no password,
 and it starts an agent that can hold `bash`, so every request is checked
 against the set of origins the daemon answers to: a `Host` that is not its own
 name is refused (that is how DNS rebinding starts), and an `Origin` from
-another page is refused (that is a cross-site request). Both answer `403`.
+another page is refused (that is a cross-site request). Both answer `403`. A
+malformed route or body answers a controlled `400`. The next request still
+reaches the daemon.
 When the server listens on a loopback address, `127.0.0.1`, `[::1]`, and
 `localhost` all count as its own name, since a person types either one. The
 one exception a person makes on purpose is a webhook token: `POST

@@ -11,6 +11,7 @@ import {
   useLoad,
   useNotices,
 } from "./api";
+import { missingRequired, requiredDefaults, shapeOf, writeField } from "./contract";
 import { Graph, type Mark } from "./Graph";
 import { Loading, length, said, when } from "./Runs";
 import { Trajectory } from "./Trajectory";
@@ -97,13 +98,13 @@ export function Run({ runId }: { runId: string }) {
           api
             // The answer names the gate the page drew it for, so it cannot land
             // on a question that arrived while a person was reading this one.
-            .resume(runId, answer, undefined, state.waitingFor)
+            .resume(runId, answer, state.waitingFor, state.revision ?? 0)
             .then(() => (setFault(undefined), again()))
             .catch((problem: Error) => setFault(problem.message))
         }
         onResume={(from) =>
           api
-            .resume(runId, undefined, from)
+            .resume(runId, undefined, undefined, undefined, from)
             .then(() => (setFault(undefined), again()))
             .catch((problem: Error) => setFault(problem.message))
         }
@@ -242,7 +243,7 @@ export function Run({ runId }: { runId: string }) {
                 state.status === "done" || state.status === "failed" || state.status === "stopped"
                   ? () =>
                       void api
-                        .resume(runId, undefined, step.id)
+                        .resume(runId, undefined, undefined, undefined, step.id)
                         .then(() => (setFault(undefined), again()))
                         .catch((problem: Error) => setFault(problem.message))
                   : undefined
@@ -735,9 +736,8 @@ function Leavings({ state }: { state: RunState }) {
 
 /**
  * A form for a contract, so a person writes no JSON. A gate reads its own
- * contract, and a run that takes values reads what the flow takes. A field the
- * contract needs must hold something before the form sends — a run costs
- * money, and a model asked about nothing answers with nothing.
+ * contract, and a run that takes values reads what the flow takes. The form
+ * keeps an unanswered field apart from an empty value that the contract permits.
  */
 export function Contract({
   schema,
@@ -750,22 +750,27 @@ export function Contract({
 }) {
   const properties = (schema.properties ?? {}) as Record<string, Schema>;
   const required = (schema.required ?? []) as string[];
-  const [value, setValue] = useState<Record<string, unknown>>(() => blank(properties, required));
+  const [value, setValue] = useState<Record<string, unknown>>(() => requiredDefaults(properties, required));
   const [raw, setRaw] = useState(false);
-  const [text, setText] = useState(() => JSON.stringify(blank(properties, required), null, 2));
+  const [text, setText] = useState(() => JSON.stringify(requiredDefaults(properties, required), null, 2));
   const [need, setNeed] = useState<string>();
   /** What a person typed into a field that holds JSON, until it reads as JSON. */
   const [drafts, setDrafts] = useState<Record<string, string>>({});
 
   const set = (key: string, next: unknown) => {
     setNeed(undefined);
-    setValue((held) => ({ ...held, [key]: next }));
+    setValue((held) => writeField(held, key, next));
+  };
+
+  const unset = (key: string) => {
+    setNeed(undefined);
+    setValue((held) => writeField(held, key, undefined));
   };
 
   const write = (key: string, typed: string) => {
     setNeed(undefined);
     setDrafts((held) => ({ ...held, [key]: typed }));
-    if (typed.trim() === "") return set(key, undefined);
+    if (typed.trim() === "") return unset(key);
     try {
       set(key, JSON.parse(typed));
     } catch {
@@ -789,10 +794,7 @@ export function Contract({
     }
     // A boolean nobody answered is not a "no". It was one, and a run that
     // cycles on a "no" went backwards because a person pressed the only button.
-    const empty = required.filter((key) => {
-      const held = value[key];
-      return held === undefined || held === "" || (Array.isArray(held) && held.length === 0);
-    });
+    const empty = missingRequired(value, required);
     if (empty.length > 0) {
       return setNeed(
         `Fill in ${empty.join(", ")} first — the flow needs ${empty.length === 1 ? "it" : "them"}.`,
@@ -845,11 +847,14 @@ export function Contract({
                 <input
                   type="number"
                   value={value[key] === undefined ? "" : String(value[key])}
-                  onChange={(e) => set(key, e.target.value === "" ? undefined : Number(e.target.value))}
+                  onChange={(e) => (e.target.value === "" ? unset(key) : set(key, Number(e.target.value)))}
                 />
               )}
               {kind === "string" && (
-                <input value={String(value[key] ?? "")} onChange={(e) => set(key, e.target.value)} />
+                <input
+                  value={String(value[key] ?? "")}
+                  onChange={(e) => set(key, e.target.value)}
+                />
               )}
               {kind === "lines" && (
                 <textarea
@@ -902,27 +907,6 @@ function promise(changes: NonNullable<Step["changes"]>): string {
   return `changes only ${changes.paths.join(", ")}`;
 }
 
-/** What a form draws for one property of a contract. */
-type Shape = "yes-no" | "tick" | "one-of" | "number" | "string" | "lines" | "json";
-
-/**
- * A property whose shape the form can draw, or `json` for one it cannot: an
- * object, a list of objects, a property of two types, a property of none. Those
- * drew a label with no control at all, and the answer could not be given.
- */
-function shapeOf(field: Schema): Shape {
-  if (Array.isArray(field.enum)) return "one-of";
-  if (field.type === "boolean") return "yes-no";
-  if (field.type === "number" || field.type === "integer") return "number";
-  if (field.type === "string") return "string";
-  // A list of plain words is a line each. A list of anything else is JSON.
-  if (field.type === "array") {
-    const of = field.items as Schema | undefined;
-    return of === undefined || of.type === "string" ? "lines" : "json";
-  }
-  return "json";
-}
-
 /** One of a few, drawn as the words themselves. Nothing is chosen to start with. */
 function Choice({
   value,
@@ -951,23 +935,6 @@ function Choice({
 
 /** A field that holds text which is not JSON yet. `send` refuses it by name. */
 const UNREADABLE = Symbol("unreadable");
-
-function blank(properties: Record<string, Schema>, required: string[] = []): Record<string, unknown> {
-  const value: Record<string, unknown> = {};
-  for (const [key, field] of Object.entries(properties)) {
-    const shape = shapeOf(field);
-    // A boolean a person must answer starts at nothing: an unticked box that
-    // sends itself is a "no" that nobody gave. One that is not required keeps
-    // the box, and false is what leaving it alone has always meant.
-    if (shape === "yes-no") value[key] = required.includes(key) ? undefined : false;
-    // A number stays empty: a pre-filled 0 is an answer no one gave.
-    else if (shape === "number" || shape === "one-of") value[key] = undefined;
-    else if (shape === "lines") value[key] = [];
-    else if (shape === "json") value[key] = undefined;
-    else value[key] = "";
-  }
-  return value;
-}
 
 function marksOf(state: RunState, events: RunEvent[]): Record<string, Mark> {
   const marks: Record<string, Mark> = {};

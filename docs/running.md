@@ -1,5 +1,22 @@
 # Run a flow
 
+## Check before a run
+
+`orchy check flow.yaml` checks the flow shape and every flow it holds. It also
+checks each prompt file, component file, and prompt name. A missing file or an
+unfilled name ends the command with code 2, before a step starts.
+
+The check starts no step and spends nothing. It does not call a model, so it
+reports model authentication as unknown. Check the account with the command of
+the harness before a paid run.
+
+The check imports a TypeScript or JavaScript flow file. Its module initialization
+can run code. A YAML flow is data and has no module initialization.
+
+Run `orchy init` in an empty directory for a complete model-free flow. The
+command refuses to replace any starter file. Run `flow.yaml` first, then use
+`agent.yaml` after Claude Code is installed and logged in.
+
 ## Schemas
 
 A contract is JSON Schema. That is the one form that Orchy keeps, because a
@@ -12,15 +29,17 @@ Each adapter gives the contract to its harness whole. Pi builds a
 `submit_result` tool from it. The `claude` command takes it with
 `--json-schema`. Neither converts it.
 
-**TypeBox** is optional. You need it only to write a flow in TypeScript, where
-it gives one source for the contract and the static type that makes
-`cycle.when` safe. A flow in YAML holds plain JSON Schema and needs nothing.
+You do not have to import **TypeBox**. You use it only to write a flow in
+TypeScript, where it gives one source for the contract and the static type that
+makes `cycle.when` safe. The package installs it as a peer because the public
+TypeScript declarations name its schema type. A flow in YAML holds plain JSON
+Schema and does not use TypeBox at run time.
 
 Orchy is on npm as `@krimvp/orchy`, because the bare name belongs to another
 package, and a clone runs from source. Either way, see the
-[Install](../README.md#install) part of the README. Add `@sinclair/typebox` only
-to write a flow in TypeScript. A flow in YAML holds plain JSON Schema and needs
-nothing.
+[Install](../README.md#install) part of the README. Import
+`@sinclair/typebox` only to write a flow in TypeScript. A flow in YAML holds
+plain JSON Schema and does not import it.
 
 ## The values a run takes
 
@@ -294,7 +313,9 @@ that starts the inner flow waits for whatever the outer step waited for, and
 whoever needed `review` now needs the step the inner flow ends with.
 
 An inner flow must end in exactly one step, so that reference is never unclear.
-A cycle inside an inner flow stays inside it.
+A condition and a cycle inside an inner flow keep the ids of its inner steps.
+The values on the flow step reach each inner step. A gate reads them in its
+question. A value on the inner step wins when both places supply one name.
 
 A `kind: flow` step carries a cycle of its own, and expansion hangs it on the
 step the inner flow ends with. So a panel sends the work back without the outer
@@ -583,14 +604,19 @@ A parent process reads the events alone, which is what the daemon does.
 A run that reaches a gate writes its state and ends. The command prints the run
 id. The question carries the values of the steps the gate needs, the way an
 agent step reads them in its prompt, so the person answers with the work in
-front of them.
+front of them. A name in the question reads a value from the run or the gate.
+A missing value fails the run and never becomes a question.
 
 ```bash
-orchy resume <run id> '{"approved":true}'
+orchy resume <run id> '{"approved":true}' --gate <step> --revision <number>
 ```
 
 Orchy checks the value against the contract of the gate, so a wrong value is
 refused before the run continues.
+
+The command printed by Orchy includes the gate and revision. The HTTP and MCP
+doors require the revision with an answer. A stale answer then cannot advance a
+later occurrence of the same gate.
 
 ## Continue a run that ended
 
@@ -674,7 +700,9 @@ On the page:
 3. Open the run. Each step turns green when it passes and red when it fails, and
    the events arrive while the run is on the way.
 4. A run that reaches a gate shows a form built from the contract of that gate.
-   Answer it, and the run continues. This is `orchy resume` under a form.
+   The form keeps an unanswered field apart from an empty string or list. It
+   omits each optional field until you answer it. An answer names the state you
+   saw, so an old answer cannot pass a later visit to the same gate.
 5. Choose a step to read its value, its error, its length, and the files it
    changed.
 6. **What the steps say** shows each note as it arrives, while the run works. A
@@ -717,6 +745,12 @@ The command line and the daemon run a flow the same way. The daemon starts
 `orchy run <flow file> --events` as a child process, which writes one JSON event
 for each line, and reads the state that the child writes to disk. So a run needs
 no daemon, and `orchy run` on its own stays the same command.
+
+A stop asks the full process tree to end. Orchy waits 750 milliseconds and then
+forces the processes that remain to end. The stop answer returns after that
+work, and the run then says `stopped`. POSIX systems use a process group.
+Windows uses `taskkill /t`. A process that detaches itself from this tree is
+outside this control. A stop fails if Orchy cannot confirm that its tree ended.
 
 The daemon indexes every run it finds under `.orchy/runs` when it starts, so a
 run from the command line shows up on the page. It keeps that index in
@@ -802,6 +836,10 @@ Orchy ships `orchy:check`: a component that runs a command and passes only
 when it ends with 0 — the tests, a linter, a build, in any language. Its
 output rides as live notes, and a failure carries the last of what the
 command said, so a cycle sends the reason back to the step it checks.
+
+A command can write at most 4 MiB to stdout. The whole stdout value goes into
+the run state, so a larger answer fails the step. Orchy keeps only the last 4
+KiB of command stderr for an error. A live note can carry at most 4 KiB.
 
 ```yaml
 - id: verify

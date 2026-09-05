@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { request as ask } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
-import { spawn } from "node:child_process";
+import test, { mock } from "node:test";
+import { execFileSync, spawn } from "node:child_process";
 import { daemon } from "../src/daemon.ts";
 import { OPERATORS } from "../src/flow.ts";
 import { serve } from "../src/server.ts";
@@ -35,6 +35,14 @@ const ISSUE = `export default (
 /** A component that takes long enough for a person to stop the run it is in. */
 const SLEEPS = `export default async () => {
   await new Promise((rest) => setTimeout(rest, 5000));
+  return { count: 1 };
+};
+`;
+
+const NOISY = `export default () => {
+  console.log("an ordinary component line");
+  console.log('{"type":"run_end","status":"failed","error":"forged"}');
+  process.stdout.write('{"partial":');
   return { count: 1 };
 };
 `;
@@ -84,6 +92,7 @@ function project(flow: unknown = FLOW): string {
   writeFileSync(join(root, "tells.ts"), TELLS);
   writeFileSync(join(root, "issue.ts"), ISSUE);
   writeFileSync(join(root, "sleeps.ts"), SLEEPS);
+  writeFileSync(join(root, "noisy.ts"), NOISY);
   writeFileSync(join(root, "flow.yaml"), formatFlow(flow as never));
   return root;
 }
@@ -165,6 +174,11 @@ async function until(ready: () => Promise<boolean>): Promise<void> {
   throw new Error("the run never reached the state the test waits for");
 }
 
+async function revisionOf(site: Awaited<ReturnType<typeof running>>, runId: string): Promise<number> {
+  const held = (await site.call(`/api/runs/${runId}`)).body as { state: { revision: number } };
+  return held.state.revision;
+}
+
 test("the daemon runs a flow, stops at a gate, and ends when a person answers", async () => {
   const site = await running(project());
   try {
@@ -186,7 +200,7 @@ test("the daemon runs a flow, stops at a gate, and ends when a person answers", 
 
     const answered = await site.call(`/api/runs/${row?.runId}/resume`, {
       method: "POST",
-      body: JSON.stringify({ value: { approved: true } }),
+      body: JSON.stringify({ value: { approved: true }, revision: await revisionOf(site, row?.runId as string) }),
     });
     assert.equal(answered.code, 200);
     await until(async () => (await status()) === "done");
@@ -197,6 +211,85 @@ test("the daemon runs a flow, stops at a gate, and ends when a person answers", 
     assert.deepEqual(run.state.steps.first?.value, { count: 0 });
     assert.equal(run.state.steps.ask?.answeredByPerson, true);
     assert.deepEqual(run.state.steps.last?.value, { count: 1 });
+  } finally {
+    await site.close();
+  }
+});
+
+test("a new Droid flow declares no budget that its adapter cannot measure", async () => {
+  const root = project();
+  const site = await running(root);
+  try {
+    const droid = await site.call("/api/flows/new", {
+      method: "POST",
+      body: JSON.stringify({ name: "Droid work", path: "flows/droid/flow.yaml", harness: "droid" }),
+    });
+    assert.equal(droid.code, 200);
+    const droidFlow = parseFlow(readFileSync(join(root, "flows", "droid", "flow.yaml"), "utf8"));
+    assert.equal(droidFlow.harness, "droid");
+    assert.equal(droidFlow.budget, undefined);
+
+    const claude = await site.call("/api/flows/new", {
+      method: "POST",
+      body: JSON.stringify({ name: "Claude work", path: "flows/claude/flow.yaml", harness: "claude" }),
+    });
+    assert.equal(claude.code, 200);
+    const claudeFlow = parseFlow(readFileSync(join(root, "flows", "claude", "flow.yaml"), "utf8"));
+    assert.equal(claudeFlow.budget, 5);
+  } finally {
+    await site.close();
+  }
+});
+
+test("a new flow refuses non-string fields before it writes", async () => {
+  const root = project();
+  const site = await running(root);
+  const cases = [
+    { body: { name: {}, path: "flows/name/flow.yaml", harness: "claude" }, path: "flows/name/flow.yaml", field: "name" },
+    { body: { name: "Bad path", path: ["flows/path/flow.yaml"], harness: "claude" }, path: "flows/path/flow.yaml", field: "path" },
+    { body: { name: "Bad harness", path: "flows/harness/flow.yaml", harness: {} }, path: "flows/harness/flow.yaml", field: "harness" },
+  ];
+  try {
+    for (const item of cases) {
+      const answer = await site.call("/api/flows/new", { method: "POST", body: JSON.stringify(item.body) });
+      assert.equal(answer.code, 400);
+      assert.match((answer.body as { error: string }).error, new RegExp(`"${item.field}" must be a string`));
+      assert.equal(existsSync(join(root, item.path)), false);
+    }
+  } finally {
+    await site.close();
+  }
+});
+
+test("flow validation returns problems for null shapes and no JavaScript error", async () => {
+  const site = await running(project());
+  const shapes = [
+    null,
+    { name: "null-step", steps: [null] },
+    {
+      name: "null-member",
+      steps: [
+        {
+          id: "work",
+          kind: "agent",
+          needs: [],
+          prompt: "work.md",
+          tools: ["read"],
+          returns: NUMBER,
+          fanout: [null],
+        },
+      ],
+    },
+  ];
+  try {
+    for (const flow of shapes) {
+      const answer = await site.call("/api/validate", { method: "POST", body: JSON.stringify({ flow }) });
+      assert.equal(answer.code, 200);
+      const body = answer.body as { problems: string[]; warnings: string[] };
+      assert.ok(body.problems.length > 0);
+      assert.deepEqual(body.warnings, []);
+      assert.doesNotMatch(body.problems.join("\n"), /TypeError|Cannot read|is not iterable/);
+    }
   } finally {
     await site.close();
   }
@@ -379,6 +472,120 @@ test("the index reads every run from disk, so a lost database costs no run", () 
   store.close();
 });
 
+test("a live start reservation blocks every store over the root", () => {
+  const root = mkdtempSync(join(tmpdir(), "orchy-reservation-"));
+  const file = join(root, "index.db");
+  const first = open(file);
+  const second = open(file);
+  try {
+    assert.equal(first.reserveStart("parent", "dispatch", 1, "first").accepted, true);
+    assert.deepEqual(second.reserveStart("parent", "dispatch", 1, "second"), { accepted: false, count: 1 });
+    first.releaseStart("first");
+    assert.equal(second.reserveStart("parent", "dispatch", 1, "second").accepted, true);
+  } finally {
+    first.close();
+    second.close();
+  }
+});
+
+test("a reservation from a dead process gives its slot back", () => {
+  const root = mkdtempSync(join(tmpdir(), "orchy-stale-reservation-"));
+  const file = join(root, "index.db");
+  const storeModule = new URL("../src/store.ts", import.meta.url).href;
+  execFileSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "--eval",
+      `import { open } from ${JSON.stringify(storeModule)}; open(process.argv[1]).reserveStart('parent', 'dispatch', 1, 'dead');`,
+      file,
+    ],
+    { stdio: "ignore" },
+  );
+
+  const store = open(file);
+  try {
+    assert.equal(store.reserveStart("parent", "dispatch", 1, "next").accepted, true);
+  } finally {
+    store.close();
+  }
+});
+
+test("a planned start from a dead door keeps its slot", () => {
+  const root = mkdtempSync(join(tmpdir(), "orchy-unknown-start-"));
+  const file = join(root, "index.db");
+  const storeModule = new URL("../src/store.ts", import.meta.url).href;
+  execFileSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "--eval",
+      `import { open } from ${JSON.stringify(storeModule)}; open(process.argv[1]).reserveStart('parent', 'dispatch', 1, 'dead', 'planned-run');`,
+      file,
+    ],
+    { stdio: "ignore" },
+  );
+
+  const store = open(file);
+  try {
+    assert.deepEqual(store.reserveStart("parent", "dispatch", 1, "next"), { accepted: false, count: 1 });
+  } finally {
+    store.close();
+  }
+});
+
+test("a failed child start releases its reservation", async () => {
+  const root = project();
+  const engine = daemon(root, false);
+  try {
+    assert.equal(engine.store.reserveStart("parent", "dispatch", 1, "failed").accepted, true);
+    engine.start({
+      path: join(root, "missing.yaml"),
+      flowName: "missing",
+      harness: "pi",
+      reservation: "failed",
+    });
+    await until(async () => engine.pending().some((ticket) => ticket.error !== undefined));
+    assert.equal(engine.store.reserveStart("parent", "dispatch", 1, "next").accepted, true);
+  } finally {
+    engine.close();
+  }
+});
+
+test("a child keeps its reservation when its MCP daemon closes", () => {
+  const root = project(TWO_GATES);
+  const engine = daemon(root, false);
+  assert.equal(engine.store.reserveStart("parent", "dispatch", 1, "held").accepted, true);
+  engine.start({ path: join(root, "flow.yaml"), flowName: "two-gates", harness: "pi", reservation: "held" });
+  engine.close(false);
+
+  const next = open(join(root, ".orchy", "index.db"));
+  try {
+    assert.deepEqual(next.reserveStart("parent", "dispatch", 1, "next"), { accepted: false, count: 1 });
+  } finally {
+    next.close();
+  }
+});
+
+test("a second daemon cannot abandon a run the first daemon drives", async () => {
+  const root = project(SLOW);
+  const first = daemon(root, false);
+  let second: ReturnType<typeof daemon> | undefined;
+  try {
+    const ticket = first.start({ path: join(root, "flow.yaml"), flowName: "slow", harness: "pi" });
+    await until(async () => first.pending().some((one) => one.ticket === ticket.ticket && one.runId !== undefined));
+    const runId = first.pending().find((one) => one.ticket === ticket.ticket)?.runId as string;
+    second = daemon(root, false);
+
+    await assert.rejects(() => second?.abandon(runId) as Promise<boolean>, /already on its way/);
+    assert.equal(first.state(runId)?.status, "running");
+    first.stop(runId);
+  } finally {
+    second?.close(false);
+    first.close();
+  }
+});
+
 test("a run that says running when the daemon starts is stopped, because no child drives it", () => {
   const root = mkdtempSync(join(tmpdir(), "orchy-stopped-"));
   const runs = join(root, "runs");
@@ -529,6 +736,108 @@ test("the daemon refuses a flow file outside its root, and names the root", asyn
     assert.match(error, /outside the root/);
     assert.ok(error.includes(root), `the message names no root: ${error}`);
     assert.deepEqual((await site.call("/api/flows")).body, []);
+  } finally {
+    await site.close();
+  }
+});
+
+test("symbolic links cannot carry HTTP file reads or writes outside the root", async () => {
+  const root = project();
+  const outside = mkdtempSync(join(tmpdir(), "orchy-outside-"));
+  writeFileSync(join(outside, "secret.txt"), "secret");
+  writeFileSync(join(outside, "flow.yaml"), formatFlow(FLOW as never));
+  symlinkSync(outside, join(root, "link"));
+  const site = await running(root);
+  try {
+    const read = await site.call("/api/file?path=link/secret.txt");
+    assert.equal(read.code, 400);
+    assert.match((read.body as { error: string }).error, /outside the root/);
+
+    const write = await site.call("/api/file", {
+      method: "PUT",
+      body: JSON.stringify({ path: "link/new.txt", content: "escaped" }),
+    });
+    assert.equal(write.code, 400);
+    assert.equal(readFileSync(join(outside, "secret.txt"), "utf8"), "secret");
+
+    const registered = await site.call("/api/flows", {
+      method: "POST",
+      body: JSON.stringify({ path: "link/flow.yaml" }),
+    });
+    assert.equal(registered.code, 400);
+    assert.deepEqual((await site.call("/api/flows")).body, []);
+  } finally {
+    await site.close();
+  }
+});
+
+test("the HTTP door refuses named files that resolve outside the root", async () => {
+  const root = project();
+  const outside = mkdtempSync(join(tmpdir(), "orchy-named-outside-"));
+  writeFileSync(join(outside, "named.md"), "outside");
+  symlinkSync(outside, join(root, "link"));
+  const site = await running(root);
+  const flows = [
+    { name: "prompt", steps: [{ id: "one", kind: "agent", prompt: "link/named.md", tools: ["read"], returns: NUMBER }] },
+    { name: "module", steps: [{ id: "one", kind: "call", module: "link/named.md", returns: NUMBER }] },
+    { name: "inner", steps: [{ id: "one", kind: "flow", flow: "link/named.md" }] },
+  ];
+  try {
+    for (const flow of flows) {
+      writeFileSync(join(root, "named.yaml"), formatFlow(flow as never));
+      const answer = await site.call("/api/flows", {
+        method: "POST",
+        body: JSON.stringify({ path: "named.yaml" }),
+      });
+      assert.equal(answer.code, 400);
+      assert.match((answer.body as { error: string }).error, /outside the root/);
+    }
+  } finally {
+    await site.close();
+  }
+});
+
+test("the HTTP flow list refuses a registered file replaced by an outside link", async () => {
+  const root = project();
+  const outside = mkdtempSync(join(tmpdir(), "orchy-row-outside-"));
+  writeFileSync(join(outside, "flow.yaml"), formatFlow(FLOW as never));
+  const site = await running(root);
+  try {
+    assert.equal(
+      (await site.call("/api/flows", { method: "POST", body: JSON.stringify({ path: "flow.yaml" }) })).code,
+      200,
+    );
+    unlinkSync(join(root, "flow.yaml"));
+    symlinkSync(join(outside, "flow.yaml"), join(root, "flow.yaml"));
+
+    const listed = await site.call("/api/flows");
+    assert.equal(listed.code, 400);
+    assert.match((listed.body as { error: string }).error, /outside the root/);
+  } finally {
+    await site.close();
+  }
+});
+
+test("a malformed route does not stop the HTTP daemon", async () => {
+  const site = await running(project());
+  try {
+    const malformed = await site.raw("/api/runs/%ZZ", { host: `127.0.0.1:${site.port}` });
+    assert.equal(malformed.code, 400);
+    assert.match(malformed.error as string, /malformed|encoding/i);
+    assert.equal((await site.call("/api/health")).code, 200);
+  } finally {
+    await site.close();
+  }
+});
+
+test("component stdout cannot crash or control the daemon", async () => {
+  const flow = { name: "noisy", steps: [{ id: "noise", kind: "call", module: "noisy.ts", returns: NUMBER }] };
+  const site = await running(project(flow));
+  try {
+    await site.call("/api/flows", { method: "POST", body: JSON.stringify({ path: "flow.yaml" }) });
+    await site.call("/api/flows/1/runs", { method: "POST", body: "{}" });
+    await until(async () => ((await site.call("/api/runs")).body as Array<{ status: string }>)[0]?.status === "done");
+    assert.equal((await site.call("/api/health")).code, 200);
   } finally {
     await site.close();
   }
@@ -862,7 +1171,11 @@ test("a run that a person stops leaves no ticket saying it did not start", async
     await until(async () => ((await site.call("/api/runs")).body as Array<{ status: string }>)[0]?.status === "running");
 
     const [row] = (await site.call("/api/runs")).body as Array<{ runId: string }>;
-    const stopped = await site.call(`/api/runs/${row?.runId}/stop`, { method: "POST" });
+    const stopping = site.call(`/api/runs/${row?.runId}/stop`, { method: "POST" });
+    await new Promise((wait) => setTimeout(wait, 200));
+    assert.equal(site.engine.state(row?.runId as string)?.status, "running");
+
+    const stopped = await stopping;
     assert.equal(stopped.code, 200);
 
     // The queue is for work that has not begun. A run a person ended is not
@@ -879,6 +1192,137 @@ test("a run that a person stops leaves no ticket saying it did not start", async
   }
 });
 
+test("a stop cancels a queued gate answer before the closing child can start it", async () => {
+  const root = project({ name: "one-gate", steps: [TWO_GATES.steps[0]] });
+  const engine = daemon(root);
+  let stopping: Promise<boolean> | undefined;
+  let fault: unknown;
+  const unwatch = engine.watch((notice) => {
+    if (notice.kind !== "event" || notice.event.type !== "waiting" || stopping) return;
+    try {
+      const state = engine.state(notice.runId);
+      engine.resume(notice.runId, { approved: true }, "pi", undefined, "first", state?.revision);
+      stopping = engine.stop(notice.runId);
+    } catch (error) {
+      fault = error;
+    }
+  });
+
+  try {
+    engine.start({ path: "flow.yaml", flowName: "one-gate", harness: "pi" });
+    await until(async () => stopping !== undefined || fault !== undefined);
+    if (fault) throw fault;
+    assert.equal(await stopping, true);
+    const [state] = engine.store.runs();
+    assert.equal(state?.status, "stopped");
+    assert.equal(engine.state(state?.runId as string)?.waitingFor, undefined);
+    assert.equal(engine.state(state?.runId as string)?.steps.first, undefined);
+  } finally {
+    unwatch();
+    await engine.close();
+  }
+});
+
+test("stopping a run ends a command descendant before it can write", async () => {
+  const root = project({
+    name: "descendant",
+    steps: [
+      {
+        id: "wait",
+        kind: "call",
+        command: `${process.execPath} -e 'const { spawn } = require("node:child_process"); const fs = require("node:fs"); fs.writeFileSync("started", "yes"); const child = spawn(process.execPath, ["-e", "process.on(\\"SIGTERM\\", () => {}); require(\\"node:fs\\").writeFileSync(\\"descendant-ready\\", \\"yes\\"); setTimeout(() => require(\\"node:fs\\").writeFileSync(\\"late\\", \\"yes\\"), 5000); setTimeout(() => {}, 8000)"], { stdio: "ignore" }); child.unref(); setTimeout(() => {}, 8000)'`,
+        returns: NUMBER,
+      },
+    ],
+  });
+  const site = await running(root);
+  try {
+    await site.call("/api/flows", { method: "POST", body: JSON.stringify({ path: "flow.yaml" }) });
+    await site.call("/api/flows/1/runs", { method: "POST", body: "{}" });
+    await until(async () => existsSync(join(root, "descendant-ready")));
+    const [row] = (await site.call("/api/runs")).body as Array<{ runId: string }>;
+    const stateFile = join(root, ".orchy", "runs", row?.runId as string, "state.json");
+    const pid = (JSON.parse(readFileSync(stateFile, "utf8")) as { pid: number }).pid;
+
+    const realKill = process.kill.bind(process);
+    let forced = false;
+    mock.method(
+      process,
+      "kill",
+      ((target: number, signal?: number | NodeJS.Signals) => {
+        if (target === -pid && signal === "SIGKILL") {
+          forced = true;
+          return true;
+        }
+        return realKill(target, signal as NodeJS.Signals);
+      }) as typeof process.kill,
+    );
+
+    const firstStop = site.call(`/api/runs/${row?.runId}/stop`, { method: "POST" });
+    await until(async () => forced);
+    assert.doesNotThrow(() => realKill(-pid, 0));
+    const [during] = (await site.call("/api/runs")).body as Array<{ status: string }>;
+    assert.equal(during?.status, "running");
+    const failed = await firstStop;
+    assert.equal(failed.code, 400);
+
+    mock.restoreAll();
+    const stopped = await site.call(`/api/runs/${row?.runId}/stop`, { method: "POST" });
+    assert.equal(stopped.code, 200);
+    await new Promise((wait) => setTimeout(wait, 2000));
+
+    assert.equal(existsSync(join(root, "late")), false);
+    assert.equal(site.engine.state(row?.runId as string)?.status, "stopped");
+  } finally {
+    mock.restoreAll();
+    await site.close();
+  }
+});
+
+test("a failed forced stop never reports or records stopped", async () => {
+  const root = project(SLOW);
+  const site = await running(root);
+  let pid = 0;
+  try {
+    await site.call("/api/flows", { method: "POST", body: JSON.stringify({ path: "flow.yaml" }) });
+    await site.call("/api/flows/1/runs", { method: "POST", body: "{}" });
+    await until(async () => ((await site.call("/api/runs")).body as Array<{ status: string }>)[0]?.status === "running");
+    const [row] = (await site.call("/api/runs")).body as Array<{ runId: string }>;
+    const stateFile = join(root, ".orchy", "runs", row?.runId as string, "state.json");
+    pid = (JSON.parse(readFileSync(stateFile, "utf8")) as { pid: number }).pid;
+    const realKill = process.kill.bind(process);
+    mock.method(
+      process,
+      "kill",
+      ((target: number, signal?: number | NodeJS.Signals) => {
+        if (target !== -pid) return realKill(target, signal as NodeJS.Signals);
+        if (signal === "SIGTERM") return realKill(pid, signal);
+        if (signal === "SIGKILL") return realKill(pid, signal);
+        return true;
+      }) as typeof process.kill,
+    );
+
+    await assert.rejects(site.engine.stop(row?.runId as string), /did not end after SIGKILL/);
+    mock.restoreAll();
+    assert.equal(site.engine.state(row?.runId as string)?.status, "running");
+    const [during] = (await site.call("/api/runs")).body as Array<{ status: string }>;
+    assert.equal(during?.status, "running");
+    assert.equal(await site.engine.abandon(row?.runId as string), false);
+    assert.equal(await site.engine.stop(row?.runId as string), true);
+    assert.equal(site.engine.state(row?.runId as string)?.status, "stopped");
+  } finally {
+    mock.restoreAll();
+    if (pid) {
+      try {
+        process.kill(-pid, "SIGKILL");
+      } catch {
+        // The successful second stop already ended the group.
+      }
+    }
+    await site.close();
+  }
+});
+
 test("an answer the gate refuses is refused at the door, not in a child", async () => {
   const site = await running(project());
   try {
@@ -891,7 +1335,7 @@ test("an answer the gate refuses is refused at the door, not in a child", async 
     // and refused later, on another page, under the words "did not start".
     const refused = await site.call(`/api/runs/${row?.runId}/resume`, {
       method: "POST",
-      body: JSON.stringify({ value: { approved: "yes please" } }),
+      body: JSON.stringify({ value: { approved: "yes please" }, revision: await revisionOf(site, row?.runId as string) }),
     });
 
     assert.equal(refused.code, 400);
@@ -940,11 +1384,12 @@ test("an answer written for one gate is not given to another", async () => {
       ((await site.call("/api/runs")).body as Array<{ status: string; waitingFor: string }>)[0];
     await until(async () => (await waiting())?.status === "waiting");
     const [row] = (await site.call("/api/runs")).body as Array<{ runId: string }>;
+    const firstRevision = await revisionOf(site, row?.runId as string);
 
     // One person answers the first question. Another was still reading it.
     await site.call(`/api/runs/${row?.runId}/resume`, {
       method: "POST",
-      body: JSON.stringify({ value: { approved: true }, step: "first" }),
+      body: JSON.stringify({ value: { approved: true }, step: "first", revision: firstRevision }),
     });
     await until(async () => (await waiting())?.waitingFor === "second");
 
@@ -952,12 +1397,36 @@ test("an answer written for one gate is not given to another", async () => {
     // not be recorded as the answer to a question they never read.
     const crossed = await site.call(`/api/runs/${row?.runId}/resume`, {
       method: "POST",
-      body: JSON.stringify({ value: { approved: false }, step: "first" }),
+      body: JSON.stringify({ value: { approved: false }, step: "first", revision: firstRevision }),
     });
 
     assert.equal(crossed.code, 400);
     assert.match((crossed.body as { error: string }).error, /waits at "second", and this answer is for "first"/);
     assert.equal((await waiting())?.waitingFor, "second");
+  } finally {
+    await site.close();
+  }
+});
+
+test("two answers for one revision produce one ticket", async () => {
+  const site = await running(project(TWO_GATES));
+  try {
+    await site.call("/api/flows", { method: "POST", body: JSON.stringify({ path: "flow.yaml" }) });
+    await site.call("/api/flows/1/runs", { method: "POST", body: "{}" });
+    await until(async () => ((await site.call("/api/runs")).body as Array<{ status: string }>)[0]?.status === "waiting");
+    const held = (await site.call(`/api/runs/${((await site.call("/api/runs")).body as Array<{ runId: string }>)[0]?.runId}`))
+      .body as { state: { runId: string; revision: number } };
+    const body = (approved: boolean) =>
+      JSON.stringify({ value: { approved }, step: "first", revision: held.state.revision });
+
+    const answers = await Promise.all([
+      site.call(`/api/runs/${held.state.runId}/resume`, { method: "POST", body: body(true) }),
+      site.call(`/api/runs/${held.state.runId}/resume`, { method: "POST", body: body(false) }),
+    ]);
+
+    assert.deepEqual(answers.map((one) => one.code).sort(), [200, 400]);
+    const refused = answers.find((one) => one.code === 400) as { body: { error: string } };
+    assert.match(refused.body.error, /already has an answer/);
   } finally {
     await site.close();
   }

@@ -6,6 +6,40 @@ steps, enforces the rules, and records what each step did.
 A coding agent is good at one step and poor at a long one. So Orchy holds the
 control flow, and gives each step one job, one tool list, and one contract.
 
+## Quick start
+
+Install Orchy, then make an empty directory.
+
+```bash
+npm install -g @krimvp/orchy
+mkdir orchy-first-run
+cd orchy-first-run
+orchy init
+orchy check flow.yaml
+orchy run flow.yaml
+```
+
+The bundled `flow.yaml` uses `hello.mjs`. It calls no model and needs no
+account. The final value includes `Orchy ran a model-free flow.`
+
+The starter also holds one complete Claude Code flow. It includes its prompt
+and the note that the prompt reads. Install Claude Code and log in before this
+run. See [A model comes from the harness](#a-model-comes-from-the-harness).
+
+```bash
+orchy check agent.yaml
+orchy run agent.yaml
+```
+
+The check does not call a model. It reports model authentication as unknown.
+The run can spend money under the terms of the configured Claude account. Its
+final value holds a one-sentence `summary` of `note.txt`.
+
+`orchy check` imports a TypeScript or JavaScript flow file. Module initialization
+can run code. A YAML flow is data and has no module initialization.
+
+## A larger flow
+
 ```yaml
 name: code-and-review
 workspace: { kind: git, path: . }
@@ -174,6 +208,7 @@ none when the third did.
 ## Commands
 
 ```bash
+orchy init                                  # write the bundled starter without replacing a file
 orchy check flow.yaml                      # say what is wrong, and what it takes
 orchy run flow.yaml                        # or flow.ts
 orchy run flow.yaml --with '{"issue":412}' # the values the flow takes
@@ -205,8 +240,12 @@ a person. `--events` writes one JSON event for each line to the output stream
 instead, and prints no state there, so a parent process reads the events alone.
 That is how the daemon reads a run.
 
-`orchy check <flow file>` reads a flow, and every flow it holds, and says what
-is wrong with it. It runs nothing and spends nothing.
+`orchy check <flow file>` checks the shape, prompt files, component files, and
+prompt names. It starts no step and spends nothing. It cannot prove model
+authentication without a model call, so it reports that state as unknown.
+
+The check imports a TypeScript or JavaScript flow file. Its module initialization
+can run code. Use YAML when the check must read data only.
 
 `orchy memory keys | list <scope> | add <scope> <text> | forget <scope> [id]`
 reads and writes what runs record. A scope is the key a flow declares. `forget`
@@ -403,6 +442,8 @@ Orchy needs Node 22.18 or later.
 
 ```bash
 npm install -g @krimvp/orchy
+mkdir orchy-first-run && cd orchy-first-run
+orchy init
 orchy run flow.yaml
 ```
 
@@ -569,6 +610,11 @@ file outside its root.
 **Checked, and never run:** the `none` workspace, and the `docs-audit`,
 `release-notes`, `decision`, and `dependency-audit` examples. A test reads every
 example and holds it to `validate()`. It starts no run of one.
+
+**Packed and run without a model:** the bundled starter. CI installs the exact
+package in a clean consumer, imports its public API, compiles its public types,
+and completes `flow.yaml`. The same gate checks that the package holds the UI
+and every starter file.
 
 **Not built:** a memory that expires or that ranks what it answers with, an
 OpenTelemetry exporter, a sandbox, a

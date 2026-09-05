@@ -204,10 +204,10 @@ disagreement.
 **Takes and returns** — a flow holds `takes`, the schema of the values a run
 supplies, and `returns`, the schema of the value it produces, which is the value
 of the step it ends with. `orchy run --with`, the daemon, and a flow step all
-supply the values, and every step of the run reads them. A name in a prompt
-takes one, and a name that nothing supplies fails the step. A step holds `takes`
-as well, for the values that must reach it. So invariant 2 guards what goes into
-a step and what comes out of it. See [ADR
+supply the values, and every step of the run reads them. A name in a prompt or
+a gate question takes one. A name that nothing supplies fails the run. A step
+holds `takes` as well, for the values that must reach it. So invariant 2 guards
+what goes into a step and what comes out of it. See [ADR
 0015](./adr/0015-a-flow-takes-values-and-returns-one.md).
 
 **Budget** — what the run may spend, in dollars. The flow declares one, and only
@@ -490,6 +490,13 @@ and how many runs — and the door enforces the bound from the state on disk.
 See [ADR 0026](./adr/0026-a-component-is-a-process.md) and [ADR
 0027](./adr/0027-a-step-declares-what-it-may-start.md).
 
+**M16 — the first run and the package. Done.** `orchy init` writes a bundled
+model-free flow and refuses to replace a file. The starter also holds one
+Claude Code flow, its prompt, and its source text. `orchy check` now refuses a
+missing prompt or component before a run. It states that authentication is
+unknown because it calls no model. CI installs the packed artifact in a clean
+consumer and completes the model-free flow. The UI build uses `npm ci`.
+
 ## The proof flows
 
 Two flows prove the design, and they stress different parts.
@@ -510,8 +517,9 @@ records as a known risk.
 
 Orchy does not ship these until a real flow needs them.
 
-- A timeout for a step. A run stops at a budget of dollars, and not at a length
-  of time.
+- An automatic timeout for a step. A run stops at a budget of dollars, and not
+  at a length of time. A person can stop a run. That stop ends its owned process
+  tree after a fixed grace period.
 - A workspace for one step, and a workspace for each run. Two runs in one
   working directory disturb each other, and `src/run.ts` names that limit in a
   `ponytail`. See [docs/shape.md](./shape.md).
@@ -521,7 +529,11 @@ Orchy does not ship these until a real flow needs them.
   refuses a foreign `Origin` and a foreign `Host`, which bounds a browser and
   not a program. See [ADR
   0020](./adr/0020-the-daemon-refuses-a-foreign-page.md).
-- An optional need, so a step joins two branches when a condition rules one out.
+- A join over branches. The proposed field is `after: [repair, accept]`. It
+  waits for each named step to pass or skip. It gives the next step only the
+  values that passed. A failed step still fails the run. `needs` keeps its
+  current rule and still requires every named step to pass. Tests must cover
+  each branch, two skipped branches, and a failed branch before this field lands.
 
 ## Defaults
 

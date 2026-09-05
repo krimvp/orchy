@@ -49,7 +49,7 @@ export type { FlowRow, RunRow, Store, StoredEvent } from "./store.ts";
 export { SCHEMA_VERSION, toAtif } from "./atif.ts";
 export type { Trajectory } from "./atif.ts";
 export type { Called, RunEvent, RunOptions, RunState, StepRecord } from "./run.ts";
-export { ADAPTERS, MODELS, SUPPLIES, TOOLS, notesOf } from "./harness.ts";
+export { ADAPTERS, COSTS, MODELS, SUPPLIES, TOOLS, notesOf } from "./harness.ts";
 export type { AdapterName, AgentRequest, AgentResult, Harness, Note, ToolName, Watch } from "./harness.ts";
 export { tail } from "./tail.ts";
 export { pi } from "./pi.ts";

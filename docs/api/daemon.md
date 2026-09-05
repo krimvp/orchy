@@ -3,10 +3,11 @@
 This module is the long-lived heart of Orchy: it accepts orders to run flows,
 holds them in a queue, and drives each one in a child process. At most four
 runs work at once — that bound is a constant, not a setting; a user who wants
-more starts a second daemon. Each run is `cli.ts` spawned with `--events`, so
-the child writes one JSON event per line on stdout and the daemon turns that
-stream into notices for whoever watches (in practice, `server.ts`, which puts
-a daemon behind HTTP). Every thirty seconds the daemon also fires every
+more starts a second daemon. Each run is `cli.ts` with a private file
+descriptor for events. The child writes one checked JSON event per line there.
+The daemon turns that stream into notices for whoever watches. Component
+stdout is a separate stream, so ordinary output cannot control the daemon.
+Every thirty seconds the daemon also fires every
 schedule that is due, through the same `start` door a person uses; a flow
 whose last scheduled run still works is skipped, so runs never stack behind a
 slow one.

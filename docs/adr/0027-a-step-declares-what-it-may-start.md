@@ -22,6 +22,22 @@ way past it. A flow outside the list is refused with the list. A start past
 `most` is refused with the count, and every run counts, including one that
 failed, the way a budget counts a dropped attempt.
 
+The shared index reserves a child slot in one SQLite transaction before the
+start enters a daemon queue. The count includes run rows and reservations.
+The daemon gives the reservation a run ID and the child process identity before
+it starts the child. A second MCP process over the same root sees that slot.
+
+The reservation becomes a run row when the child reports its run ID. A failed
+child start releases it. A dead owner with no run releases it at the next
+reservation check. On Linux, the owner identity includes the boot ID and the
+process start time. Other systems use the PID only.
+
+The door assigns the child run ID before it starts the child. If the door dies
+before it can prove whether the child started, the reservation stays. This can
+hold capacity after a failed dispatch. It cannot open capacity for a child that
+still starts. Removing that uncertain reservation requires inspection of the
+root and the index.
+
 ## Why
 
 ADR 0025 opened the door to a step and bounded the chain with a depth. The

@@ -28,6 +28,30 @@ export function schemaProblem(schema: TSchema, value: unknown): string | undefin
   return `at "${first?.instancePath || "/"}": ${first?.message ?? "unknown"}`;
 }
 
+/** Every pair of braces, so a name that resolves to nothing is never missed. */
+const NAMED = /\{\{([^{}]*)\}\}/g;
+
+/** Fills the names in a prompt or a gate question from the values of the step. */
+export function fill(
+  text: string,
+  step: string,
+  values: Record<string, unknown>,
+  source: "prompt" | "question" = "prompt",
+): string {
+  return text.replace(NAMED, (_all, inside: string) => {
+    const name = inside.trim();
+    if (!Object.hasOwn(values, name)) {
+      const supply =
+        source === "question"
+          ? 'Add it to "takes" on the flow.'
+          : 'Add it to "takes" on the flow, or to "with" on the step.';
+      throw new Error(`step "${step}" reads "{{ ${name} }}" in its ${source}, and nothing supplies "${name}". ${supply}`);
+    }
+    const value = values[name];
+    return typeof value === "string" ? value : JSON.stringify(value);
+  });
+}
+
 /**
  * A partial match against a value, not an expression. A small expression
  * language grows, and a graphical editor cannot draw one.
@@ -208,6 +232,8 @@ export interface CallStep<S extends TSchema = TSchema> extends Common, Acts {
 export interface GateStep<S extends TSchema = TSchema> extends Common {
   kind: "gate";
   question: string;
+  /** Values that names in the question read. An inner flow supplies these. */
+  with?: Record<string, unknown>;
   returns: S;
   /** Sends the run back on the value of the person. A person rejects the work. */
   cycle?: Cycle<S>;
@@ -536,6 +562,18 @@ export async function expandFlows(flow: Flow, load: (path: string) => Promise<Fl
         // A promise that expansion drops is a rule that looks enforced and is not.
         if (inner.changes) moved.changes ??= inner.changes;
       }
+      // A gate reads these when it asks its question. Keep them as values until
+      // then, so braces inside a supplied string stay literal text.
+      if (moved.kind === "gate" && step.with) {
+        moved.with = { ...step.with, ...moved.with };
+      }
+      // A condition inside the inner flow names inner steps. Its keys move
+      // with those ids, by the same rule as `needs`.
+      if (moved.kind !== "flow" && moved.when) {
+        moved.when = Object.fromEntries(
+          Object.entries(moved.when).map(([name, wanted]) => [own.has(name) ? id(name) : name, wanted]),
+        );
+      }
       // The harness and the model of the inner flow ride on each step it holds.
       // Expansion drops the inner flow, so a step that kept neither would run on
       // the harness of the outer flow, and spend the wrong money on the wrong
@@ -594,7 +632,7 @@ const HOLDS: Record<Step["kind"], { must: string[]; may: string[] }> = {
     must: ["returns"],
     may: ["needs", "when", "module", "command", "with", "takes", "changes", "cycle", "fanout"],
   },
-  gate: { must: ["question", "returns"], may: ["needs", "when", "cycle"] },
+  gate: { must: ["question", "returns"], may: ["needs", "when", "with", "cycle"] },
   flow: { must: ["flow"], may: ["needs", "with", "cycle"] },
 };
 
@@ -688,11 +726,25 @@ function anyOf(kinds: string[]): string {
  * no types, so this is the only thing between a user and a field that nothing
  * reads. Every other check below assumes that this one passed.
  */
-function shapeProblems(flow: Flow): string[] {
+function shapeProblems(value: unknown): string[] {
+  if (!isSchema(value)) {
+    return [`at "/": a flow is an object, and this value is ${JSON.stringify(value)}`];
+  }
+
+  const flow = value as unknown as Flow;
   const problems: string[] = [];
   for (const key of Object.keys(flow)) {
     if (!FLOW_HOLDS.includes(key)) {
       problems.push(`the flow holds "${key}", which is not a field of a flow. A flow holds: ${FLOW_HOLDS.join(", ")}`);
+    }
+  }
+  if (typeof flow.name !== "string") {
+    problems.push(`at "/name": a flow name is a string, and this value is ${JSON.stringify(flow.name)}`);
+  }
+  for (const key of ["harness", "model"] as const) {
+    const held = flow[key];
+    if (held !== undefined && typeof held !== "string") {
+      problems.push(`at "/${key}": a flow ${key} is a string, and this value is ${JSON.stringify(held)}`);
     }
   }
   problems.push(...workspaceProblems(flow.workspace));
@@ -709,13 +761,31 @@ function shapeProblems(flow: Flow): string[] {
   if (flow.memory !== undefined) problems.push(...memoryProblems(flow.memory, flow.takes));
   if (!Array.isArray(flow.steps)) return [...problems, "the flow has no steps"];
 
-  for (const step of flow.steps) {
+  for (const [index, found] of flow.steps.entries()) {
+    const path = `/steps/${index}`;
+    if (!isSchema(found)) {
+      problems.push(`at "${path}": a step is an object, and this value is ${JSON.stringify(found)}`);
+      continue;
+    }
+    const heldStep = found as unknown as Record<string, unknown>;
+    if (typeof heldStep.kind !== "string") {
+      problems.push(`at "${path}/kind": a step kind is a string, and this value is ${JSON.stringify(heldStep.kind)}`);
+      continue;
+    }
+    const step = heldStep as unknown as Step;
     const holds = HOLDS[step.kind];
     if (!holds) {
       problems.push(`step "${step.id ?? "with no id"}" is of the kind "${step.kind}". Use one of: ${KINDS.join(", ")}`);
       continue;
     }
-    if (!step.id) problems.push(`${a(step.kind)} step has no id`);
+    if (typeof step.id !== "string") {
+      problems.push(`at "${path}/id": a step id is a string, and this value is ${JSON.stringify(step.id)}`);
+    } else if (step.id === "") {
+      problems.push(`${a(step.kind)} step has no id`);
+    }
+    if (!Array.isArray(step.needs) || step.needs.some((need) => typeof need !== "string")) {
+      problems.push(`at "${path}/needs": the needs of a step are a list of step ids`);
+    }
 
     for (const key of Object.keys(step)) {
       if (allowed(step.kind).includes(key)) continue;
@@ -727,6 +797,28 @@ function shapeProblems(flow: Flow): string[] {
       if ((step as unknown as Record<string, unknown>)[key] === undefined) {
         problems.push(`step "${step.id}" has no "${key}", and ${a(step.kind)} step needs one`);
       }
+    }
+    for (const key of ["prompt", "module", "command", "question", "flow", "harness", "model"] as const) {
+      const held = (step as unknown as Record<string, unknown>)[key];
+      if (held !== undefined && typeof held !== "string") {
+        problems.push(`at "${path}/${key}": "${key}" is a string, and this value is ${JSON.stringify(held)}`);
+      }
+    }
+    const tools = (step as AgentStep).tools;
+    if (tools !== undefined && (!Array.isArray(tools) || tools.some((tool) => typeof tool !== "string"))) {
+      problems.push(`at "${path}/tools": the tools of a step are a list of names`);
+    }
+    const withValues = (step as AgentStep).with;
+    if (withValues !== undefined && !isSchema(withValues)) {
+      problems.push(`at "${path}/with": the values of a step are an object`);
+    }
+    const when = (step as AgentStep).when;
+    if (when !== undefined && !isSchema(when)) {
+      problems.push(`at "${path}/when": a condition is an object`);
+    }
+    const starts = (step as AgentStep).starts;
+    if (starts !== undefined && !isSchema(starts)) {
+      problems.push(`at "${path}/starts": a bound is an object`);
     }
     const returns = (step as GateStep).returns;
     // A missing one already has its own problem, so this one speaks for a wrong one.
@@ -745,7 +837,7 @@ function shapeProblems(flow: Flow): string[] {
       );
     }
     problems.push(...cycleProblems(step));
-    problems.push(...memberProblems(step));
+    problems.push(...memberProblems(step, path));
   }
   return problems;
 }
@@ -824,14 +916,17 @@ function schemaFault(value: unknown): string | undefined {
 
 const WORKSPACES = ["none", "git"];
 
-function workspaceProblems(workspace: Workspace | undefined): string[] {
+function workspaceProblems(workspace: unknown): string[] {
   if (workspace === undefined) return [];
   if (!isSchema(workspace)) return [`the workspace is "${JSON.stringify(workspace)}", which names no kind`];
-  const { kind, path } = workspace as { kind: string; path?: string };
+  const { kind, path } = workspace as { kind: unknown; path?: unknown };
+  if (typeof kind !== "string") return [`at "/workspace/kind": a workspace kind is a string`];
   if (!WORKSPACES.includes(kind)) {
     return [`the workspace is of the kind "${kind}". Use one of: ${WORKSPACES.join(", ")}`];
   }
-  if (kind === "git" && !path) return ['the git workspace has no path. Write { kind: git, path: "." }'];
+  if (kind === "git" && (typeof path !== "string" || path === "")) {
+    return ['the git workspace has no path. Write { kind: git, path: "." }'];
+  }
   return [];
 }
 
@@ -844,7 +939,7 @@ const WRITE = 'Write "nothing", { paths } for the only paths it changes, or { ex
  * The promise of invariant 5. A boolean cannot hold it, so a word does. `who`
  * names the flow, or the step, because both hold a promise.
  */
-function changesProblems(who: string, changes: Changes | undefined): string[] {
+function changesProblems(who: string, changes: unknown): string[] {
   if (changes === undefined || changes === "nothing") return [];
   if (typeof changes === "boolean") {
     const write = changes ? "leave it out" : 'write "changes: nothing"';
@@ -881,26 +976,44 @@ function changesProblems(who: string, changes: Changes | undefined): string[] {
   return problems;
 }
 
-function memberProblems(step: Step): string[] {
-  const fanout = fanoutOf(step);
-  if (!fanout) {
-    // A fanout that no one can expand must say so, not quietly do nothing.
-    return (step as { fanout?: unknown }).fanout
-      ? [`step "${step.id}" fans out, but only an agent step and a call step can`]
-      : [];
+function memberProblems(step: Step, stepPath: string): string[] {
+  const declared = (step as { fanout?: unknown }).fanout;
+  if (declared === undefined) return [];
+  // A fanout that no one can expand must say so, not quietly do nothing.
+  if (step.kind !== "agent" && step.kind !== "call") {
+    return [`step "${step.id}" fans out, but only an agent step and a call step can`];
   }
+  const fanout = declared as Fanout;
   if (!Array.isArray(fanout)) return computedShape(step, fanout);
   const holds = MEMBER_HOLDS[step.kind as "agent" | "call"];
   const problems: string[] = [];
-  for (const member of fanout) {
-    if (!member?.name) {
-      problems.push(`a member of "${step.id}" has no name`);
+  for (const [index, found] of fanout.entries()) {
+    const path = `${stepPath}/fanout/${index}`;
+    if (!isSchema(found)) {
+      problems.push(`at "${path}": a member is an object, and this value is ${JSON.stringify(found)}`);
+      continue;
+    }
+    const member = found as unknown as Member;
+    if (typeof member.name !== "string" || member.name === "") {
+      problems.push(`at "${path}/name": a member name is a string that is not empty`);
       continue;
     }
     for (const key of Object.keys(member)) {
       if (!holds.includes(key)) {
         problems.push(`member "${member.name}" of "${step.id}" holds "${key}", which ${a(step.kind)} step cannot act on`);
       }
+    }
+    for (const key of ["harness", "model", "prompt", "module", "command"] as const) {
+      const held = member[key];
+      if (held !== undefined && typeof held !== "string") {
+        problems.push(`at "${path}/${key}": "${key}" is a string, and this value is ${JSON.stringify(held)}`);
+      }
+    }
+    if (member.tools !== undefined && (!Array.isArray(member.tools) || member.tools.some((tool) => typeof tool !== "string"))) {
+      problems.push(`at "${path}/tools": the tools of a member are a list of names`);
+    }
+    if (member.with !== undefined && !isSchema(member.with)) {
+      problems.push(`at "${path}/with": the values of a member are an object`);
     }
   }
   return problems;
@@ -938,10 +1051,11 @@ function computedShape(step: Step, fanout: Computed): string[] {
  * carries. A name outside it is a typo, and a typo used to turn both checks
  * off in silence.
  */
-export function validate(flow: Flow, harness?: string, adapters: readonly string[] = ADAPTERS): string[] {
+export function validate(input: unknown, harness?: string, adapters: readonly string[] = ADAPTERS): string[] {
   // Every check below reads a field, so the shape comes first and alone.
-  const shape = shapeProblems(flow);
+  const shape = shapeProblems(input);
   if (shape.length > 0) return shape;
+  const flow = input as Flow;
 
   const problems: string[] = [];
   if (!flow.name) problems.push("the flow has no name");

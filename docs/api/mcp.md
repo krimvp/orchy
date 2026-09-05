@@ -22,7 +22,9 @@ characters of the guide and cuts the rest — a tryout read one that ended
 mid-word — so the guide stays under that, and a test holds it there.
 
 The door keeps the one rule of the daemon: every path a tool names resolves
-against the root, and one outside it is refused with the root in the message.
+against the root, including its symbolic links. An existing file must have a
+canonical path inside the root. A new file must have its nearest existing
+parent there. A path outside it is refused with the root in the message.
 A tool list is not a sandbox here either — an agent that writes and runs a
 flow runs code, with the authority of the user who started `orchy mcp`.
 

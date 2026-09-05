@@ -1,13 +1,10 @@
-import { execFile } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import { type Metrics, SCHEMA_VERSION, type Step, type Trajectory } from "./atif.ts";
 import { type AgentRequest, type Harness, MODELS, type ToolName, type Watch, environmentOf, notesOf } from "./harness.ts";
 import { tail } from "./tail.ts";
-
-const run = promisify(execFile);
+import { execOwned } from "./process.ts";
 
 /**
  * Invariant 1 crosses the two vocabularies here. Droid holds one MCP list for
@@ -49,7 +46,8 @@ interface Answer {
  * Ollama Cloud serves a step without a Factory account.
  */
 export const droid: Harness = {
-  async run(request, watch) {
+  async run(request, watch, signal) {
+    signal?.throwIfAborted();
     const tools = [
       ...new Set(
         request.tools.flatMap((name) => {
@@ -99,7 +97,7 @@ export const droid: Harness = {
     const stop = watch ? tail(() => appeared(request.cwd, before, request.prompt), (line) => report(line, watch)) : undefined;
 
     try {
-      const answer = await exec([...args, request.prompt], request);
+      const answer = await exec([...args, request.prompt], request, signal);
       // A session continues only under a Factory login, so no reminder can ride
       // the same session, the way pi sends one. The value is read out of the
       // answer instead, prose around it or not, and the runner still checks it.
@@ -160,13 +158,17 @@ export const droid: Harness = {
 };
 
 /** One start of the command. A command that ends badly says why on its own streams. */
-async function exec(args: string[], request: AgentRequest): Promise<Answer> {
+async function exec(args: string[], request: AgentRequest, signal?: AbortSignal): Promise<Answer> {
   let stdout: string;
   try {
-    const command = run("droid", args, { cwd: request.cwd, maxBuffer: 64 * 1024 * 1024, env: environmentOf(request) });
+    const command = execOwned("droid", args, {
+      cwd: request.cwd,
+      maxBuffer: 64 * 1024 * 1024,
+      env: environmentOf(request),
+    }, signal);
     // The command reads its input stream, and Orchy writes nothing to it.
     command.child.stdin?.end();
-    ({ stdout } = await command);
+    ({ stdout } = await command.result);
   } catch (error) {
     const held = error as { stderr?: string; stdout?: string; code?: number };
     const why = (held.stderr ?? "").trim() || (held.stdout ?? "").trim().slice(0, 300) || `it ended with the code ${held.code ?? "unknown"}`;

@@ -174,6 +174,8 @@ export interface StepRecord {
 
 export interface RunState {
   runId: string;
+  /** The state version that a gate answer names. Old run files read as zero. */
+  revision?: number;
   flow: Flow;
   /** The values this run supplies for what the flow takes. */
   with?: Record<string, unknown>;
@@ -342,11 +344,14 @@ export const api = {
   trajectory: (runId: string) => call<Atif>(`/api/runs/${runId}/trajectory`),
   /**
    * A value answers a gate. No value continues an ended run, from `from` or
-   * where it stood. `step` is the gate the answer was written for, so an answer
-   * cannot land on a question that arrived while a person was reading.
+   * where it stood. `step` and `revision` name the gate state that the person
+   * read, so an old answer cannot land after a cycle reaches that gate again.
    */
-  resume: (runId: string, value?: unknown, from?: string, step?: string) =>
-    call<Ticket>(`/api/runs/${runId}/resume`, { method: "POST", body: JSON.stringify({ value, from, step }) }),
+  resume: (runId: string, value?: unknown, step?: string, revision?: number, from?: string) =>
+    call<Ticket>(`/api/runs/${runId}/resume`, {
+      method: "POST",
+      body: JSON.stringify({ value, from, step, revision }),
+    }),
   stop: (runId: string) =>
     call<{ stopped: boolean; abandoned?: boolean }>(`/api/runs/${runId}/stop`, { method: "POST" }),
   queue: () => call<Ticket[]>("/api/queue"),

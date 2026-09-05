@@ -1,14 +1,11 @@
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import { type Metrics, SCHEMA_VERSION, type Step, type Trajectory, totalMetrics } from "./atif.ts";
 import { type Harness, MODELS, type ToolName, type Watch, environmentOf, notesOf } from "./harness.ts";
 import { tail } from "./tail.ts";
-
-const run = promisify(execFile);
+import { execOwned } from "./process.ts";
 
 /**
  * Invariant 1 crosses the two vocabularies here. Claude has no separate list
@@ -47,7 +44,8 @@ interface Answer {
  * contract as JSON Schema directly, so no schema conversion happens at all.
  */
 export const claude: Harness = {
-  async run(request, watch) {
+  async run(request, watch, signal) {
+    signal?.throwIfAborted();
     const tools = [
       ...new Set(
         request.tools.flatMap((name) => {
@@ -108,11 +106,15 @@ export const claude: Harness = {
 
     let stdout: string;
     try {
-      const command = run("claude", args, { cwd: request.cwd, maxBuffer: 64 * 1024 * 1024, env: environmentOf(request) });
+      const command = execOwned("claude", args, {
+        cwd: request.cwd,
+        maxBuffer: 64 * 1024 * 1024,
+        env: environmentOf(request),
+      }, signal);
       // The command reads its input stream, and Orchy writes nothing to it. Left
       // open, the command waits out its own timeout on every step of every flow.
       command.child.stdin?.end();
-      ({ stdout } = await command);
+      ({ stdout } = await command.result);
     } catch (error) {
       // A command that ends badly says why on its own streams. Node throws the
       // whole argument list instead, prompt and all, and names no reason.

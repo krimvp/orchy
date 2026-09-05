@@ -22,6 +22,7 @@ import {
   cycleOf,
   exitsOf,
   expandFanout,
+  fill,
   harnessOf,
   modelOf,
   operatorOf,
@@ -31,7 +32,9 @@ import {
   validate,
 } from "./flow.ts";
 import { ADAPTERS, type Harness, type Note, environmentOf } from "./harness.ts";
+import { claimed } from "./claim.ts";
 import { type Entry, MOST, keyOf, lines } from "./memory.ts";
+import { COMMAND_OUTPUT, RUN_GROUP, cancelChild, cancellation, ownsGroup, terminate } from "./process.ts";
 import { pi } from "./pi.ts";
 import { attempts, toAtif } from "./atif.ts";
 import { type Change, type Snapshot, changed, take } from "./workspace.ts";
@@ -140,6 +143,8 @@ export interface Called {
   runId: string;
   step: string;
   memory?: { key: string; most: number };
+  /** A module passes this signal to each process it starts. */
+  signal?: AbortSignal;
 }
 
 export interface StepRecord {
@@ -172,6 +177,8 @@ export interface StepRecord {
 
 export interface RunState {
   runId: string;
+  /** The identity of the persisted state transition. Each whole state write advances it. */
+  revision?: number;
   /** The flow is data, so a run holds the whole of it and resumes without the file. */
   flow: Flow;
   /** The values this run supplies for what the flow takes. Every step reads them. */
@@ -194,6 +201,8 @@ export interface RunState {
    * tell a run that works from a run that died with its state at `running`.
    */
   pid?: number;
+  /** The pid is also the daemon process group id. */
+  processGroup?: boolean;
   /** Why the run failed, when the fault belongs to the run and not to one step. */
   error?: string;
   waitingFor?: string;
@@ -252,7 +261,11 @@ export interface RunOptions {
   harnesses?: Record<string, Harness>;
   /** The run and the step that started this run, when a step did. ADR 0025. */
   startedBy?: { runId: string; step: string };
+  /** A daemon reserves this identity before it starts the child process. */
+  runId?: string;
   onEvent?: (event: RunEvent) => void;
+  /** A stop asks each active step to end. */
+  signal?: AbortSignal;
 }
 
 export async function run(input: Flow, options: RunOptions = {}): Promise<RunState> {
@@ -280,7 +293,7 @@ export async function run(input: Flow, options: RunOptions = {}): Promise<RunSta
   // step that met it, and the step records it.
   take(flow.workspace, cwd);
   const state: RunState = {
-    runId: randomUUID(),
+    runId: options.runId ?? randomUUID(),
     flow,
     startedAt: new Date().toISOString(),
     status: "running",
@@ -300,7 +313,7 @@ export async function run(input: Flow, options: RunOptions = {}): Promise<RunSta
     throw new Refused(error instanceof Error ? error.message : String(error));
   }
   mkdirSync(directoryOf(cwd, state.runId), { recursive: true });
-  return execute(state, cwd, options);
+  return claimed(directoryOf(cwd, state.runId), state.runId, () => execute(state, cwd, options));
 }
 
 /**
@@ -312,10 +325,19 @@ export async function run(input: Flow, options: RunOptions = {}): Promise<RunSta
 export async function resume(
   runId: string,
   value: unknown,
-  options: RunOptions & { from?: string } = {},
+  options: RunOptions & { from?: string; gate?: string; revision?: number } = {},
 ): Promise<RunState> {
   const cwd = resolve(options.cwd ?? process.cwd());
+  // Name a missing run before the claim path, whose directory cannot exist.
+  read(cwd, runId);
+  return claimed(directoryOf(cwd, runId), runId, async () => {
   const state = read(cwd, runId);
+
+  if (options.revision !== undefined && options.revision !== (state.revision ?? 0)) {
+    throw new Refused(
+      `the run ${runId} moved from revision ${options.revision} to ${state.revision ?? 0}. Read the run and answer the question it asks now.`,
+    );
+  }
 
   // The two ways in exclude each other, and one taken in silence over the
   // other sent a run forward when a person meant to send it back.
@@ -328,6 +350,11 @@ export async function resume(
   if (value !== undefined) {
     if (state.status !== "waiting" || !state.waitingFor) {
       throw new Refused(`the run ${runId} is ${state.status}, so it takes no value`);
+    }
+    if (options.gate !== undefined && options.gate !== state.waitingFor) {
+      throw new Refused(
+        `the run ${runId} waits at "${state.waitingFor}", and this answer is for "${options.gate}". Read the question it asks now.`,
+      );
     }
 
     const step = state.flow.steps.find((candidate) => candidate.id === state.waitingFor);
@@ -382,6 +409,7 @@ export async function resume(
   state.waitingFor = undefined;
   state.question = undefined;
   return execute(state, cwd, options);
+  });
 }
 
 /**
@@ -404,17 +432,18 @@ function refuse(problems: string[]): void {
  * had died, while the index beside them said "stopped". One answer, one status.
  */
 export function standing(state: RunState): RunState {
-  if (state.status !== "running" || alive(state.pid)) return state;
+  if (state.status !== "running" || alive(state.pid, state.processGroup)) return state;
   return { ...state, status: "stopped" };
 }
 
-export function alive(pid: number | undefined): boolean {
+export function alive(pid: number | undefined, group = false): boolean {
   if (pid === undefined) return false;
   try {
     // Signal 0 asks after a process and sends it nothing.
-    process.kill(pid, 0);
+    process.kill(group ? -pid : pid, 0);
     return true;
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EPERM") return true;
     return false;
   }
 }
@@ -470,6 +499,7 @@ export function read(cwd: string, runId: string): RunState {
 export function keep(directory: string, state: RunState): void {
   const file = join(directory, "state.json");
   const temp = `${file}.writing`;
+  state.revision = (state.revision ?? 0) + 1;
   writeFileSync(temp, JSON.stringify(state, null, 2));
   renameSync(temp, file);
 }
@@ -479,12 +509,52 @@ function directoryOf(cwd: string, runId: string): string {
 }
 
 async function execute(state: RunState, cwd: string, options: RunOptions, answered?: Step): Promise<RunState> {
+  try {
+    return await drive(state, cwd, options, answered);
+  } catch (error) {
+    if (options.signal?.aborted) {
+      state.status = "stopped";
+      state.pid = undefined;
+      delete state.error;
+      // The daemon owns the full process group. Only it knows when every
+      // descendant has ended, so only it writes the terminal state there.
+      if (process.env[RUN_GROUP] === "1") return state;
+      keep(directoryOf(cwd, state.runId), state);
+      const fallback = options.harness ?? pi;
+      const convert = (id: string, handle: string, trajectoryId: string, at: string) => {
+        const step = state.flow.steps.find((candidate) => candidate.id === id);
+        if (!step) return undefined;
+        return harnessFor(state.flow, step, fallback, options.harnesses).toTrajectory(handle, trajectoryId, at);
+      };
+      writeFileSync(
+        join(directoryOf(cwd, state.runId), "trajectory.json"),
+        JSON.stringify(toAtif(state, version, convert), null, 2),
+      );
+      options.onEvent?.({ type: "run_end", status: "stopped" });
+      return state;
+    }
+    const why = reasonOf(error);
+    state.status = "failed";
+    state.error = `the run failed while it recorded its state: ${why}`;
+    state.pid = undefined;
+    try {
+      keep(directoryOf(cwd, state.runId), state);
+    } catch (storage) {
+      throw new Error(`the run failed with "${why}", and Orchy could not save that failure: ${reasonOf(storage)}`);
+    }
+    options.onEvent?.({ type: "run_end", status: "failed", error: state.error });
+    throw new Error(why);
+  }
+}
+
+async function drive(state: RunState, cwd: string, options: RunOptions, answered?: Step): Promise<RunState> {
   const harness = options.harness ?? pi;
   const emit = options.onEvent ?? (() => {});
   // ADR 0005: the state on disk is the run. A gate and a crash recover the same way.
   const directory = directoryOf(cwd, state.runId);
   // The pid rides with the state, so a reader knows a live run from a dead one.
   state.pid = process.pid;
+  if (process.env[RUN_GROUP] === "1") state.processGroup = true;
   const save = () => keep(directory, state);
   // Each step may use a different harness, so each trajectory is read by its own.
   const convert = (id: string, handle: string, trajectoryId: string, at: string) => {
@@ -516,6 +586,7 @@ async function execute(state: RunState, cwd: string, options: RunOptions, answer
   }
 
   for (;;) {
+    if (options.signal?.aborted) throw cancellation(options.signal);
     // The steps of a run change while it runs: a computed fanout becomes its
     // members, and a cycle back past the step that gave the list turns them
     // into that step again. So the order is read from the flow each turn, and
@@ -569,7 +640,12 @@ async function execute(state: RunState, cwd: string, options: RunOptions, answer
       // A question is a prompt for a person, so a name in it takes its value the
       // same way. It did not: a flow that takes a ticket asked about
       // "{{ ticket }}" itself, in every run, and two waiting runs read alike.
-      return stop(state, waiting.id, ask(waiting, state), close, emit);
+      try {
+        return stop(state, waiting.id, ask(waiting, state), close, emit);
+      } catch (error) {
+        const why = error instanceof Error ? error.message : String(error);
+        return fail(state, why, close, emit);
+      }
     }
 
     const feedback = state.feedback;
@@ -591,7 +667,7 @@ async function execute(state: RunState, cwd: string, options: RunOptions, answer
       emit({ type: "step_start", step: step.id });
       const watch = (note: Note) => emit({ type: "output", step: step.id, ...note });
       const chosen = harnessFor(state.flow, step, harness, options.harnesses);
-      const record = await runStep(step, state, cwd, chosen, watch, feedback);
+      const record = await runStep(step, state, cwd, chosen, watch, feedback, options.signal);
       // ADR 0005: the state on disk is the run, so a wave that dies keeps what settled.
       state.steps[step.id] = record;
       save();
@@ -731,21 +807,17 @@ function reasons(state: RunState): string | undefined {
  * last one who could fix it, so the run says so where the question would be.
  */
 function ask(step: GateStep, state: RunState): string {
-  try {
-    const asked = fill(step.question, step.id, valuesOf(step, state));
-    // The person answers with the work in front of them, the way an agent step
-    // reads the steps before it in its prompt. A brace name reads no step
-    // value, so this block is the one way a question shows one.
-    const inputs = Object.fromEntries(
-      step.needs
-        .filter((need) => state.steps[need]?.value !== undefined)
-        .map((need) => [need, state.steps[need]?.value]),
-    );
-    if (Object.keys(inputs).length === 0) return asked;
-    return `${asked}\n\n${block("The values of the steps before this one", inputs)}`;
-  } catch (error) {
-    return error instanceof Error ? error.message : String(error);
-  }
+  const asked = fill(step.question, step.id, valuesOf(step, state), "question");
+  // The person answers with the work in front of them, the way an agent step
+  // reads the steps before it in its prompt. A brace name reads no step
+  // value, so this block is the one way a question shows one.
+  const inputs = Object.fromEntries(
+    step.needs
+      .filter((need) => state.steps[need]?.value !== undefined)
+      .map((need) => [need, state.steps[need]?.value]),
+  );
+  if (Object.keys(inputs).length === 0) return asked;
+  return `${asked}\n\n${block("The values of the steps before this one", inputs)}`;
 }
 
 function stop(
@@ -774,7 +846,9 @@ async function pool<T>(items: T[], limit: number, work: (item: T) => Promise<voi
       await work(items[index] as T);
     }
   });
-  await Promise.all(workers);
+  const results = await Promise.allSettled(workers);
+  const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+  if (failed) throw failed.reason;
 }
 
 /** The step names a harness, then the flow does, then the run does. */
@@ -1011,6 +1085,7 @@ async function runStep(
   harness: Harness,
   watch: (note: Note) => void,
   feedback?: RunState["feedback"],
+  signal?: AbortSignal,
 ): Promise<StepRecord> {
   const startedAt = new Date().toISOString();
   const at = () => ({ startedAt, endedAt: new Date().toISOString() });
@@ -1051,21 +1126,39 @@ async function runStep(
               ...(state.memory && step.memory !== "none" ? { memory: state.memory.key } : {}),
             },
             watch,
+            signal,
           )
         : (step as CallStep).command !== undefined
-          ? { value: await callCommand(step as CallStep, inputs, cwd, watch, values, state) }
-          : { value: await callModule(step as CallStep, inputs, cwd, watch, values, state) };
+          ? { value: await callCommand(step as CallStep, inputs, cwd, watch, values, state, signal) }
+          : { value: await callModule(step as CallStep, inputs, cwd, watch, values, state, signal) };
+    // The live value and the value on disk must be the same JSON value.
+    result.value = jsonValue(result.value, step.id);
+
+    // Invariant 5: what the step really did, not what it says it did.
+    const touched = changed(before, take(state.flow.workspace, cwd));
+    const record: StepRecord = { ...at(), status: "done", value: result.value, trajectory: result.trajectory };
+    if (prompt !== undefined) record.prompt = prompt;
+    if (result.cost !== undefined) record.cost = result.cost;
+    if (touched.length > 0) record.changed = touched;
+
+    const broken = brokenPromise(changesOf(state.flow, step), touched);
+    if (broken) return { ...record, status: "failed", error: `step "${step.id}" ${broken}` };
+
+    const problem = contractProblem(step, result.value);
+    if (problem) return { ...record, status: "failed", error: problem };
+    return record;
   } catch (error) {
+    if (signal?.aborted) throw cancellation(signal);
     // The message, and not the word "Error" in front of it. A reader of a
     // console reads the reason, not the class of the object that carried it.
-    const why = error instanceof Error ? error.message : String(error);
+    const why = reasonOf(error);
     // A harness that wrote a record before it failed hands it over here, so the
     // step a reader most wants to read is not the one with nothing in it.
-    const held = (error as { trajectory?: string }).trajectory;
+    const held = fieldOf<string>(error, "trajectory");
     // A step that failed still spent what it spent. ADR 0019 counts it, so the
     // harness hands the cost over on the error and the record keeps it.
-    const paid = (error as { cost?: number }).cost;
-    return {
+    const paid = fieldOf<number>(error, "cost");
+    const failed: StepRecord = {
       ...at(),
       status: "failed",
       error: why,
@@ -1073,25 +1166,43 @@ async function runStep(
       ...(paid === undefined ? {} : { cost: paid }),
       ...(prompt ? { prompt } : {}),
     };
+    // A component can fail after it changes the workspace. Keep the available
+    // record, but do not replace the first failure with a second snapshot fault.
+    if (before) {
+      try {
+        const touched = changed(before, take(state.flow.workspace, cwd));
+        if (touched.length > 0) failed.changed = touched;
+      } catch {}
+    }
+    return failed;
   }
+}
 
-  // Invariant 5: what the step really did, not what it says it did.
-  const touched = changed(before, take(state.flow.workspace, cwd));
-  const record: StepRecord = { ...at(), status: "done", value: result.value, trajectory: result.trajectory };
-  if (prompt !== undefined) record.prompt = prompt;
-  // A step that broke a rule spent its tokens all the same, so the record keeps
-  // the cost and the budget counts it. See ADR 0019.
-  if (result.cost !== undefined) record.cost = result.cost;
-  if (touched.length > 0) record.changed = touched;
+function reasonOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
-  const broken = brokenPromise(changesOf(state.flow, step), touched);
-  if (broken) return { ...record, status: "failed", error: `step "${step.id}" ${broken}` };
+function fieldOf<T>(value: unknown, key: string): T | undefined {
+  return typeof value === "object" && value !== null ? (value as Record<string, T>)[key] : undefined;
+}
 
-  // Invariant 2: the value must match the contract of the step.
-  const problem = contractProblem(step, result.value);
-  if (problem) return { ...record, status: "failed", error: problem };
-
-  return record;
+/** Gives back one JSON value, or refuses a value that persistence would change. */
+function jsonValue(value: unknown, step: string): unknown {
+  const seen = new WeakSet<object>();
+  const check = (held: unknown, at: string): void => {
+    if (held === null || typeof held === "string" || typeof held === "boolean") return;
+    if (typeof held === "number" && Number.isFinite(held)) return;
+    if (typeof held !== "object") {
+      throw new Error(`step "${step}" returned ${at} as ${typeof held}, which is not JSON`);
+    }
+    if (seen.has(held)) throw new Error(`step "${step}" returned a cycle at ${at}, which is not JSON`);
+    seen.add(held);
+    if (Array.isArray(held)) held.forEach((one, index) => check(one, `${at}[${index}]`));
+    else for (const [key, one] of Object.entries(held)) check(one, `${at}.${key}`);
+    seen.delete(held);
+  };
+  check(value, "its value");
+  return JSON.parse(JSON.stringify(value)) as unknown;
 }
 
 /**
@@ -1192,27 +1303,6 @@ function buildPrompt(
   return parts.join("\n\n");
 }
 
-/** Every pair of braces, so a name that resolves to nothing is never missed. */
-const NAMED = /\{\{([^{}]*)\}\}/g;
-
-/**
- * A name in a prompt takes its value. A name that nothing supplies fails the
- * step: a model that reads the braces, or the word `undefined`, does the wrong
- * work and says nothing about it.
- */
-function fill(text: string, step: string, values: Record<string, unknown>): string {
-  return text.replace(NAMED, (_all, inside: string) => {
-    const name = inside.trim();
-    if (!Object.hasOwn(values, name)) {
-      throw new Error(
-        `step "${step}" reads "{{ ${name} }}" in its prompt, and nothing supplies "${name}". Add it to "takes" on the flow, or to "with" on the step.`,
-      );
-    }
-    const value = values[name];
-    return typeof value === "string" ? value : JSON.stringify(value);
-  });
-}
-
 function block(title: string, value: unknown): string {
   return `## ${title}\n\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\`\n`;
 }
@@ -1234,6 +1324,7 @@ async function callModule(
   watch: (note: Note) => void,
   values: Record<string, unknown>,
   state: RunState,
+  signal?: AbortSignal,
 ): Promise<unknown> {
   // A shipped component lives with Orchy, so its name is not a path. ADR 0026.
   const named = String(step.module);
@@ -1254,7 +1345,12 @@ async function callModule(
   // `cwd` rides fourth, so a shipped component acts where the steps act. The
   // run rides fifth, so a component writes where the run reads. A component
   // that wants none of the last four ignores them, as before. ADR 0029.
-  const run: Called = { runId: state.runId, step: step.id, ...(state.memory ? { memory: state.memory } : {}) };
+  const run: Called = {
+    runId: state.runId,
+    step: step.id,
+    ...(state.memory ? { memory: state.memory } : {}),
+    ...(signal ? { signal } : {}),
+  };
   return (module.default as (...args: unknown[]) => unknown)(inputs, say, values, cwd, run);
 }
 
@@ -1273,6 +1369,7 @@ function callCommand(
   watch: (note: Note) => void,
   values: Record<string, unknown>,
   state: RunState,
+  signal?: AbortSignal,
 ): Promise<unknown> {
   return new Promise((keep, refuse) => {
     // A command is a process, so it learns who it is the way a process learns
@@ -1280,40 +1377,57 @@ function callCommand(
     // run reads, and records this run and this step as the writer, from the
     // same variable the door reads. A flow that remembers nothing sets no key.
     // ADR 0026, ADR 0029.
+    const grouped = ownsGroup();
     const child = spawn(String(step.command), {
       cwd,
       shell: true,
       stdio: ["pipe", "pipe", "pipe"],
       env: environmentOf({ run: state.runId, step: step.id, memory: state.memory?.key }),
+      detached: grouped && process.platform !== "win32",
     });
+    const stopped = cancelChild(child, signal, grouped);
     let out = "";
     let said = "";
     let rest = "";
-    child.stdout.on("data", (chunk: Buffer) => (out += chunk.toString()));
+    let outputStop: Promise<void> | undefined;
+    let fault: Error | undefined;
+    child.stdout.on("data", (chunk: Buffer) => {
+      if (fault) return;
+      out += chunk.toString();
+      if (Buffer.byteLength(out) <= COMMAND_OUTPUT) return;
+      fault = new Error(`step "${step.id}" wrote more than 4 MiB to stdout. A command writes one JSON value there.`);
+      outputStop = terminate(child, grouped);
+    });
     child.stderr.on("data", (chunk: Buffer) => {
       said = `${said}${chunk.toString()}`.slice(-4000);
       const parts = `${rest}${chunk.toString()}`.split("\n");
-      rest = parts.pop() ?? "";
-      for (const line of parts) if (line.trim()) watch({ kind: "text", text: line });
+      rest = (parts.pop() ?? "").slice(-4000);
+      for (const line of parts) if (line.trim()) watch({ kind: "text", text: line.slice(0, 4000) });
     });
     child.on("error", (error) => {
-      refuse(new Error(`step "${step.id}" could not run its command: ${error.message}`));
+      fault ??= new Error(`step "${step.id}" could not run its command: ${error.message}`);
     });
     child.on("close", (code) => {
-      if (rest.trim()) watch({ kind: "text", text: rest });
-      if (code !== 0) {
-        const why = said.trim() || out.trim().slice(-1000) || "and said nothing";
-        return refuse(new Error(`step "${step.id}" ended with the code ${code}: ${why}`));
-      }
-      try {
-        keep(JSON.parse(out));
-      } catch {
-        refuse(
-          new Error(
-            `step "${step.id}" answered something that is not JSON: ${out.trim().slice(0, 300) || "nothing"}. The command writes its value to stdout and its notes to stderr.`,
-          ),
-        );
-      }
+      void (async () => {
+        await outputStop;
+        await stopped();
+        if (signal?.aborted) return refuse(cancellation(signal));
+        if (rest.trim()) watch({ kind: "text", text: rest });
+        if (fault) return refuse(fault);
+        if (code !== 0) {
+          const why = said.trim() || out.trim().slice(-1000) || "and said nothing";
+          return refuse(new Error(`step "${step.id}" ended with the code ${code}: ${why}`));
+        }
+        try {
+          keep(JSON.parse(out));
+        } catch {
+          refuse(
+            new Error(
+              `step "${step.id}" answered something that is not JSON: ${out.trim().slice(0, 300) || "nothing"}. The command writes its value to stdout and its notes to stderr.`,
+            ),
+          );
+        }
+      })();
     });
     // A command that reads no input ends before the write, and the pipe says
     // EPIPE. That says nothing about the step, so it is not a failure.

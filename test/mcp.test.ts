@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -187,6 +187,67 @@ test("the door refuses a flow file outside the root, and names the root", async 
     });
     assert.match(leak.refused as string, /outside the root/);
     assert.equal(existsSync(join(root, "flows", "leak", "good.md")), false);
+  } finally {
+    site.close();
+  }
+});
+
+test("symbolic links cannot carry MCP reads or writes outside the root", async () => {
+  const root = project();
+  const outside = mkdtempSync(join(tmpdir(), "orchy-mcp-outside-"));
+  writeFileSync(join(outside, "flow.yaml"), formatFlow(GATED as never));
+  symlinkSync(outside, join(root, "link"));
+  const site = talking(root);
+  try {
+    const read = await site.call("read_flow", { path: "link/flow.yaml" });
+    assert.match(read.refused as string, /outside the root/);
+
+    const write = await site.call("write_flow", {
+      path: "link/new.yaml",
+      yaml: formatFlow(GATED as never),
+    });
+    assert.match(write.refused as string, /outside the root/);
+    assert.equal(existsSync(join(outside, "new.yaml")), false);
+  } finally {
+    site.close();
+  }
+});
+
+test("read_flow refuses each named file that resolves outside the root", async () => {
+  const root = project();
+  const outside = mkdtempSync(join(tmpdir(), "orchy-mcp-named-outside-"));
+  writeFileSync(join(outside, "named.md"), "outside");
+  symlinkSync(outside, join(root, "link"));
+  const site = talking(root);
+  const flows = [
+    { name: "prompt", steps: [{ id: "one", kind: "agent", prompt: "link/named.md", tools: ["read"], returns: NUMBER }] },
+    { name: "module", steps: [{ id: "one", kind: "call", module: "link/named.md", returns: NUMBER }] },
+    { name: "inner", steps: [{ id: "one", kind: "flow", flow: "link/named.md" }] },
+  ];
+  try {
+    for (const [index, flow] of flows.entries()) {
+      const name = `named-${index}.yaml`;
+      writeFileSync(join(root, name), formatFlow(flow as never));
+      const answer = await site.call("read_flow", { path: name });
+      assert.match(answer.refused as string, /outside the root/);
+    }
+  } finally {
+    site.close();
+  }
+});
+
+test("list_flows refuses a registered file replaced by an outside link", async () => {
+  const root = project();
+  const outside = mkdtempSync(join(tmpdir(), "orchy-mcp-row-outside-"));
+  writeFileSync(join(outside, "flow.yaml"), formatFlow(GATED as never));
+  const site = talking(root);
+  try {
+    await site.call("write_flow", { path: "flow.yaml", yaml: formatFlow(GATED as never) });
+    unlinkSync(join(root, "flow.yaml"));
+    symlinkSync(join(outside, "flow.yaml"), join(root, "flow.yaml"));
+
+    const listed = await site.call("list_flows");
+    assert.match(listed.refused as string, /outside the root/);
   } finally {
     site.close();
   }
@@ -466,16 +527,18 @@ test("an agent writes a flow, runs it, answers the gate, and reads the value of 
     };
     await until(async () => (await row())?.status === "waiting");
     assert.equal((await row())?.question?.startsWith("Is the count correct?"), true);
+    const waiting = (await site.call("read_run", { runId })).body as { state: { revision: number } };
+    const revision = waiting.state.revision;
 
     // The contract of the gate refuses a wrong answer at the door.
-    const crossed = await site.call("resume_run", { runId, value: { approved: "yes please" } });
+    const crossed = await site.call("resume_run", { runId, value: { approved: "yes please" }, revision });
     assert.match(crossed.refused as string, /breaks the contract/);
 
     // The answer crosses the protocol as JSON text, and text that is not JSON says so.
     const loose = await site.call("resume_run", { runId, value: "yes please" });
     assert.match(loose.refused as string, /not JSON/);
 
-    const answered = await site.call("resume_run", { runId, value: '{"approved":true}', step: "ask" });
+    const answered = await site.call("resume_run", { runId, value: '{"approved":true}', step: "ask", revision });
     assert.equal(answered.refused, undefined);
     await until(async () => (await row())?.status === "done");
 

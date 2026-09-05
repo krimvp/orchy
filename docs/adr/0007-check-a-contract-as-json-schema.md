@@ -20,9 +20,10 @@ one. The two roles do not overlap.
 
 ## Consequences
 
-Ajv is the only schema library that Orchy needs to run a flow. TypeBox is an
-optional peer: it is a type-only import, so nothing calls it at run time, and a
-user who writes a flow in YAML never installs it.
+Ajv is the only schema library that Orchy calls to run a flow. TypeBox is a
+required peer because the public TypeScript declarations name its schema type.
+It is a type-only import, so nothing calls it at run time. A user who writes a
+flow in YAML does not import it.
 
 The Claude Code adapter adds no schema library. The `claude` command takes the
 contract with `--json-schema` and answers `structured_output`, so the contract

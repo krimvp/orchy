@@ -2,18 +2,25 @@
 
 This module is how a run sees what a step really did to the files, as opposed
 to what the step says it did. It takes a snapshot of a git workspace — the
-HEAD commit plus the `git status --porcelain -uall` code of every path — and
+HEAD commit plus the `git status --porcelain=v1 -z -uall` code of every path — and
 diffs two snapshots into a list of changes, each named by kind: not only
 "changed" but "deleted", "renamed", "added", "restored", or, for HEAD itself,
 "moved". Invariant 5 (a step changes only what its flow promises) is checked
 against this list, and the kind matters because a reader who sees "changed"
 where the truth is "deleted" loses the worst case in the vaguest word.
 
-Two details of the snapshot are deliberate. Untracked files are listed one by
+Three details of the snapshot are deliberate. Untracked files are listed one by
 one (`-uall`), because git otherwise collapses a new directory into a single
 entry such as `docs/`, and a promise about paths cannot read that. And paths
 under `.orchy/` are excluded, because the run state of Orchy is not the work
-of the step.
+of the step. NUL separates names, so quotes, newlines, and Unicode stay in the
+name. A rename holds its two NUL-separated names.
+
+The hash reads a regular file and the target text of a symbolic link. It also
+reads the executable bits. Thus, another change is visible when the Git status
+letters stay the same. Git still decides which paths exist. It omits ignored
+files. A submodule records its Git status, but Orchy does not inspect files in
+the submodule.
 
 ## Exports
 
@@ -36,8 +43,8 @@ of the step.
 
 - `Snapshot` — `{ head, files }`: the HEAD commit hash and a map from path to
   its two-character porcelain status, a space, and a short hash of what the file
-  holds — `"M  1f0a8c3e5b7d9a2c"`, and the hash is empty for a rename and for a
-  path that git no longer reads, where the status characters carry the news.
+  holds — `"M  1f0a8c3e5b7d9a2c"`. A symbolic link hashes its target text. A
+  path that Git no longer reads has an empty hash.
   `changed()` compares the whole string, so a second write to a file that
   another step already changed is a change too, and not a status that stayed the
   same.

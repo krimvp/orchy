@@ -58,7 +58,7 @@ the study did. **later** names what the work after it added.
 | flow step | `with` | **later.** The values the flow it names takes |
 | agent, call | `changes` | **changed.** `nothing`, `{ paths }`, or **later** `{ except }` |
 | agent | `memory` | **later.** The word `none`, which keeps the memory of the flow away from this step |
-| agent, call | `with` | **new.** A value the step holds |
+| agent, call, gate | `with` | **new** on agent and call; **later** on gate. A value the step holds |
 | agent, call | `takes` | **later.** JSON Schema. The values that must reach the step |
 | agent, call | `fanout` | a list of members, or **later** `{ step, key }` |
 | agent, call, gate, flow step | `cycle` | `{ to, when, limit, policy }`, and `when` takes `failed`. **later,** a gate holds one |
@@ -127,6 +127,10 @@ table in `flow.ts` names what each kind of step holds and what it must have, and
 the check refuses everything else. It names the kinds that do hold a field, so a
 user learns where it belongs. Every row above is now a sentence that names the
 step and the fix.
+
+Later work made this check total over JSON. A null flow, step, or fanout member
+now returns a problem with its path. A wrong list or primitive field does the
+same. `validate()` does not throw over malformed JSON.
 
 ## Finding 2 — `changes` is a boolean, and one value is legal
 
@@ -408,7 +412,9 @@ harness can hold a bound, and no harness that Orchy drives holds one. See [ADR
   that holds a promise runs one step at a time, which closes this inside one
   run and not between two. `src/run.ts` names the limit in a `ponytail`.
 - **A join over a skipped branch.** A step that needs two branches is skipped
-  when either one is. An optional need would lift it, and it is a second
-  concept with a second question for every user.
+  when either one is. The proposed `after` field waits for passed or skipped
+  steps, carries only passed values, and never accepts a failure. The current
+  `needs` rule stays unchanged. This needs branch and failure tests before it
+  changes the flow shape.
 - **A prompt that lives in the file.** A prompt is a path, so the editor draws a
   flow whose words it cannot write.

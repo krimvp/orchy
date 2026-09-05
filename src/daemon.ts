@@ -1,9 +1,12 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { schemaProblem } from "./flow.ts";
+import { RUN_GROUP, terminate } from "./process.ts";
 import { type RunEvent, keep, read, standing } from "./run.ts";
 import { type Store, type StoredEvent, due, metricsAt, open, rowOf } from "./store.ts";
+import { claimed, processIdentity } from "./claim.ts";
 
 /**
  * How many runs the daemon starts at the same time. A run is a process that
@@ -50,6 +53,9 @@ export interface Order {
   with?: Record<string, unknown>;
   /** The run and the step that placed this order, when a step did. ADR 0025. */
   startedBy?: { runId: string; step: string };
+  /** The durable child slot held before this order entered a process-local queue. */
+  reservation?: string;
+  plannedRunId?: string;
 }
 
 interface Job extends Ticket {
@@ -63,6 +69,11 @@ interface Job extends Ticket {
   value?: unknown;
   /** The step the run goes back to, when a person names one. */
   from?: string;
+  /** The gate and state revision this answer was written for. */
+  gate?: string;
+  revision?: number;
+  reservation?: string;
+  plannedRunId?: string;
   /**
    * The run reached its end, or a gate, and the child is on its way out. The
    * job lives on until the process closes, and a person who answers a gate the
@@ -72,6 +83,8 @@ interface Job extends Ticket {
   /** The child has closed. The job may still hold a ticket, for its reason. */
   done?: boolean;
   child?: ChildProcess;
+  /** The one stop of this owned process tree. */
+  stopping?: Promise<void>;
   stderr: string;
 }
 
@@ -93,6 +106,8 @@ export function daemon(root: string, beats = true) {
   const jobs = new Map<number, Job>();
   const notes = new Map<string, StoredEvent[]>();
   const queue: Job[] = [];
+  const stops = new Map<string, Promise<boolean>>();
+  const failedStops = new Map<string, Job>();
   const listeners = new Set<(notice: Notice) => void>();
   let running = 0;
   let tickets = 0;
@@ -100,14 +115,21 @@ export function daemon(root: string, beats = true) {
   let order = 0;
   // A child ends after the daemon closes, so every handler stops here first.
   let closed = false;
+  let closing: Promise<void> | undefined;
 
   const tell = (notice: Notice) => {
     if (closed) return;
     for (const listener of listeners) listener(notice);
   };
   const told = () => tell({ kind: "queue", pending: [...jobs.values()].map(ticketOf) });
+  const release = (job: Job) => {
+    if (!job.reservation) return;
+    store.releaseStart(job.reservation);
+    job.reservation = undefined;
+  };
 
   const finish = (job: Job) => {
+    if (job.done) return;
     job.done = true;
     // A run that reached a run id lives in the index from here on. A job that
     // ended with a reason of its own keeps its ticket, so the reason reaches a
@@ -125,12 +147,36 @@ export function daemon(root: string, beats = true) {
     if (!state) return;
     const row = rowOf(state, job.path, metricsAt(join(runs, job.runId, "trajectory.json")));
     // The child has gone, so a run that still says running is stopped.
-    if (ended && row.status === "running") row.status = "stopped";
+    if (ended && row.status === "running" && !stops.has(job.runId) && !failedStops.has(job.runId)) {
+      row.status = "stopped";
+    }
     store.saveRun(row);
+  };
+
+  /** Writes the terminal state after no owned process can change the workspace. */
+  const markStopped = (job: Job) => {
+    if (!job.runId) return;
+    const state = stateOf(root, job.runId);
+    if (!state || (state.status !== "running" && state.status !== "waiting")) return;
+    state.status = "stopped";
+    state.pid = undefined;
+    delete state.waitingFor;
+    delete state.question;
+    keep(join(runs, job.runId), state);
+    store.saveRun(rowOf(state, job.path, metricsAt(join(runs, job.runId, "trajectory.json"))));
+    const event = store.addEvent(job.runId, { type: "run_end", status: "stopped" });
+    tell({ kind: "event", runId: job.runId, event });
   };
 
   const receive = (job: Job, event: RunEvent) => {
     if (closed) return;
+    if (!job.runId && event.type !== "run_start") {
+      throw new Error(`the run control channel sent "${event.type}" before it named the run`);
+    }
+    if (event.type === "run_start" && job.runId && event.runId !== job.runId) {
+      throw new Error(`the run control channel named ${event.runId}, but this job drives ${job.runId}`);
+    }
+    if (job.settled) throw new Error(`the run control channel sent "${event.type}" after the run settled`);
     if (event.type === "run_start") {
       job.runId = event.runId;
       told();
@@ -156,6 +202,8 @@ export function daemon(root: string, beats = true) {
 
     const stored = store.addEvent(job.runId, event, (order += 1));
     if (event.type !== "step_start") record(job);
+    // The indexed child now counts in `starts.most`, so its reservation can go.
+    if (event.type === "run_start") release(job);
     tell({ kind: "event", runId: job.runId, event: stored });
   };
 
@@ -177,27 +225,45 @@ export function daemon(root: string, beats = true) {
             job.runId as string,
             ...(job.value === undefined ? [] : [JSON.stringify(job.value)]),
             ...(job.from ? ["--from", job.from] : []),
+            ...(job.gate ? ["--gate", job.gate] : []),
+            ...(job.revision === undefined ? [] : ["--revision", String(job.revision)]),
           ]
         : [
             "run",
             job.path,
             ...(job.with ? ["--with", JSON.stringify(job.with)] : []),
             ...(job.startedBy ? ["--started-by", JSON.stringify(job.startedBy)] : []),
+            ...(job.plannedRunId ? ["--run-id", job.plannedRunId] : []),
           ];
-      const child = spawn(process.execPath, [CLI, ...args, "--harness", job.harness, "--events"], {
+      const child = spawn(process.execPath, [CLI, ...args, "--harness", job.harness, "--event-fd", "3"], {
         cwd: root,
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: ["ignore", "pipe", "pipe", "pipe"],
+        detached: process.platform !== "win32",
+        env: { ...process.env, [RUN_GROUP]: "1" },
       });
       job.child = child;
-      lines(child, (line) => receive(job, JSON.parse(line) as RunEvent));
+      if (job.reservation && job.plannedRunId && child.pid) {
+        store.attachStart(job.reservation, job.plannedRunId, child.pid, processIdentity(child.pid));
+      }
+      // Component stdout is ordinary output. It never shares the control channel.
+      child.stdout?.resume();
+      lines(
+        child.stdio[3] as NodeJS.ReadableStream,
+        (line) => receive(job, eventOf(line)),
+        (error) => {
+          job.error = error.message;
+        },
+      );
       child.stderr?.on("data", (chunk: Buffer) => {
         job.stderr = `${job.stderr}${chunk.toString()}`.slice(-4000);
       });
       child.on("error", (error) => {
         job.error = error.message;
+        release(job);
         finish(job);
       });
       child.on("close", (code) => {
+        if (!job.runId) release(job);
         record(job, true);
         // A run ends, so a run falls behind the list. The index bounds what it holds here.
         if (!closed) store.trim();
@@ -219,7 +285,13 @@ export function daemon(root: string, beats = true) {
   /** Puts a run in the queue. It starts when a slot is free. */
   const start = (order: Order): Ticket => {
     tickets += 1;
-    const job: Job = { ...order, ticket: tickets, queuedAt: new Date().toISOString(), stderr: "" };
+    const job: Job = {
+      ...order,
+      ticket: tickets,
+      queuedAt: new Date().toISOString(),
+      stderr: "",
+      ...(order.reservation ? { plannedRunId: order.plannedRunId ?? randomUUID() } : {}),
+    };
     jobs.set(job.ticket, job);
     queue.push(job);
     pump();
@@ -263,7 +335,7 @@ export function daemon(root: string, beats = true) {
      * this daemon, so nothing else would ever tell the index about it.
      */
     catchUp(): void {
-      if (!closed) store.index(runs, false);
+      if (!closed) store.index(runs, false, new Set([...stops.keys(), ...failedStops.keys()]));
     },
 
     start,
@@ -273,7 +345,8 @@ export function daemon(root: string, beats = true) {
      * ended, from the step `from` names or where the run stood. The child
      * checks the details again; this refuses only what a row already refutes.
      */
-    resume(runId: string, value: unknown, harness: string, from?: string, step?: string): Ticket {
+    resume(runId: string, value: unknown, harness: string, from?: string, step?: string, revision?: number): Ticket {
+      if (stops.has(runId)) throw new Error(`the run ${runId} is stopping, so it cannot continue`);
       const row = store.run(runId);
       if (!row) throw new Error(`this daemon holds no run ${runId}`);
       if (row.status === "running") throw new Error(`the run ${runId} is running, so there is nothing to continue`);
@@ -291,9 +364,22 @@ export function daemon(root: string, beats = true) {
       // ticket, redrew the same form, and left its reason on another page under
       // the words "did not start". The command line refused it at once, and now
       // both surfaces say the same thing at the same moment.
+      const current = stateOf(root, runId);
       if (value !== undefined) {
+        if (revision === undefined) {
+          throw new Error(`the answer for run ${runId} holds no revision. Read the run and send its current revision.`);
+        }
         const problem = answerProblem(root, runId, value, step);
         if (problem) throw new Error(problem);
+        if (revision !== undefined && revision !== (current?.revision ?? 0)) {
+          throw new Error(
+            `the run ${runId} moved from revision ${revision} to ${current?.revision ?? 0}. Read the run and answer the question it asks now.`,
+          );
+        }
+        const expected = revision ?? current?.revision ?? 0;
+        if ([...jobs.values()].some((job) => job.runId === runId && job.revision === expected && !job.done)) {
+          throw new Error(`the run ${runId} already has an answer for revision ${expected}`);
+        }
       }
       // The state on disk can say waiting before the pipe delivers the word,
       // and an answer given in that moment used to be refused here. The state
@@ -315,6 +401,8 @@ export function daemon(root: string, beats = true) {
         resumes: true,
         value,
         from,
+        gate: value === undefined ? undefined : (step ?? current?.waitingFor),
+        revision: value === undefined ? undefined : (revision ?? current?.revision ?? 0),
         queuedAt: new Date().toISOString(),
         stderr: "",
       };
@@ -326,16 +414,51 @@ export function daemon(root: string, beats = true) {
     },
 
     /** Ends a run that is on the way. The state on disk keeps what it reached. */
-    stop(runId: string): boolean {
-      const job = [...jobs.values()].find((one) => one.runId === runId);
-      if (!job?.child) return false;
-      // A stop is an end a person asked for, so the child that answers it did
-      // not fail to start. Without this the SIGTERM read as a start that never
-      // happened, and the run sat in the queue for ever as "did not start",
-      // quoting whatever its child had last written to stderr.
-      job.settled = true;
-      job.child.kill("SIGTERM");
-      return true;
+    async stop(runId: string): Promise<boolean> {
+      const existing = stops.get(runId);
+      if (existing) return existing;
+      const failed = failedStops.get(runId);
+      const related = [
+        ...[...jobs.values()].filter((job) => job.runId === runId && !job.done),
+        ...(failed ? [failed] : []),
+      ];
+      if (related.length === 0) return false;
+
+      const stopping = (async () => {
+        // A queued continuation must not start when the active child closes.
+        // It was accepted for a state that this stop now ends.
+        for (let at = queue.length - 1; at >= 0; at -= 1) {
+          const job = queue[at] as Job;
+          if (job.runId !== runId) continue;
+          queue.splice(at, 1);
+          job.done = true;
+          jobs.delete(job.ticket);
+          if (job.reservation) store.releaseStart(job.reservation);
+        }
+
+        const active = related.filter((job) => job.child && (!job.done || job === failed));
+        for (const job of active) {
+          // A stop is an end a person asked for, so it is not a failed start.
+          job.settled = true;
+          job.stopping = terminate(job.child as ChildProcess, true);
+        }
+        try {
+          await Promise.all(active.map((job) => job.stopping as Promise<void>));
+        } catch (error) {
+          failedStops.set(runId, (active[0] ?? related[0]) as Job);
+          throw error;
+        }
+        failedStops.delete(runId);
+        markStopped((active[0] ?? related[0]) as Job);
+        told();
+        return true;
+      })();
+      stops.set(runId, stopping);
+      try {
+        return await stopping;
+      } finally {
+        stops.delete(runId);
+      }
     },
 
     /**
@@ -343,17 +466,21 @@ export function daemon(root: string, beats = true) {
      * dead daemon left behind. The state on disk is the run, so the truth goes
      * there, and the row and the listeners hear the same status.
      */
-    abandon(runId: string): boolean {
-      const state = stateOf(root, runId);
-      if (!state || (state.status !== "waiting" && state.status !== "running")) return false;
-      state.status = "stopped";
-      delete state.waitingFor;
-      delete state.question;
-      keep(join(runs, runId), state);
-      const path = store.run(runId)?.path ?? null;
-      store.saveRun(rowOf(state, path, metricsAt(join(runs, runId, "trajectory.json"))));
-      tell({ kind: "event", runId, event: store.addEvent(runId, { type: "run_end", status: "stopped" }) });
-      return true;
+    async abandon(runId: string): Promise<boolean> {
+      if (stops.has(runId) || failedStops.has(runId)) return false;
+      return claimed(join(runs, runId), runId, async () => {
+        if (stops.has(runId) || failedStops.has(runId)) return false;
+        const state = stateOf(root, runId);
+        if (!state || (state.status !== "waiting" && state.status !== "running")) return false;
+        state.status = "stopped";
+        delete state.waitingFor;
+        delete state.question;
+        keep(join(runs, runId), state);
+        const path = store.run(runId)?.path ?? null;
+        store.saveRun(rowOf(state, path, metricsAt(join(runs, runId, "trajectory.json"))));
+        tell({ kind: "event", runId, event: store.addEvent(runId, { type: "run_end", status: "stopped" }) });
+        return true;
+      });
     },
 
     /** What the steps of a run said while they worked, as far back as memory holds. */
@@ -369,7 +496,7 @@ export function daemon(root: string, beats = true) {
     // A run whose process has gone is not running, whatever its file still says.
     state: (runId: string) => {
       const state = stateOf(root, runId);
-      return state && standing(state);
+      return state && (stops.has(runId) || failedStops.has(runId) ? state : standing(state));
     },
 
     trajectory(runId: string): unknown {
@@ -394,12 +521,33 @@ export function daemon(root: string, beats = true) {
      * process and its state is on disk, so a dispatcher's runs outlive the
      * step that started them. ADR 0025.
      */
-    close(kill = true): void {
+    close(kill = true): Promise<void> {
+      if (closing) return closing;
       closed = true;
       clearInterval(beat);
-      if (kill) for (const job of jobs.values()) job.child?.kill("SIGTERM");
+      if (!kill) {
+        for (const job of jobs.values()) {
+          if (!job.child || job.done) release(job);
+          else job.reservation = undefined;
+        }
+      }
       listeners.clear();
-      store.close();
+      closing = (async () => {
+        if (kill) {
+          const active = [...jobs.values()].filter((job) => job.child && !job.done);
+          await Promise.all(
+            active.map(async (job) => {
+              job.settled = true;
+              job.stopping ??= terminate(job.child as ChildProcess, true);
+              await job.stopping;
+              markStopped(job);
+            }),
+          );
+        }
+        if (kill) for (const job of jobs.values()) release(job);
+        store.close();
+      })();
+      return closing;
     },
   };
 }
@@ -442,11 +590,58 @@ function stateOf(root: string, runId: string) {
 }
 
 /** The child writes one JSON event for each line, so a partial line waits here. */
-function lines(child: ChildProcess, take: (line: string) => void): void {
+function lines(stream: NodeJS.ReadableStream, take: (line: string) => void, fault: (error: Error) => void): void {
   let rest = "";
-  child.stdout?.on("data", (chunk: Buffer) => {
+  stream.on("data", (chunk: Buffer) => {
     const parts = `${rest}${chunk.toString()}`.split("\n");
     rest = parts.pop() ?? "";
-    for (const line of parts) if (line.trim()) take(line);
+    for (const line of parts) {
+      if (!line.trim()) continue;
+      try {
+        take(line);
+      } catch (error) {
+        fault(error instanceof Error ? error : new Error(String(error)));
+      }
+    }
   });
+  stream.on("end", () => {
+    if (rest.trim()) fault(new Error("the run control channel ended with an incomplete event"));
+  });
+}
+
+/** A control line must hold one complete event, with the fields its type needs. */
+function eventOf(line: string): RunEvent {
+  let value: unknown;
+  try {
+    value = JSON.parse(line);
+  } catch {
+    throw new Error("the run control channel wrote malformed JSON");
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("the run control channel wrote a value that is not an event");
+  }
+  const event = value as Record<string, unknown>;
+  const text = (name: string) => typeof event[name] === "string";
+  const number = (name: string) => typeof event[name] === "number" && Number.isFinite(event[name]);
+  const optionalText = (name: string) => event[name] === undefined || text(name);
+  const valid =
+    (event.type === "run_start" && text("runId")) ||
+    (event.type === "step_start" && text("step")) ||
+    (event.type === "output" &&
+      text("step") &&
+      ["prompt", "text", "reasoning", "tool", "result"].includes(String(event.kind)) &&
+      text("text")) ||
+    (event.type === "step_end" &&
+      text("step") &&
+      ["done", "failed"].includes(String(event.status)) &&
+      optionalText("error")) ||
+    (event.type === "skip" && text("step") && text("why")) ||
+    (event.type === "cycle" && text("step") && text("to") && number("count") && number("limit")) ||
+    (event.type === "accept" && text("step") && text("to") && number("limit")) ||
+    (event.type === "waiting" && text("step") && text("question")) ||
+    (event.type === "run_end" &&
+      ["running", "waiting", "done", "failed", "stopped"].includes(String(event.status)) &&
+      optionalText("error"));
+  if (!valid) throw new Error(`the run control channel wrote an invalid "${String(event.type)}" event`);
+  return value as RunEvent;
 }
