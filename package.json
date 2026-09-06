@@ -40,7 +40,8 @@
   },
   "files": [
     "dist",
-    "ui/dist"
+    "ui/dist",
+    "starter"
   ],
   "publishConfig": {
     "access": "public"
@@ -49,11 +50,13 @@
     "build": "tsc -p tsconfig.build.json",
     "test": "node --test \"test/*.test.ts\"",
     "check": "tsc --noEmit",
+    "audit:dependencies": "npm audit --audit-level=moderate && npm --prefix ui audit --audit-level=moderate",
     "daemon": "node src/cli.ts daemon",
-    "ui:build": "npm --prefix ui install && npm --prefix ui run build",
+    "ui:build": "npm --prefix ui ci && npm --prefix ui run build",
     "ui:dev": "npm --prefix ui run dev",
     "clean": "rm -rf dist ui/dist *.tgz",
-    "prepack": "npm run ui:build && npm run build"
+    "prepack": "npm run ui:build && npm run build",
+    "package:smoke": "npm run ui:build && npm run build && node test/package-smoke.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^0.84.1",
@@ -67,10 +70,5 @@
   },
   "peerDependencies": {
     "@sinclair/typebox": "^0.34.41"
-  },
-  "peerDependenciesMeta": {
-    "@sinclair/typebox": {
-      "optional": true
-    }
   }
 }

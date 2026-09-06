@@ -6,6 +6,40 @@ steps, enforces the rules, and records what each step did.
 A coding agent is good at one step and poor at a long one. So Orchy holds the
 control flow, and gives each step one job, one tool list, and one contract.
 
+## Quick start
+
+Install Orchy, then make an empty directory.
+
+```bash
+npm install -g @krimvp/orchy
+mkdir orchy-first-run
+cd orchy-first-run
+orchy init
+orchy check flow.yaml
+orchy run flow.yaml
+```
+
+The bundled `flow.yaml` uses `hello.mjs`. It calls no model and needs no
+account. The final value includes `Orchy ran a model-free flow.`
+
+The starter also holds one complete Claude Code flow. It includes its prompt
+and the note that the prompt reads. Install Claude Code and log in before this
+run. See [A model comes from the harness](#a-model-comes-from-the-harness).
+
+```bash
+orchy check agent.yaml
+orchy run agent.yaml
+```
+
+The check does not call a model. It reports model authentication as unknown.
+The run can spend money under the terms of the configured Claude account. Its
+final value holds a one-sentence `summary` of `note.txt`.
+
+`orchy check` imports a TypeScript or JavaScript flow file. Module initialization
+can run code. A YAML flow is data and has no module initialization.
+
+## A larger flow
+
 ```yaml
 name: code-and-review
 workspace: { kind: git, path: . }
@@ -88,6 +122,11 @@ A prompt asks. Orchy enforces.
    a step may change: it does not require the step to change anything, and the
    record covers the workspace, so a step that writes outside it moved nothing
    that Orchy can see.
+
+One active Orchy run claims one Git working tree. A second run over the same
+tree fails before a step starts. This is mutual exclusion between Orchy runs.
+A person or another program can still change the tree. Use separate Git
+worktrees when runs need files of their own.
 
 `validate()` refuses a promise that no workspace can check, a tool that the
 harness of the flow does not supply, a model name that the harness cannot read,
@@ -174,7 +213,9 @@ none when the third did.
 ## Commands
 
 ```bash
-orchy check flow.yaml                      # say what is wrong, and what it takes
+orchy init                                  # write the bundled starter without replacing a file
+orchy check flow.yaml                      # check local setup, and say what the flow takes
+orchy check flow.yaml --with '{"issue":412}' # check the values too
 orchy run flow.yaml                        # or flow.ts
 orchy run flow.yaml --with '{"issue":412}' # the values the flow takes
 orchy run flow.yaml --harness claude       # for a flow that names none
@@ -205,12 +246,19 @@ a person. `--events` writes one JSON event for each line to the output stream
 instead, and prints no state there, so a parent process reads the events alone.
 That is how the daemon reads a run.
 
-`orchy check <flow file>` reads a flow, and every flow it holds, and says what
-is wrong with it. It runs nothing and spends nothing.
+`orchy check <flow file>` checks the shape, prompt files, component files,
+prompt names, state path, Git workspace, and harness command. Give it `--with`
+to check the values too. It starts no step and spends nothing. A successful
+harness version check does not prove model access or authentication. The check
+reports both as unknown because it does not call a model.
 
-`orchy memory keys | list <scope> | add <scope> <text> | forget <scope> [id]`
-reads and writes what runs record. A scope is the key a flow declares. `forget`
-takes the id of one entry, and drops the whole scope without one. See
+The check imports a TypeScript or JavaScript flow file. Its module initialization
+can run code. Use YAML when the check must read data only.
+
+`orchy memory keys` prints exact current keys as `key=v2:...` and old flat
+files as `legacy=...`. Make a current key with `orchy memory key root`,
+`orchy memory key flow <name>`, or `orchy memory key scope <name>`, then pass
+the printed reference to `list`, `add`, or `forget`. See
 [What a run remembers](#what-a-run-remembers).
 
 `orchy mcp` serves the Model Context Protocol on stdin and stdout, so a coding
@@ -364,12 +412,27 @@ Every entry names the run and the step that wrote it, so a wrong one is found
 and dropped:
 
 ```bash
-orchy memory list ticket-proj-14
-orchy memory forget ticket-proj-14 a41f9c02
+KEY="$(orchy memory key scope 'ticket/PROJ-14')"
+orchy memory list "$KEY"
+orchy memory forget "$KEY" a41f9c02
 ```
 
-The store is a line of JSON for each entry, under `.orchy/memory`, one file for
-each key. It is not the run: losing it loses no run. See [ADR
+The key encodes whether this is root, flow, or custom memory and preserves its
+exact text. Use `scope=<literal>` when a custom scope itself starts with `v2:`,
+`legacy=`, or `key=`. The store is a line of JSON for each entry, under
+`.orchy/memory`, one file for each key. It is not the run: losing it loses no
+run.
+
+Old files cannot reveal the scope that made their flattened name. Migration is
+therefore explicit and copy-preserving:
+
+```bash
+orchy memory keys
+TARGET="$(orchy memory key scope 'ticket/PROJ-14')" # or key flow / key root
+orchy memory migrate legacy=ticket-proj-14 "$TARGET"
+```
+
+The old source remains for review and later cleanup. See [ADR
 0029](./docs/adr/0029-memory-is-a-declared-scope.md).
 
 ## How it works
@@ -403,6 +466,8 @@ Orchy needs Node 22.18 or later.
 
 ```bash
 npm install -g @krimvp/orchy
+mkdir orchy-first-run && cd orchy-first-run
+orchy init
 orchy run flow.yaml
 ```
 
@@ -504,6 +569,7 @@ Node calls it experimental and prints a warning when it starts.
 npm test        # every test, with node --test
 npm run check   # the compiler
 npm run build   # compile src to dist, as a publish does
+npm run audit:dependencies # root and page dependency advisories
 ```
 
 CI runs both, and the page build, on every push to main and on every pull
@@ -570,6 +636,11 @@ file outside its root.
 `release-notes`, `decision`, and `dependency-audit` examples. A test reads every
 example and holds it to `validate()`. It starts no run of one.
 
+**Packed and run without a model:** the bundled starter. CI installs the exact
+package in a clean consumer, imports its public API, compiles its public types,
+and completes `flow.yaml`. The same gate checks that the package holds the UI
+and every starter file.
+
 **Not built:** a memory that expires or that ranks what it answers with, an
 OpenTelemetry exporter, a sandbox, a
 timeout for a step, a workspace for one step, a workspace for each run, and
@@ -577,8 +648,8 @@ any user or password on the daemon. Invariant 1 names the sandbox gap
 rather than hiding it, and [ADR
 0018](./docs/adr/0018-a-tool-list-is-not-a-sandbox.md) records the probes that
 closed the question. A note arrives when the harness writes a line, so a step
-reports by the turn and not by the word. Two runs in one working directory
-disturb each other, and the code names that limit.
+reports by the turn and not by the word. Active Orchy runs over one Git working
+tree run one at a time. This claim does not isolate a run from other programs.
 
 The API can still change, and the name on npm is `@krimvp/orchy`, because
 the bare name belongs to another package.
@@ -592,6 +663,8 @@ the bare name belongs to another package.
   weak.
 - [docs/usability.md](./docs/usability.md) — one usability run over the whole
   product, and what it found.
+- [docs/accessibility.md](./docs/accessibility.md) — one keyboard and narrow
+  screen check, with the browser limit stated.
 - [docs/sweep.md](./docs/sweep.md) — fifteen agents wrote 401 flows against the
   product for an hour, and what the 167 findings closed.
 - [docs/adr](./docs/adr) — every decision that is hard to reverse, and why.

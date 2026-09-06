@@ -3,12 +3,16 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { dirname, extname, isAbsolute, join, normalize, relative, resolve } from "node:path";
+import { dirname, extname, join, resolve } from "node:path";
 import type { Daemon } from "./daemon.ts";
 import { COMPONENTS, type Flow, OPERATORS, type Step, validate } from "./flow.ts";
-import { ADAPTERS, MODELS, TOOLS } from "./harness.ts";
+import { ADAPTERS, COSTS, MODELS, TOOLS } from "./harness.ts";
 import { loadFlow, readFlow } from "./load.ts";
+import { missing, unfilled } from "./readiness.ts";
 import { formatFlow, parseFlow } from "./yaml.ts";
+import { withinRoot } from "./root.ts";
+
+export { missing, unfilled } from "./readiness.ts";
 
 const UI = resolve(import.meta.dirname, "..", "ui", "dist");
 
@@ -49,6 +53,7 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
         // What a model name looks like for each harness, so the editor hints
         // instead of leaving a free field to guesswork.
         models: Object.fromEntries(ADAPTERS.map((name) => [name, MODELS[name].write])),
+        costs: COSTS,
         // The components Orchy ships, so the editor hints and holds no copy.
         components: COMPONENTS.map((name) => `orchy:${name}`),
       }),
@@ -64,14 +69,15 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
         daemon.catchUp();
         const runs = daemon.store.runs();
         return daemon.store.flows().map((row) => {
+          const path = withinRoot(daemon.root, row.path);
           const schedule = daemon.store.schedule(row.id);
           return {
             ...row,
             // The file has the last word on the harness, and the row is only
             // what a step that names none falls back to. The list showed the
             // row, so every flow that wrote `harness: claude` read as `pi`.
-            harness: harnessInFile(row.path) ?? row.harness,
-            description: descriptionOf(row.path),
+            harness: harnessInFile(path) ?? row.harness,
+            description: descriptionOf(path),
             lastRun: runs.find((run) => run.path === row.path) ?? null,
             schedule: schedule ? { everyMinutes: schedule.everyMinutes, lastAt: schedule.lastAt } : null,
             hook: daemon.store.hook(row.id) ?? null,
@@ -128,7 +134,7 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
         if (!Number.isFinite(everyMinutes) || everyMinutes < 15) {
           throw new Error("a schedule fires at most every 15 minutes");
         }
-        const flow = await readFlow(row.path);
+        const flow = await readFlow(row.path, process.cwd(), daemon.root);
         const values = body.with as Record<string, unknown> | undefined;
         const needed = ((flow.takes?.required as string[] | undefined) ?? []).filter(
           (key) => values?.[key] === undefined || values[key] === "",
@@ -156,15 +162,17 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
       "POST",
       "/api/flows/new",
       async (_p, body) => {
+        for (const field of ["name", "path", "harness"] as const) {
+          if (body[field] !== undefined && typeof body[field] !== "string") {
+            throw new Error(`"${field}" must be a string`);
+          }
+        }
         const root = resolve(daemon.root);
         const name = String(body.name ?? "").trim();
         const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
         const given = String(body.path ?? "").trim();
         if (!slug && !given) throw new Error("give the new flow a name");
-        const path = resolve(root, given || join("flows", slug, "flow.yaml"));
-        if (!under(root, path)) {
-          throw new Error(`the flow at "${path}" is outside the root "${root}". Put the flow file under the root.`);
-        }
+        const path = withinRoot(root, given || join("flows", slug, "flow.yaml"));
         if (!/\.ya?ml$/.test(path)) throw new Error(`a new flow is a YAML file, so its path ends with .yaml`);
         if (existsSync(path)) throw new Error(`there is already a file at "${path}". Register it instead.`);
         const harness = adapterOf(body.harness);
@@ -178,7 +186,9 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
           // where there is one. The scaffold declared git wherever it landed,
           // and the first run of a flow in a plain directory died at the check.
           ...(isRepository(dirname(path)) ? { workspace: { kind: "git" as const, path: "." } } : {}),
-          budget: 5,
+          // Droid reports no dollars. A budget there would look enforced and
+          // stop the first agent step when its unknown cost reaches the run.
+          ...(COSTS[harness as keyof typeof COSTS] === "unknown" ? {} : { budget: 5 }),
           steps: [
             {
               id: "work",
@@ -214,14 +224,11 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
       "/api/flows",
       async (_p, body) => {
         const root = resolve(daemon.root);
-        const path = resolve(root, String(body.path ?? ""));
+        const path = withinRoot(root, String(body.path ?? ""));
         // Every step acts in the root, so a flow file above it is another project.
-        if (!under(root, path)) {
-          throw new Error(`the flow at "${path}" is outside the root "${root}". Put the flow file under the root.`);
-        }
         if (!existsSync(path)) throw new Error(`there is no file at "${path}"`);
         const harness = adapterOf(body.harness);
-        const flow = await readFlow(path);
+        const flow = await readFlow(path, process.cwd(), daemon.root);
         return daemon.store.addFlow(path, flow.name || path, harness);
       },
     ],
@@ -231,7 +238,7 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
       "/api/flows/:id",
       async (parameters) => {
         const row = flowRow(daemon, parameters.id as string);
-        const flow = await readFlow(row.path);
+        const flow = await readFlow(row.path, process.cwd(), daemon.root);
         return {
           row,
           flow,
@@ -254,7 +261,8 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
         const flow = body.flow as Flow;
         const problems = validate(flow);
         if (problems.length > 0) return { problems, saved: false };
-        writeFileSync(row.path, formatFlow(flow));
+        const path = withinRoot(daemon.root, row.path);
+        writeFileSync(path, formatFlow(flow));
         daemon.store.addFlow(row.path, flow.name, row.harness);
         return { problems, saved: true };
       },
@@ -278,10 +286,7 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
       (_p, _b, request) => {
         const root = resolve(daemon.root);
         const wanted = new URL(request.url ?? "/", "http://orchy").searchParams.get("path") ?? "";
-        const path = resolve(root, wanted);
-        if (!under(root, path)) {
-          throw new Error(`the file at "${path}" is outside the root "${root}"`);
-        }
+        const path = withinRoot(root, wanted);
         if (!existsSync(path)) return { path, exists: false, content: "" };
         // A file this big is not a prompt, and the editor is not the tool for it.
         if (statSync(path).size > 1_000_000) throw new Error(`the file at "${path}" is too large for this editor`);
@@ -294,10 +299,7 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
       "/api/file",
       (_p, body) => {
         const root = resolve(daemon.root);
-        const path = resolve(root, String(body.path ?? ""));
-        if (!under(root, path)) {
-          throw new Error(`the file at "${path}" is outside the root "${root}"`);
-        }
+        const path = withinRoot(root, String(body.path ?? ""));
         // A prompt for a new step names a directory that is not there yet.
         mkdirSync(dirname(path), { recursive: true });
         writeFileSync(path, String(body.content ?? ""));
@@ -327,9 +329,11 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
         // A flow that names no harness runs on the one the daemon holds for its
         // file, so that is the harness the page is answered for.
         const held = path ? daemon.store.flowAt(resolve(daemon.root, path))?.harness : undefined;
+        const problems = validate(flow, held);
         return {
-          problems: validate(flow, held),
-          warnings: path ? [...missing(flow, path), ...unfilled(flow, path)] : unfilled(flow),
+          problems,
+          // Readiness reads fields only after the shape proves they are there.
+          warnings: problems.length > 0 ? [] : path ? [...missing(flow, path), ...unfilled(flow, path)] : unfilled(flow),
         };
       },
     ],
@@ -395,7 +399,8 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
         // The gate the answer was written for, when the caller says. A run that
         // moved on since takes no answer meant for the question it has left.
         const step = typeof body.step === "string" && body.step !== "" ? body.step : undefined;
-        return daemon.resume(runId, body.value, harness, from, step);
+        const revision = Number.isInteger(body.revision) ? Number(body.revision) : undefined;
+        return daemon.resume(runId, body.value, harness, from, step, revision);
       },
     ],
 
@@ -405,10 +410,10 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
     [
       "POST",
       "/api/runs/:id/stop",
-      (parameters) => {
+      async (parameters) => {
         const runId = parameters.id as string;
-        if (daemon.stop(runId)) return { stopped: true };
-        if (daemon.abandon(runId)) return { stopped: true, abandoned: true };
+        if (await daemon.stop(runId)) return { stopped: true };
+        if (await daemon.abandon(runId)) return { stopped: true, abandoned: true };
         const row = daemon.store.run(runId);
         throw new Error(
           row
@@ -450,7 +455,10 @@ export function serve(daemon: Daemon, port: number, host = "127.0.0.1"): Promise
 
   let origins = new Set<string>();
   const server = createServer((request, response) => {
-    void answer(routes, origins, request, response);
+    void answer(routes, origins, request, response).catch((error) => {
+      if (!response.headersSent) send(response, 500, { error: error instanceof Error ? error.message : String(error) });
+      else response.destroy(error instanceof Error ? error : undefined);
+    });
   });
 
   return new Promise((keep, refuse) => {
@@ -477,26 +485,36 @@ async function answer(
   request: IncomingMessage,
   response: ServerResponse,
 ): Promise<void> {
-  const foreign = elsewhere(request, origins);
-  if (foreign) return send(response, 403, { error: foreign });
+  try {
+    const foreign = elsewhere(request, origins);
+    if (foreign) return send(response, 403, { error: foreign });
 
-  const url = new URL(request.url ?? "/", "http://orchy");
-  const method = request.method ?? "GET";
+    const url = new URL(request.url ?? "/", "http://orchy");
+    const method = request.method ?? "GET";
 
-  for (const [verb, pattern, handler] of routes) {
-    const parameters = match(pattern, url.pathname);
-    if (!parameters || verb !== method) continue;
-    try {
+    for (const [verb, pattern, handler] of routes) {
+      const parameters = match(pattern, url.pathname);
+      if (!parameters || verb !== method) continue;
       const value = await handler(parameters, await read(request), request, response);
       if (value !== HELD) send(response, 200, value);
-    } catch (error) {
-      send(response, 400, { error: error instanceof Error ? error.message : String(error) });
+      return;
     }
-    return;
-  }
 
-  if (url.pathname.startsWith("/api/")) return send(response, 404, { error: `no route for ${url.pathname}` });
-  file(url.pathname, response);
+    if (url.pathname.startsWith("/api/")) return send(response, 404, { error: `no route for ${url.pathname}` });
+    file(url.pathname, response);
+  } catch (error) {
+    if (response.headersSent) {
+      response.destroy(error instanceof Error ? error : undefined);
+      return;
+    }
+    const message =
+      error instanceof URIError
+        ? "the request path has malformed encoding"
+        : error instanceof Error
+          ? error.message
+          : String(error);
+    send(response, 400, { error: message });
+  }
 }
 
 /**
@@ -540,12 +558,6 @@ function originOf(host: string): string {
   } catch {
     return "";
   }
-}
-
-/** A path is under the root when it reaches it with no step back. */
-export function under(root: string, path: string): boolean {
-  const step = relative(root, path);
-  return step !== "" && !step.startsWith("..") && !isAbsolute(step);
 }
 
 function match(pattern: string, path: string): Params | undefined {
@@ -653,7 +665,7 @@ function isRepository(at: string): boolean {
 function flowRow(daemon: Daemon, id: string) {
   const row = daemon.store.flow(Number(id));
   if (!row) throw new Error(`there is no flow ${id}`);
-  return row;
+  return { ...row, path: withinRoot(daemon.root, row.path) };
 }
 
 /**
@@ -668,16 +680,17 @@ export async function start(
   values: Record<string, unknown> | undefined,
   harness?: string,
   startedBy?: { runId: string; step: string },
+  reservation?: string,
+  plannedRunId?: string,
 ) {
-  const flow = await loadFlow(row.path, daemon.root);
+  const flow = await loadFlow(row.path, daemon.root, [], undefined, daemon.root);
   const problems = validate(flow, harness ?? row.harness);
   if (problems.length > 0) throw new Error(`the flow is not valid:\n- ${problems.join("\n- ")}`);
-  const raw = await readFlow(row.path);
-  const gone = missing(raw, row.path);
+  const gone = missing(flow, row.path);
   if (gone.length > 0) throw new Error(`the flow names files that are not there:\n- ${gone.join("\n- ")}`);
   // A hole in a prompt fails its step at run time, after the steps before it
   // spent money, so the run is refused where a person can still act on it.
-  const holes = unfilled(raw, row.path);
+  const holes = unfilled(flow, row.path);
   if (holes.length > 0) throw new Error(`the flow reads names that nothing supplies:\n- ${holes.join("\n- ")}`);
   // The daemon adds no rule: it passes the values on, and the child checks them.
   return daemon.start({
@@ -686,6 +699,8 @@ export async function start(
     harness: harness ?? row.harness,
     with: values,
     ...(startedBy ? { startedBy } : {}),
+    ...(reservation ? { reservation } : {}),
+    ...(plannedRunId ? { plannedRunId } : {}),
   });
 }
 
@@ -713,93 +728,4 @@ export function descriptionOf(path: string): string {
   } catch {
     return "";
   }
-}
-
-/**
- * The files a flow names that are not there: a prompt, a module, an inner
- * flow. Each path is relative to the flow file, the way the run resolves it.
- */
-/**
- * The brace names a flow reads that nothing supplies: in the question of a
- * gate, and in the prompt file of an agent step, when the file is there to
- * read. Each one fails its step at run time, after the steps before it spent
- * money. `takesProblem` refuses a value outside `takes`, so what a run can
- * supply is exactly what `takes` names, and this check proves a hole. A
- * computed fanout supplies each member values no file names yet, so its
- * prompt is checked by the run and not here.
- */
-export function unfilled(flow: Flow, flowPath?: string, texts?: Record<string, string>): string[] {
-  const takes = ((flow.takes as { properties?: Record<string, unknown> } | undefined)?.properties ?? {}) as Record<
-    string,
-    unknown
-  >;
-  const problems: string[] = [];
-  const check = (step: string, where: string, text: string, held?: Record<string, unknown>) => {
-    for (const [, inside] of text.matchAll(/\{\{([^{}]*)\}\}/g)) {
-      const name = (inside as string).trim();
-      if (Object.hasOwn(takes, name) || (held && Object.hasOwn(held, name))) continue;
-      problems.push(
-        `the step "${step}" reads "{{ ${name} }}" in its ${where}, and nothing supplies "${name}". Add it to "takes" on the flow${
-          where === "prompt" ? ', or to "with" on the step' : ""
-        }.`,
-      );
-    }
-  };
-  const base = flowPath ? dirname(resolve(flowPath)) : undefined;
-  // A text given by the caller stands in for the file, so a prompt is checked
-  // before anything is written. The keys normalize, so "./a.md" finds "a.md".
-  const held =
-    texts && Object.fromEntries(Object.entries(texts).map(([key, text]) => [normalize(key), text]));
-  const readAt = (path?: string): string | undefined => {
-    if (!path) return undefined;
-    if (held && Object.hasOwn(held, normalize(path))) return held[normalize(path)];
-    if (!base || isAbsolute(path)) return undefined;
-    try {
-      return readFileSync(resolve(base, path), "utf8");
-    } catch {
-      return undefined;
-    }
-  };
-  type Named = { id: string; question?: string; prompt?: string; with?: Record<string, unknown>; fanout?: unknown };
-  for (const step of (flow.steps ?? []) as unknown as Named[]) {
-    if (typeof step.question === "string") check(step.id, "question", step.question, step.with);
-    if (step.fanout && !Array.isArray(step.fanout)) continue;
-    if (Array.isArray(step.fanout)) {
-      for (const member of step.fanout as Array<{ name: string; prompt?: string; with?: Record<string, unknown> }>) {
-        const text = readAt(member.prompt ?? step.prompt);
-        // A member's `with` replaces the step's, as `expandFanout` writes it.
-        if (text !== undefined) check(`${step.id}/${member.name}`, "prompt", text, member.with ?? step.with);
-      }
-      continue;
-    }
-    const text = readAt(step.prompt);
-    if (text !== undefined) check(step.id, "prompt", text, step.with);
-  }
-  return problems;
-}
-
-export function missing(flow: Flow, flowPath: string): string[] {
-  const base = dirname(resolve(flowPath));
-  const gone: string[] = [];
-  const check = (step: string, kind: string, path?: string) => {
-    // A shipped component is a name Orchy answers for, not a file to find.
-    if (!path || isAbsolute(path) || path.startsWith("orchy:")) return;
-    if (!existsSync(resolve(base, path))) {
-      gone.push(`the step "${step}" names a ${kind} that is not there: ${path}`);
-    }
-  };
-  // The union of step kinds narrows each field away; this check reads them loosely.
-  type Named = { id: string; prompt?: string; module?: string; flow?: string; fanout?: unknown };
-  for (const step of (flow.steps ?? []) as unknown as Named[]) {
-    check(step.id, "prompt", step.prompt);
-    check(step.id, "module", step.module);
-    check(step.id, "flow file", step.flow);
-    if (Array.isArray(step.fanout)) {
-      for (const member of step.fanout as Array<{ name: string; prompt?: string; module?: string }>) {
-        check(`${step.id}/${member.name}`, "prompt", member.prompt);
-        check(`${step.id}/${member.name}`, "module", member.module);
-      }
-    }
-  }
-  return gone;
 }

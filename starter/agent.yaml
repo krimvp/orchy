@@ -1,0 +1,24 @@
+# Reads the supplied note through one configured Claude Code harness.
+name: first-agent
+harness: claude
+returns:
+  type: object
+  required:
+    - summary
+  properties:
+    summary:
+      type: string
+steps:
+  - id: summarize
+    kind: agent
+    needs: []
+    prompt: prompts/summarize.md
+    tools:
+      - read
+    returns:
+      type: object
+      required:
+        - summary
+      properties:
+        summary:
+          type: string

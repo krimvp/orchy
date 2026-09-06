@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { withTimeout } from "./ticket";
 
 export type Schema = Record<string, unknown>;
 
@@ -149,7 +150,9 @@ export interface Ticket {
   path: string;
   queuedAt: string;
   runId?: string;
+  status: "queued" | "dispatching" | "delivered" | "failed" | "uncertain";
   error?: string;
+  recovery?: string;
 }
 
 export interface StepRecord {
@@ -174,6 +177,8 @@ export interface StepRecord {
 
 export interface RunState {
   runId: string;
+  /** The state version that a gate answer names. Old run files read as zero. */
+  revision?: number;
   flow: Flow;
   /** The values this run supplies for what the flow takes. */
   with?: Record<string, unknown>;
@@ -342,11 +347,14 @@ export const api = {
   trajectory: (runId: string) => call<Atif>(`/api/runs/${runId}/trajectory`),
   /**
    * A value answers a gate. No value continues an ended run, from `from` or
-   * where it stood. `step` is the gate the answer was written for, so an answer
-   * cannot land on a question that arrived while a person was reading.
+   * where it stood. `step` and `revision` name the gate state that the person
+   * read, so an old answer cannot land after a cycle reaches that gate again.
    */
-  resume: (runId: string, value?: unknown, from?: string, step?: string) =>
-    call<Ticket>(`/api/runs/${runId}/resume`, { method: "POST", body: JSON.stringify({ value, from, step }) }),
+  resume: (runId: string, value?: unknown, step?: string, revision?: number, from?: string) =>
+    call<Ticket>(`/api/runs/${runId}/resume`, {
+      method: "POST",
+      body: JSON.stringify({ value, from, step, revision }),
+    }),
   stop: (runId: string) =>
     call<{ stopped: boolean; abandoned?: boolean }>(`/api/runs/${runId}/stop`, { method: "POST" }),
   queue: () => call<Ticket[]>("/api/queue"),
@@ -360,14 +368,29 @@ export const api = {
  */
 export async function follow(ticket: Ticket): Promise<void> {
   for (let turn = 0; turn < 40; turn += 1) {
-    const pending = await api.queue().catch(() => [] as Ticket[]);
+    let pending: Ticket[];
+    try {
+      pending = await withTimeout(api.queue(), 5_000, "The queue did not answer.");
+    } catch {
+      location.hash = "#/";
+      throw new Error(
+        `Orchy accepted ticket ${ticket.ticket}, but the queue did not answer. Open Runs before you start it again.`,
+      );
+    }
     const held = pending.find((one) => one.ticket === ticket.ticket);
+    const state = held;
     // A job leaves the queue when it ends; its run page is the place to read why.
-    if (held?.runId || (!held && ticket.runId)) {
+    if ((state?.runId && (!state.status || state.status === "delivered")) || (!held && ticket.runId)) {
       location.hash = `#/runs/${held?.runId ?? ticket.runId}`;
       return;
     }
-    if (held?.error) throw new Error(held.error);
+    if (state?.status === "failed" || state?.status === "uncertain" || held?.error) {
+      location.hash = "#/";
+      throw new Error(
+        [held?.error, state?.recovery].filter(Boolean).join(" ") ||
+          `Ticket ${ticket.ticket} needs your attention on Runs.`,
+      );
+    }
     if (!held) break;
     await new Promise((rest) => setTimeout(rest, 500));
   }

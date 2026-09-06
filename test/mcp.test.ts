@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 import { daemon } from "../src/daemon.ts";
 import { mcp } from "../src/mcp.ts";
+import { scopeKey } from "../src/memory.ts";
 import { formatFlow } from "../src/yaml.ts";
 
 const COUNT = `export default (inputs: Record<string, unknown>) => ({ count: Object.keys(inputs).length });\n`;
@@ -192,6 +193,67 @@ test("the door refuses a flow file outside the root, and names the root", async 
   }
 });
 
+test("symbolic links cannot carry MCP reads or writes outside the root", async () => {
+  const root = project();
+  const outside = mkdtempSync(join(tmpdir(), "orchy-mcp-outside-"));
+  writeFileSync(join(outside, "flow.yaml"), formatFlow(GATED as never));
+  symlinkSync(outside, join(root, "link"));
+  const site = talking(root);
+  try {
+    const read = await site.call("read_flow", { path: "link/flow.yaml" });
+    assert.match(read.refused as string, /outside the root/);
+
+    const write = await site.call("write_flow", {
+      path: "link/new.yaml",
+      yaml: formatFlow(GATED as never),
+    });
+    assert.match(write.refused as string, /outside the root/);
+    assert.equal(existsSync(join(outside, "new.yaml")), false);
+  } finally {
+    site.close();
+  }
+});
+
+test("read_flow refuses each named file that resolves outside the root", async () => {
+  const root = project();
+  const outside = mkdtempSync(join(tmpdir(), "orchy-mcp-named-outside-"));
+  writeFileSync(join(outside, "named.md"), "outside");
+  symlinkSync(outside, join(root, "link"));
+  const site = talking(root);
+  const flows = [
+    { name: "prompt", steps: [{ id: "one", kind: "agent", prompt: "link/named.md", tools: ["read"], returns: NUMBER }] },
+    { name: "module", steps: [{ id: "one", kind: "call", module: "link/named.md", returns: NUMBER }] },
+    { name: "inner", steps: [{ id: "one", kind: "flow", flow: "link/named.md" }] },
+  ];
+  try {
+    for (const [index, flow] of flows.entries()) {
+      const name = `named-${index}.yaml`;
+      writeFileSync(join(root, name), formatFlow(flow as never));
+      const answer = await site.call("read_flow", { path: name });
+      assert.match(answer.refused as string, /outside the root/);
+    }
+  } finally {
+    site.close();
+  }
+});
+
+test("list_flows refuses a registered file replaced by an outside link", async () => {
+  const root = project();
+  const outside = mkdtempSync(join(tmpdir(), "orchy-mcp-row-outside-"));
+  writeFileSync(join(outside, "flow.yaml"), formatFlow(GATED as never));
+  const site = talking(root);
+  try {
+    await site.call("write_flow", { path: "flow.yaml", yaml: formatFlow(GATED as never) });
+    unlinkSync(join(root, "flow.yaml"));
+    symlinkSync(join(outside, "flow.yaml"), join(root, "flow.yaml"));
+
+    const listed = await site.call("list_flows");
+    assert.match(listed.refused as string, /outside the root/);
+  } finally {
+    site.close();
+  }
+});
+
 test("a root too long to name in the guide is pointed at instead, so the guide is never cut", async () => {
   const root = join(project(), "a-very-long-directory-name".repeat(6));
   mkdirSync(root, { recursive: true });
@@ -219,11 +281,11 @@ test("the door leaves the runs it started to finish", async () => {
   const site = talking(root);
   const slow = { name: "slow", steps: [{ id: "wait", kind: "call", module: "naps.ts", returns: NUMBER }] };
   await site.call("write_flow", { path: "slow.yaml", yaml: formatFlow(slow as never) });
-  const started = (await site.call("run_flow", { path: "slow.yaml" })).body as { runId: string };
+  const started = (await site.call("run_flow", { path: "slow.yaml" })).body as { ticket: number; runId: string };
 
   // The door goes. The run is its own process and its state is on disk, so a
   // dispatcher's runs outlive the step that started them. ADR 0025.
-  site.engine.close(false);
+  await site.engine.close(false);
   await until(async () => {
     try {
       const state = JSON.parse(
@@ -234,6 +296,12 @@ test("the door leaves the runs it started to finish", async () => {
       return false;
     }
   });
+  const recovered = daemon(root, false);
+  try {
+    assert.equal(recovered.pending().some((ticket) => ticket.ticket === started.ticket), false);
+  } finally {
+    await recovered.close(false);
+  }
 });
 
 test("a missing prompt is a warning the write answers, and run_flow refuses the flow until it is there", async () => {
@@ -466,16 +534,18 @@ test("an agent writes a flow, runs it, answers the gate, and reads the value of 
     };
     await until(async () => (await row())?.status === "waiting");
     assert.equal((await row())?.question?.startsWith("Is the count correct?"), true);
+    const waiting = (await site.call("read_run", { runId })).body as { state: { revision: number } };
+    const revision = waiting.state.revision;
 
     // The contract of the gate refuses a wrong answer at the door.
-    const crossed = await site.call("resume_run", { runId, value: { approved: "yes please" } });
+    const crossed = await site.call("resume_run", { runId, value: { approved: "yes please" }, revision });
     assert.match(crossed.refused as string, /breaks the contract/);
 
     // The answer crosses the protocol as JSON text, and text that is not JSON says so.
     const loose = await site.call("resume_run", { runId, value: "yes please" });
     assert.match(loose.refused as string, /not JSON/);
 
-    const answered = await site.call("resume_run", { runId, value: '{"approved":true}', step: "ask" });
+    const answered = await site.call("resume_run", { runId, value: '{"approved":true}', step: "ask", revision });
     assert.equal(answered.refused, undefined);
     await until(async () => (await row())?.status === "done");
 
@@ -518,20 +588,20 @@ const REMEMBERING = {
   status: "running",
   steps: {},
   cycles: {},
-  memory: { key: "ticket-proj-14", most: 20 },
+  memory: { key: scopeKey("ticket/PROJ-14"), most: 20 },
 };
 
 test("a step records through the door, and reads back only the store of its own run", async () => {
   const root = project();
   standing(root, REMEMBERING);
   // A second run, of another ticket, whose store the first must not reach.
-  standing(root, { ...REMEMBERING, runId: "r2", memory: { key: "ticket-proj-99", most: 20 } });
+  standing(root, { ...REMEMBERING, runId: "r2", memory: { key: scopeKey("ticket/PROJ-99"), most: 20 } });
 
   const site = talking(root, { runId: "r1", step: "code" });
   const other = talking(root, { runId: "r2", step: "code" });
   try {
     const written = await site.call("remember", { text: "the parser lives in src/yaml.ts", tags: ["where"] });
-    assert.equal((written.body as { scope: string }).scope, "ticket-proj-14");
+    assert.equal((written.body as { scope: string }).scope, scopeKey("ticket/PROJ-14"));
     // The entry names the run and the step, so a wrong one is found and dropped.
     const entry = (written.body as { entry: { run: string; step: string; id: string } }).entry;
     assert.equal(entry.run, "r1");
@@ -553,7 +623,7 @@ test("a step records through the door, and reads back only the store of its own 
     // step cannot name the store of another ticket. There is nothing to ask for.
     const elsewhere = (await other.call("recall_memory", {})).body as { of: number; scope: string };
     assert.equal(elsewhere.of, 0);
-    assert.equal(elsewhere.scope, "ticket-proj-99");
+    assert.equal(elsewhere.scope, scopeKey("ticket/PROJ-99"));
   } finally {
     other.close();
     site.close();

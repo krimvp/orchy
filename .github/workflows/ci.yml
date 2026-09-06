@@ -7,6 +7,16 @@ on:
     branches: [main]
 
 jobs:
+  dependency-audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.18'
+      - run: npm run audit:dependencies
+
   build:
     runs-on: ubuntu-latest
     steps:
@@ -17,5 +27,4 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run check
-      - run: npm run build
-      - run: npm run ui:build
+      - run: npm run package:smoke

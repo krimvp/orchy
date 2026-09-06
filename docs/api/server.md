@@ -14,13 +14,17 @@ three go through one checked `start`: the flow must validate, every file it
 names (a prompt, a module, an inner flow) must exist, and no question or
 prompt may read a brace name that nothing supplies (`unfilled`), before a
 child spends money on it. Every route that touches a file resolves the path
-against the daemon's root and refuses one that steps outside it.
+against the daemon's root. It also resolves symbolic links. An existing file
+must have a canonical path inside the root. A new file must have its nearest
+existing parent there.
 
 The server trusts no one but its own pages. It has no user and no password,
 and it starts an agent that can hold `bash`, so every request is checked
 against the set of origins the daemon answers to: a `Host` that is not its own
 name is refused (that is how DNS rebinding starts), and an `Origin` from
-another page is refused (that is a cross-site request). Both answer `403`.
+another page is refused (that is a cross-site request). Both answer `403`. A
+malformed route or body answers a controlled `400`. The next request still
+reaches the daemon.
 When the server listens on a loopback address, `127.0.0.1`, `[::1]`, and
 `localhost` all count as its own name, since a person types either one. The
 one exception a person makes on purpose is a webhook token: `POST
@@ -58,8 +62,8 @@ run.
   | `GET /api/runs/:id/trajectory` | The run's parsed `trajectory.json`, or an error while it has written none. |
   | `POST /api/runs/:id/resume` | Continues a run and returns a fresh `Ticket`. `body.value` answers the gate of a waiting run; `body.from` names the step to go back to. Without `body.harness` it uses the harness of the flow the run came from, falling back to `"pi"`. |
   | `POST /api/runs/:id/stop` | `{ stopped: true }` when a live child heard the signal, `{ stopped: true, abandoned: true }` when no child drove the run — one waiting at a gate, or one a dead daemon left — and it was marked stopped where it stands. A run that is already over answers with the reason instead. |
-  | `GET /api/queue` | Every ticket still pending, queued or running. |
-  | `DELETE /api/queue/:ticket` | Drops a ticket, typically one that ended in error. |
+  | `GET /api/queue` | Every durable ticket over this root, with `status`: `queued`, `dispatching`, `delivered`, `failed`, or `uncertain`. Failed and uncertain tickets carry concrete `recovery` text. |
+  | `DELETE /api/queue/:ticket` | Drops a failed ticket or acknowledges an uncertain one. Refuses queued, dispatching, and live delivered work. Acknowledging uncertainty does not prove that the child did or did not start. |
   | `GET /api/events` | A server-sent event stream of every daemon notice. |
   | `GET /api/runs/:id/events` | The same stream held to one run. It first replays the run's stored events and recent output notes in the order they happened, then follows live. |
 

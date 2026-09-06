@@ -40,8 +40,8 @@ what changed.
 
 ## The limits, stated
 
-- The door keeps the one rule of the daemon: a flow path stays under the
-  root. `write_flow` refuses a path outside it.
+- The door keeps the one rule of the daemon: a flow path and its symbolic
+  links stay under the root. `write_flow` refuses a path outside it.
 - `write_flow` refuses a flow that `validate()` refuses, and its answer holds
   every problem. A person saves a broken draft through the editor. An agent
   corrects the draft and writes again, so a broken flow never reaches the

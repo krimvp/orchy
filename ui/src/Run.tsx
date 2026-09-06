@@ -11,9 +11,14 @@ import {
   useLoad,
   useNotices,
 } from "./api";
+import { beginJsonEdit, missingRequired, readFields, requiredDefaults, shapeOf, unreadableFields, writeField } from "./contract";
 import { Graph, type Mark } from "./Graph";
 import { Loading, length, said, when } from "./Runs";
+import { waitForTicket, withTimeout } from "./ticket";
 import { Trajectory } from "./Trajectory";
+
+const UNKNOWN_DELIVERY = "The daemon did not answer. Delivery is unknown. Open Runs before you send it again.";
+const UNKNOWN_STOP = "The daemon did not answer. The result is unknown. Read this run before you stop it again.";
 
 export function Run({ runId }: { runId: string }) {
   const { events: all } = useNotices(runId);
@@ -26,6 +31,24 @@ export function Run({ runId }: { runId: string }) {
   // Once a person picks a step, the page stops following the run for them.
   const picked = useRef(false);
   const [fault, setFault] = useState<string>();
+  const acting = useRef(false);
+  const [busy, setBusy] = useState(false);
+
+  const act = (work: () => Promise<unknown>): Promise<void> => {
+    if (acting.current) return Promise.resolve();
+    acting.current = true;
+    setBusy(true);
+    setFault(undefined);
+    return work()
+      .then(() => {
+        setFault(undefined);
+      })
+      .catch((problem: Error) => setFault(problem.message))
+      .finally(() => {
+        acting.current = false;
+        setBusy(false);
+      });
+  };
 
   // What the run did, and what its steps said while they did it.
   const events = all.filter((event) => event.type !== "output");
@@ -46,7 +69,7 @@ export function Run({ runId }: { runId: string }) {
     if (!picked.current && follow) setChosen(follow);
   }, [follow]);
 
-  if (error) return <p className="bad">{error}</p>;
+  if (error) return <p className="bad" role="alert">{error}</p>;
   if (!value) return <Loading lines={4} />;
 
   const { state: held, row } = value;
@@ -88,27 +111,36 @@ export function Run({ runId }: { runId: string }) {
         {runId}
       </p>
 
-      <Hero
-        state={state}
-        live={live}
-        gate={gate}
-        onOpen={pick}
-        onAnswer={(answer) =>
-          api
-            // The answer names the gate the page drew it for, so it cannot land
-            // on a question that arrived while a person was reading this one.
-            .resume(runId, answer, undefined, state.waitingFor)
-            .then(() => (setFault(undefined), again()))
-            .catch((problem: Error) => setFault(problem.message))
-        }
-        onResume={(from) =>
-          api
-            .resume(runId, undefined, from)
-            .then(() => (setFault(undefined), again()))
-            .catch((problem: Error) => setFault(problem.message))
-        }
-      />
-      {fault && <p className="bad">{fault}</p>}
+      <div aria-live="polite" aria-busy={busy}>
+        <Hero
+          state={state}
+          live={live}
+          gate={gate}
+          onOpen={pick}
+          busy={busy}
+          onAnswer={(answer) =>
+            act(() =>
+              // The answer names the gate the page drew it for, so it cannot land
+              // on a question that arrived while a person was reading this one.
+              withTimeout(
+                  api.resume(runId, answer, state.waitingFor, state.revision ?? 0),
+                  10_000,
+                  UNKNOWN_DELIVERY,
+                )
+                .then((ticket) => waitForTicket(ticket, state, () => api.run(runId).then((one) => one.state), api.queue))
+                .then(again),
+            )
+          }
+          onResume={(from) =>
+            act(() =>
+              withTimeout(api.resume(runId, undefined, undefined, undefined, from), 10_000, UNKNOWN_DELIVERY)
+                .then((ticket) => waitForTicket(ticket, state, () => api.run(runId).then((one) => one.state), api.queue))
+                .then(again),
+            )
+          }
+        />
+      </div>
+      {fault && <p className="bad" role="alert">{fault}</p>}
 
       <Progress steps={state.flow.steps} marks={marks} chosen={chosen} onPick={pick} />
 
@@ -186,31 +218,29 @@ export function Run({ runId }: { runId: string }) {
         {(state.status === "running" || state.status === "waiting") && (
           <button
             className="danger"
+            disabled={busy}
             onClick={() =>
-              void api
-                .stop(runId)
-                .then(() => (setFault(undefined), again()))
-                .catch((problem: Error) => setFault(problem.message))
+              void act(() => withTimeout(api.stop(runId), 10_000, UNKNOWN_STOP).then(again))
             }
           >
-            Stop this run
+            {busy ? "Working…" : "Stop this run"}
           </button>
         )}
         {(state.status === "done" || state.status === "failed" || state.status === "stopped") && row?.path && (
           <button
             className="button"
+            disabled={busy}
             onClick={() =>
-              void api
-                .flows()
-                .then((flows) => {
+              void act(() =>
+                api.flows().then((flows) => {
                   const found = flows.find((one) => one.path === row.path);
                   if (!found) throw new Error("This flow is not registered any more, so register it first.");
-                  return api.startFlow(found.id, state.with).then(followTicket);
-                })
-                .catch((problem: Error) => setFault(problem.message))
+                  return withTimeout(api.startFlow(found.id, state.with), 10_000, UNKNOWN_DELIVERY).then(followTicket);
+                }),
+              )
             }
           >
-            Run it again{state.with ? ", with the same values" : ""}
+            {busy ? "Starting…" : `Run it again${state.with ? ", with the same values" : ""}`}
           </button>
         )}
       </div>
@@ -241,12 +271,20 @@ export function Run({ runId }: { runId: string }) {
                 // keep their work, and this one onward runs again.
                 state.status === "done" || state.status === "failed" || state.status === "stopped"
                   ? () =>
-                      void api
-                        .resume(runId, undefined, step.id)
-                        .then(() => (setFault(undefined), again()))
-                        .catch((problem: Error) => setFault(problem.message))
+                      void act(() =>
+                        withTimeout(
+                            api.resume(runId, undefined, undefined, undefined, step.id),
+                            10_000,
+                            UNKNOWN_DELIVERY,
+                          )
+                          .then((ticket) =>
+                            waitForTicket(ticket, state, () => api.run(runId).then((one) => one.state), api.queue),
+                          )
+                          .then(again),
+                      )
                   : undefined
               }
+              busy={busy}
             />
           )}
         </div>
@@ -281,13 +319,15 @@ function Hero({
   onAnswer,
   onOpen,
   onResume,
+  busy,
 }: {
   state: RunState;
   live: Array<{ id: string; since: string }>;
   gate?: Step;
-  onAnswer: (value: unknown) => void;
+  onAnswer: (value: unknown) => Promise<void>;
   onOpen: (id: string) => void;
-  onResume: (from?: string) => void;
+  onResume: (from?: string) => Promise<void>;
+  busy: boolean;
 }) {
   if (state.status === "waiting" && gate) {
     // The question reads the steps before it, so their answers stand right here.
@@ -315,7 +355,12 @@ function Hero({
             ))}
           </details>
         )}
-        <Contract schema={gate.returns ?? {}} label="Answer and continue" onSend={onAnswer} />
+        <Contract
+          schema={gate.returns ?? {}}
+          label="Answer and continue"
+          pendingLabel="Sending…"
+          onSend={onAnswer}
+        />
       </div>
     );
   }
@@ -362,8 +407,8 @@ function Hero({
             </p>
             {record.error && <pre className="bad clamp">{record.error}</pre>}
             <div className="row" style={{ marginBottom: 0 }}>
-              <button className="go" onClick={() => onResume()}>
-                Fix it and resume from {id}
+              <button className="go" disabled={busy} onClick={() => void onResume()}>
+                {busy ? "Resuming…" : `Fix it and resume from ${id}`}
               </button>
               <span className="dim small">The steps that passed keep their work.</span>
             </div>
@@ -398,8 +443,8 @@ function Hero({
       {state.error && <p className="ask">{state.error}</p>}
       {state.status === "stopped" && (
         <div className="row" style={{ marginBottom: 0 }}>
-          <button className="go" onClick={() => onResume()}>
-            Resume this run
+          <button className="go" disabled={busy} onClick={() => void onResume()}>
+            {busy ? "Resuming…" : "Resume this run"}
           </button>
           <span className="dim small">It continues where it stood. The steps that passed keep their work.</span>
         </div>
@@ -435,12 +480,14 @@ function Progress({
 
   return (
     <div className="progress" style={{ "--i": 2 } as CSSProperties}>
-      <div className="track">
+      <div className="track" aria-label="Run steps">
         {steps.map((one) => (
           <button
             key={one.id}
             className={`seg ${marks[one.id] ?? "idle"} ${chosen === one.id ? "chosen" : ""}`}
             title={`${one.id} — ${marks[one.id] ?? "not started"}`}
+            aria-label={`${one.id} — ${marks[one.id] ?? "not started"}`}
+            aria-pressed={chosen === one.id}
             onClick={() => onPick(one.id)}
           />
         ))}
@@ -521,12 +568,14 @@ function Detail({
   history,
   cycles,
   onRerun,
+  busy = false,
 }: {
   step: Step;
   record?: StepRecord;
   history: StepRecord[];
   cycles: Record<string, number>;
   onRerun?: () => void;
+  busy?: boolean;
 }) {
   const back = step.cycle ? cycles[`${step.id}->${step.cycle.to}`] : undefined;
   return (
@@ -642,8 +691,8 @@ function Detail({
       {!record && <p className="empty">This step has not ended yet.</p>}
       {onRerun && record && (
         <div className="row" style={{ marginBottom: 0, marginTop: 12 }}>
-          <button className="quiet" onClick={onRerun} title="The steps before this one keep their work.">
-            Run again from this step
+          <button className="quiet" disabled={busy} onClick={onRerun} title="The steps before this one keep their work.">
+            {busy ? "Starting…" : "Run again from this step"}
           </button>
         </div>
       )}
@@ -735,37 +784,45 @@ function Leavings({ state }: { state: RunState }) {
 
 /**
  * A form for a contract, so a person writes no JSON. A gate reads its own
- * contract, and a run that takes values reads what the flow takes. A field the
- * contract needs must hold something before the form sends — a run costs
- * money, and a model asked about nothing answers with nothing.
+ * contract, and a run that takes values reads what the flow takes. The form
+ * keeps an unanswered field apart from an empty value that the contract permits.
  */
 export function Contract({
   schema,
   label,
+  pendingLabel = "Sending…",
   onSend,
 }: {
   schema: Schema;
   label: string;
-  onSend: (value: unknown) => void;
+  pendingLabel?: string;
+  onSend: (value: unknown) => void | Promise<void>;
 }) {
   const properties = (schema.properties ?? {}) as Record<string, Schema>;
   const required = (schema.required ?? []) as string[];
-  const [value, setValue] = useState<Record<string, unknown>>(() => blank(properties, required));
+  const [value, setValue] = useState<Record<string, unknown>>(() => requiredDefaults(properties, required));
   const [raw, setRaw] = useState(false);
-  const [text, setText] = useState(() => JSON.stringify(blank(properties, required), null, 2));
+  const [text, setText] = useState(() => JSON.stringify(requiredDefaults(properties, required), null, 2));
   const [need, setNeed] = useState<string>();
+  const sending = useRef(false);
+  const [pending, setPending] = useState(false);
   /** What a person typed into a field that holds JSON, until it reads as JSON. */
   const [drafts, setDrafts] = useState<Record<string, string>>({});
 
   const set = (key: string, next: unknown) => {
     setNeed(undefined);
-    setValue((held) => ({ ...held, [key]: next }));
+    setValue((held) => writeField(held, key, next));
+  };
+
+  const unset = (key: string) => {
+    setNeed(undefined);
+    setValue((held) => writeField(held, key, undefined));
   };
 
   const write = (key: string, typed: string) => {
     setNeed(undefined);
     setDrafts((held) => ({ ...held, [key]: typed }));
-    if (typed.trim() === "") return set(key, undefined);
+    if (typed.trim() === "") return unset(key);
     try {
       set(key, JSON.parse(typed));
     } catch {
@@ -775,45 +832,82 @@ export function Contract({
   };
 
   const send = () => {
+    if (sending.current) return;
+    let answer: unknown = value;
     if (raw) {
       // Malformed JSON threw where no one caught it, and the page did nothing.
       try {
-        return onSend(JSON.parse(text));
+        answer = JSON.parse(text);
       } catch (problem) {
         return setNeed(`That is not JSON: ${problem instanceof Error ? problem.message : String(problem)}`);
       }
     }
-    const unreadable = Object.keys(properties).filter((key) => value[key] === UNREADABLE);
-    if (unreadable.length > 0) {
-      return setNeed(`${unreadable.join(", ")} holds something that is not JSON.`);
+    if (!raw) {
+      const unreadable = unreadableFields(value);
+      if (unreadable.length > 0) {
+        return setNeed(`${unreadable.join(", ")} holds something that is not JSON.`);
+      }
+      // A boolean nobody answered is not a "no". It was one, and a run that
+      // cycles on a "no" went backwards because a person pressed the only button.
+      const empty = missingRequired(value, required);
+      if (empty.length > 0) {
+        return setNeed(
+          `Fill in ${empty.join(", ")} first — the flow needs ${empty.length === 1 ? "it" : "them"}.`,
+        );
+      }
     }
-    // A boolean nobody answered is not a "no". It was one, and a run that
-    // cycles on a "no" went backwards because a person pressed the only button.
-    const empty = required.filter((key) => {
-      const held = value[key];
-      return held === undefined || held === "" || (Array.isArray(held) && held.length === 0);
-    });
-    if (empty.length > 0) {
-      return setNeed(
-        `Fill in ${empty.join(", ")} first — the flow needs ${empty.length === 1 ? "it" : "them"}.`,
-      );
+    sending.current = true;
+    setPending(true);
+    Promise.resolve(onSend(answer))
+      .catch((problem: Error) => setNeed(problem.message))
+      .finally(() => {
+        sending.current = false;
+        setPending(false);
+      });
+  };
+
+  const changeMode = () => {
+    setNeed(undefined);
+    if (!raw) {
+      const next = beginJsonEdit(value, drafts);
+      if (!next.raw) {
+        setDrafts(next.drafts);
+        return setNeed(next.error);
+      }
+      setText(next.text);
+      return setRaw(true);
     }
-    onSend(value);
+    const read = readFields(text);
+    if ("error" in read) return setNeed(read.error);
+    setValue(read.value);
+    setDrafts({});
+    setRaw(false);
   };
 
   return (
     // A form a person must fill is not a file they may read: every field it
     // holds shows its box, so nothing that wants an answer looks like text.
-    <div className="answering">
+    <form
+      className="answering"
+      onSubmit={(event) => {
+        event.preventDefault();
+        send();
+      }}
+    >
       {!raw &&
         Object.entries(properties).map(([key, field]) => {
           const asked = required.includes(key);
           const drawn = shapeOf(field);
           const kind = drawn === "yes-no" && !asked ? "tick" : drawn;
           return (
-            <label key={key} className={kind === "tick" ? "field tick" : "field"}>
+            <div key={key} className={kind === "tick" ? "field tick" : "field"}>
               {kind === "tick" && (
-                <input type="checkbox" checked={Boolean(value[key])} onChange={(e) => set(key, e.target.checked)} />
+                <input
+                  type="checkbox"
+                  aria-label={key}
+                  checked={Boolean(value[key])}
+                  onChange={(e) => set(key, e.target.checked)}
+                />
               )}
               <span>
                 {key}
@@ -823,6 +917,7 @@ export function Contract({
                * that starts at "no" and sends itself. */}
               {kind === "yes-no" && (
                 <Choice
+                  label={`${key}${asked ? ", needed" : ""}`}
                   value={value[key] === undefined ? "" : value[key] ? "yes" : "no"}
                   options={[
                     { value: "yes", label: "yes" },
@@ -833,6 +928,7 @@ export function Contract({
               )}
               {kind === "one-of" && (
                 <Choice
+                  label={`${key}${asked ? ", needed" : ""}`}
                   value={value[key] === undefined ? "" : String(value[key])}
                   options={((field.enum ?? []) as unknown[]).map((one) => ({
                     value: String(one),
@@ -844,15 +940,24 @@ export function Contract({
               {kind === "number" && (
                 <input
                   type="number"
+                  aria-label={key}
+                  aria-required={asked}
                   value={value[key] === undefined ? "" : String(value[key])}
-                  onChange={(e) => set(key, e.target.value === "" ? undefined : Number(e.target.value))}
+                  onChange={(e) => (e.target.value === "" ? unset(key) : set(key, Number(e.target.value)))}
                 />
               )}
               {kind === "string" && (
-                <input value={String(value[key] ?? "")} onChange={(e) => set(key, e.target.value)} />
+                <input
+                  aria-label={key}
+                  aria-required={asked}
+                  value={String(value[key] ?? "")}
+                  onChange={(e) => set(key, e.target.value)}
+                />
               )}
               {kind === "lines" && (
                 <textarea
+                  aria-label={key}
+                  aria-required={asked}
                   rows={3}
                   placeholder="one for each line"
                   value={((value[key] as string[]) ?? []).join("\n")}
@@ -865,33 +970,33 @@ export function Contract({
                * given at all. */}
               {kind === "json" && (
                 <textarea
+                  aria-label={key}
+                  aria-required={asked}
                   rows={3}
                   placeholder="as JSON"
                   value={drafts[key] ?? (value[key] === undefined ? "" : JSON.stringify(value[key], null, 2))}
                   onChange={(e) => write(key, e.target.value)}
                 />
               )}
-            </label>
+            </div>
           );
         })}
-      {raw && <textarea rows={8} value={text} onChange={(e) => setText(e.target.value)} />}
-      {need && <p className="bad small">{need}</p>}
+      {raw && <textarea aria-label="The answer as JSON" rows={8} value={text} onChange={(e) => setText(e.target.value)} />}
+      {need && <p className="bad small" role="alert">{need}</p>}
       <div className="row" style={{ marginBottom: 0 }}>
-        <button className="go" onClick={send}>
-          {label}
+        <button className="go" type="submit" disabled={pending}>
+          {pending ? pendingLabel : label}
         </button>
         <button
           className="quiet"
-          onClick={() => {
-            if (!raw) setText(JSON.stringify(value, null, 2));
-            setRaw(!raw);
-            setNeed(undefined);
-          }}
+          type="button"
+          disabled={pending}
+          onClick={changeMode}
         >
           {raw ? "Use the form" : "Write JSON"}
         </button>
       </div>
-    </div>
+    </form>
   );
 }
 
@@ -902,43 +1007,25 @@ function promise(changes: NonNullable<Step["changes"]>): string {
   return `changes only ${changes.paths.join(", ")}`;
 }
 
-/** What a form draws for one property of a contract. */
-type Shape = "yes-no" | "tick" | "one-of" | "number" | "string" | "lines" | "json";
-
-/**
- * A property whose shape the form can draw, or `json` for one it cannot: an
- * object, a list of objects, a property of two types, a property of none. Those
- * drew a label with no control at all, and the answer could not be given.
- */
-function shapeOf(field: Schema): Shape {
-  if (Array.isArray(field.enum)) return "one-of";
-  if (field.type === "boolean") return "yes-no";
-  if (field.type === "number" || field.type === "integer") return "number";
-  if (field.type === "string") return "string";
-  // A list of plain words is a line each. A list of anything else is JSON.
-  if (field.type === "array") {
-    const of = field.items as Schema | undefined;
-    return of === undefined || of.type === "string" ? "lines" : "json";
-  }
-  return "json";
-}
-
 /** One of a few, drawn as the words themselves. Nothing is chosen to start with. */
 function Choice({
+  label,
   value,
   options,
   onPick,
 }: {
+  label: string;
   value: string;
   options: Array<{ value: string; label: string }>;
   onPick: (value: string) => void;
 }) {
   return (
-    <div className="segmented">
+    <div className="segmented" role="group" aria-label={label}>
       {options.map((option) => (
         <button
           key={option.value}
           type="button"
+          aria-pressed={value === option.value}
           className={value === option.value ? "on" : ""}
           onClick={() => onPick(option.value)}
         >
@@ -951,23 +1038,6 @@ function Choice({
 
 /** A field that holds text which is not JSON yet. `send` refuses it by name. */
 const UNREADABLE = Symbol("unreadable");
-
-function blank(properties: Record<string, Schema>, required: string[] = []): Record<string, unknown> {
-  const value: Record<string, unknown> = {};
-  for (const [key, field] of Object.entries(properties)) {
-    const shape = shapeOf(field);
-    // A boolean a person must answer starts at nothing: an unticked box that
-    // sends itself is a "no" that nobody gave. One that is not required keeps
-    // the box, and false is what leaving it alone has always meant.
-    if (shape === "yes-no") value[key] = required.includes(key) ? undefined : false;
-    // A number stays empty: a pre-filled 0 is an answer no one gave.
-    else if (shape === "number" || shape === "one-of") value[key] = undefined;
-    else if (shape === "lines") value[key] = [];
-    else if (shape === "json") value[key] = undefined;
-    else value[key] = "";
-  }
-  return value;
-}
 
 function marksOf(state: RunState, events: RunEvent[]): Record<string, Mark> {
   const marks: Record<string, Mark> = {};

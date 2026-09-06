@@ -4,13 +4,14 @@ import { pathToFileURL } from "node:url";
 import { type Flow, expandFlows, resolvePaths, validate } from "./flow.ts";
 import type { Workspace } from "./workspace.ts";
 import { parseFlow } from "./yaml.ts";
+import { withinRoot } from "./root.ts";
 
 /**
  * The flow that a file holds, with nothing added. The editor writes this back,
  * so it must not carry a resolved path or an expanded step.
  */
-export async function readFlow(file: string, from = process.cwd()): Promise<Flow> {
-  const path = resolve(from, file);
+export async function readFlow(file: string, from = process.cwd(), root?: string): Promise<Flow> {
+  const path = root ? withinRoot(root, resolve(from, file)) : resolve(from, file);
   if (!existsSync(path)) {
     throw new Error(`there is no flow file at "${path}". Name a file that is there, as a path from this directory.`);
   }
@@ -22,8 +23,9 @@ export async function readFlow(file: string, from = process.cwd()): Promise<Flow
   if (!/\.(ya?ml|[cm]?[jt]s)$/.test(path)) {
     throw new Error(`"${path}" is not a flow file. A flow file is TypeScript or YAML: flow.ts or flow.yaml.`);
   }
-  if (/\.ya?ml$/.test(path)) return parseFlow(readFileSync(path, "utf8"), path);
-  const flow = (await import(pathToFileURL(path).href)).default as Flow | undefined;
+  const flow = /\.ya?ml$/.test(path)
+    ? parseFlow(readFileSync(path, "utf8"), path)
+    : ((await import(pathToFileURL(path).href)).default as Flow | undefined);
   if (!flow || typeof flow !== "object") {
     throw new Error(`the file "${path}" exports no flow. Write the flow as the default export.`);
   }
@@ -31,7 +33,28 @@ export async function readFlow(file: string, from = process.cwd()): Promise<Flow
   // the object itself does not, and the runner then reads a step with no needs
   // and says so in the words of Node. See ADR 0004: both make the same data.
   for (const step of flow.steps ?? []) if (!Array.isArray(step.needs)) step.needs = [];
+  if (root) checkFlowPaths(flow, path, root);
   return flow;
+}
+
+/** Checks every file a flow names before the daemon reads or runs it. */
+export function checkFlowPaths(flow: Flow, flowPath: string, root: string): void {
+  const base = dirname(flowPath);
+  const check = (path?: string) => {
+    if (path && !path.startsWith("orchy:")) withinRoot(root, resolve(base, path));
+  };
+  type Named = { prompt?: string; module?: string; flow?: string; fanout?: unknown };
+  for (const step of (flow.steps ?? []) as unknown as Named[]) {
+    check(step.prompt);
+    check(step.module);
+    check(step.flow);
+    if (Array.isArray(step.fanout)) {
+      for (const member of step.fanout as Array<{ prompt?: string; module?: string }>) {
+        check(member.prompt);
+        check(member.module);
+      }
+    }
+  }
 }
 
 /**
@@ -49,10 +72,11 @@ export async function loadFlow(
   from = process.cwd(),
   chain: string[] = [],
   workspace?: Workspace,
+  root?: string,
 ): Promise<Flow> {
-  const path = resolve(from, file);
+  const path = root ? withinRoot(root, resolve(from, file)) : resolve(from, file);
   const directory = dirname(path);
-  const flow = await readFlow(path);
+  const flow = await readFlow(path, process.cwd(), root);
   const seen = [...chain, path];
   const resolved = resolvePaths(flow, directory);
   // An inner flow may name no workspace and work in the one of the flow that
@@ -66,7 +90,7 @@ export async function loadFlow(
         `the flow at "${at}" is open already: ${[...seen, at].join(" → ")}. A flow cannot hold itself, and a chain of flows cannot come back to one it holds.`,
       );
     }
-    return loadFlow(inner, directory, seen, holds);
+    return loadFlow(inner, directory, seen, holds, root);
   });
 }
 

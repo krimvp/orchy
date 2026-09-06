@@ -108,11 +108,15 @@ export function App() {
           orchy
         </a>
         <div className="tabs">
-          <a href="#/" className={onRuns ? "here" : ""}>
+          <a href="#/" className={onRuns ? "here" : ""} aria-current={onRuns ? "page" : undefined}>
             Runs
             {attention.waiting > 0 && <span className="dot waiting" title="A run waits for you" />}
           </a>
-          <a href="#/flows" className={parts[0] === "flows" ? "here" : ""}>
+          <a
+            href="#/flows"
+            className={parts[0] === "flows" ? "here" : ""}
+            aria-current={parts[0] === "flows" ? "page" : undefined}
+          >
             Flows
           </a>
         </div>

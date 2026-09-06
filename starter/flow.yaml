@@ -1,0 +1,21 @@
+# Runs without a model and returns one visible result.
+name: first-success
+returns:
+  type: object
+  required:
+    - message
+  properties:
+    message:
+      type: string
+steps:
+  - id: hello
+    kind: call
+    needs: []
+    module: hello.mjs
+    returns:
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string

@@ -40,6 +40,9 @@ convenience over that, not a mechanism beside it.
 
 - stdout is the value, whole. A program that logs to stdout breaks its own
   answer, and the refusal says where notes go.
+- A module can write ordinary text to the stdout of the run process. The daemon
+  reads control events from a separate file descriptor, so that text cannot
+  become an event or stop the daemon.
 - A command is not a path of the flow: it runs where the steps act, so
   `resolvePaths` does not touch it, and `missing()` cannot say whether it is
   there. A command that is not there fails its step with the words of the

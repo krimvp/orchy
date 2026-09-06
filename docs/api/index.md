@@ -25,8 +25,10 @@ Grouped by the module each name comes from:
   `When`, `Match`, `Memory`.
 - **`run.ts` — running one.** `run`, `resume`, and `read`. Types:
   `RunOptions`, `RunState`, `RunEvent`, `StepRecord`, `Called`.
-- **`memory.ts` — what a run recovers and stores.** `lines`, `keyOf`, `asKey`,
-  `memoryProblems`, and `MOST`. Types: `Entry`, `Storage`.
+- **`memory.ts` — what a run recovers and stores.** `lines`, `keyOf`,
+  `rootKey`, `flowKey`, `scopeKey`, `keyReference`, `referencedKey`,
+  `migrateLegacy`, the legacy helper `asKey`, `memoryProblems`, and `MOST`.
+  Types: `Entry`, `Storage`.
 - **`load.ts` and `yaml.ts` — flows as files.** `loadFlow` and `readFlow`
   bring a YAML flow in from disk; `parseFlow` and `formatFlow` convert
   between text and the `Flow` data without touching disk.

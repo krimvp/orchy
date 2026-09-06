@@ -22,7 +22,9 @@ characters of the guide and cuts the rest — a tryout read one that ended
 mid-word — so the guide stays under that, and a test holds it there.
 
 The door keeps the one rule of the daemon: every path a tool names resolves
-against the root, and one outside it is refused with the root in the message.
+against the root, including its symbolic links. An existing file must have a
+canonical path inside the root. A new file must have its nearest existing
+parent there. A path outside it is refused with the root in the message.
 A tool list is not a sandbox here either — an agent that writes and runs a
 flow runs code, with the authority of the user who started `orchy mcp`.
 
@@ -43,7 +45,7 @@ flow runs code, with the authority of the user who started `orchy mcp`.
   | `run_flow` | Loads and validates the flow, then queues a run — registering the file first when no row holds it. Answers the `Ticket`, with its `runId` once the run starts; a queue with every slot taken answers the bare ticket instead of holding the answer. `with` carries the values the flow takes, which the child checks. A run of agent steps spends money. |
   | `read_run` | `{ row, state, children }` — the run's row, its `RunState` from disk with the `question` when it waits at a gate, and the runs its steps started, each with its status and cost. `wait` holds the answer up to that many seconds (at most 55) while the run works, so a poll costs fewer turns; the answer says where the run stands either way. |
   | `read_trajectory` | The run's parsed `trajectory.json`, or an error while it has written none. |
-  | `list_runs` | `{ queue, runs }` — every pending ticket, and every run the index holds, newest first. |
+  | `list_runs` | `{ queue, runs }` — every durable ticket over the root, and every run the index holds, newest first. A ticket says whether it is queued, dispatching, delivered, failed, or uncertain. Uncertain work is never retried automatically. |
   | `resume_run` | Continues a run. `value` answers the gate of a waiting run — as JSON text, as at the command line, so a boolean stays a boolean across every client — and the contract of the gate checks it here, at the door; `from` names a step of an ended run to go back to; `step` names the gate the answer was written for, so a run that moved on refuses it. A refusal the child writes — a step `from` does not name — answers the resume itself, not only the queue. |
   | `stop_run` | Stops a run where it stands, as `POST /api/runs/:id/stop` does. |
   | `recall_memory` | What earlier runs recorded in the memory of this run: `{ scope, entries, of }`. `query` keeps the entries whose text or tags hold it, and `limit` bounds how many come back. Only a step of a run reaches it, and only over the store its own run reads. |
@@ -58,6 +60,12 @@ The daemon behind this door asks for no schedule beat (`daemon(root, false)`),
 so it and the long daemon stand over one root without firing one schedule
 twice. The schedules belong to the long daemon. Runs either door starts are
 on disk, so each shows the other's.
+
+The ticket is committed before `run_flow` or `resume_run` reports acceptance.
+If this MCP process ends while work is still queued, another daemon can load
+it. If the process ends after claiming it, the ticket becomes uncertain and
+Orchy does not retry it. This avoids a second model start when the first child
+may still run. Durable acceptance therefore does not promise automatic retry.
 
 A step of a flow reaches this door too, by declaring the `orchy` tool (ADR
 0025). The claude adapter opens the door with the run and the step in

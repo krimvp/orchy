@@ -1,23 +1,37 @@
 #!/usr/bin/env node
-import { readFileSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, writeFileSync, writeSync } from "node:fs";
 import { createRequire } from "node:module";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { claude } from "./claude.ts";
 import { droid } from "./droid.ts";
 import { type AdapterName, ADAPTERS, type Harness } from "./harness.ts";
-import { type Flow, validate } from "./flow.ts";
-import { type Entry, asKey, lines as storage } from "./memory.ts";
+import { type Flow, takesProblem, validate } from "./flow.ts";
+import {
+  type Entry,
+  flowKey,
+  keyOf,
+  keyReference,
+  lines as storage,
+  migrateLegacy,
+  referencedKey,
+  rootKey,
+  scopeKey,
+} from "./memory.ts";
 import { loadFlow } from "./load.ts";
 import { pi } from "./pi.ts";
+import { localSetup, missing, unfilled } from "./readiness.ts";
 import { type RunEvent, type RunState, Refused, keep, list, resume, run, startOf } from "./run.ts";
 
 const VERSION = String(createRequire(import.meta.url)("../package.json").version);
 
 const USAGE = `use: orchy run <flow file> [--with <json>] [--harness pi|claude|droid] [--events]
-     orchy check <flow file> [--harness pi|claude|droid]
+     orchy check <flow file> [--with <json>] [--harness pi|claude|droid]
+     orchy init [directory]
      orchy resume <run id> [json value] [--from <step>] [--harness pi|claude|droid] [--events]
      orchy runs [--events]
-     orchy memory keys | list <scope> [--events] | add <scope> <text> | forget <scope> [id]
+     orchy memory keys | key root | key flow|scope <name>
+     orchy memory list <key> [--events] | add <key> <text> | forget <key> [id]
+     orchy memory migrate <legacy reference> <key reference>
      orchy daemon [--port 4000]
      orchy mcp [--harness pi|claude|droid]
      orchy --help | --version
@@ -32,7 +46,13 @@ continues where it stood.
 object. The door of a run passes it; a person has no use for it.
 
 orchy check reads a flow, and every flow it holds, and says what is wrong with
-it. It runs nothing and spends nothing.
+it. It checks supplied values, prompt and component files, local state, the Git
+workspace, and a harness command. It starts no step and spends nothing. Model
+availability and authentication stay unknown because the check does not call a
+model. Loading a TypeScript or JavaScript flow can run its module initialization.
+
+orchy init writes the bundled starter in this directory, or in the directory
+it names. It refuses to replace a file.
 
 orchy runs lists the runs of this directory, newest first.
 
@@ -55,6 +75,7 @@ A model comes from the harness, not from Orchy. Pi reads
 Droid reads ~/.factory/config.json. See the Install part of README.md.`;
 
 const PORT = 4000;
+const STARTER = ["flow.yaml", "hello.mjs", "agent.yaml", "note.txt", "prompts/summarize.md"];
 
 /** What the shell learns. A wrong command and a failed run are not one thing. */
 const EXIT = { done: 0, failed: 1, usage: 2, waiting: 3 } as const;
@@ -123,16 +144,17 @@ function wrong(message: string): never {
  * person who wrote it read the wrong run for a while.
  */
 const FLAGS: Record<string, string[]> = {
-  run: ["--with", "--harness", "--events", "--started-by"],
-  resume: ["--from", "--harness", "--events"],
-  check: ["--harness"],
+  run: ["--with", "--harness", "--events", "--started-by", "--event-fd", "--run-id"],
+  resume: ["--from", "--gate", "--revision", "--harness", "--events", "--event-fd"],
+  check: ["--with", "--harness"],
+  init: [],
   runs: ["--events"],
   daemon: ["--port"],
   mcp: ["--harness"],
 };
 
 /** The flags that take a value. The rest stand alone. */
-const VALUED = ["--with", "--from", "--harness", "--port", "--started-by"];
+const VALUED = ["--with", "--from", "--gate", "--revision", "--harness", "--port", "--started-by", "--event-fd", "--run-id"];
 
 const argv: string[] = [];
 const flags = new Map<string, string | true>();
@@ -155,14 +177,23 @@ for (let at = 0; at < process.argv.length - 2; at += 1) {
   at += 1;
 }
 
-const events = flags.has("--events");
+const controlFd = descriptorOf(flags.get("--event-fd") as string | undefined);
+const events = flags.has("--events") || controlFd !== undefined;
 const chosen = (flags.get("--harness") as string | undefined) ?? "pi";
 const given = flags.get("--with") as string | undefined;
 const from = flags.get("--from") as string | undefined;
+const gate = flags.get("--gate") as string | undefined;
+const revisionText = flags.get("--revision") as string | undefined;
 const starter = flags.get("--started-by") as string | undefined;
+const reservedRunId = flags.get("--run-id") as string | undefined;
 let port: number | undefined;
+let revision: number | undefined;
 try {
   port = number(flags.get("--port") as string | undefined);
+  revision = revisionText === undefined ? undefined : Number(revisionText);
+  if (revision !== undefined && (!Number.isInteger(revision) || revision < 0)) {
+    throw new Error(`--revision holds "${revisionText}". Write a whole number of zero or more.`);
+  }
 } catch (error) {
   wrong(error instanceof Error ? error.message : String(error));
 }
@@ -223,11 +254,20 @@ function number(source: string | undefined): number | undefined {
   return value;
 }
 
+/** The daemon gives its child one private descriptor for control events. */
+function descriptorOf(source: string | undefined): number | undefined {
+  if (source === undefined) return undefined;
+  const value = Number(source);
+  if (!Number.isInteger(value) || value < 3) throw new Wrong("--event-fd wants a file descriptor of 3 or more");
+  return value;
+}
+
 /** A parent process reads the events, so nothing else may reach the output stream. */
 function emit(event: RunEvent): void {
   // The run names itself here, so a signal knows the state file to mark.
   if (event.type === "run_start") running = { runId: event.runId, cwd: process.cwd() };
-  if (events) console.log(JSON.stringify(event));
+  if (controlFd !== undefined) writeSync(controlFd, `${JSON.stringify(event)}\n`);
+  else if (events) console.log(JSON.stringify(event));
   else report(event);
 }
 
@@ -239,10 +279,12 @@ function finish(state: RunState): never {
       // person writes it once. The step a gate stands in for holds the shape.
       const gate = state.flow.steps.find((step) => step.id === state.waitingFor);
       const shape = gate && gate.kind !== "flow" ? `\nthe value matches: ${JSON.stringify(gate.returns)}` : "";
-      console.error(`\nanswer with: orchy resume ${state.runId} '<json value>'${shape}`);
+      console.error(
+        `\nanswer with: orchy resume ${state.runId} '<json value>' --gate ${state.waitingFor} --revision ${state.revision ?? 0}${shape}`,
+      );
     }
   }
-  if (state.status === "failed") process.exit(EXIT.failed);
+  if (state.status === "failed" || state.status === "stopped") process.exit(EXIT.failed);
   process.exit(state.status === "waiting" ? EXIT.waiting : EXIT.done);
 }
 
@@ -275,7 +317,7 @@ if (command in FLAGS) {
   const misplaced = [...flags.keys()].filter((one) => !takes.includes(one));
   if (misplaced.length > 0) wrong(`orchy ${command} does not take ${misplaced.join(", ")}.\n\n${USAGE}`);
 }
-const most: Record<string, number> = { run: 2, resume: 3, check: 2, runs: 1, daemon: 1, mcp: 1, memory: 4 };
+const most: Record<string, number> = { run: 2, resume: 3, check: 2, init: 2, runs: 1, daemon: 1, mcp: 1, memory: 4 };
 if (command in most && argv.length > (most[command] as number)) {
   wrong(`orchy ${command} does not take "${argv[most[command] as number]}".\n\n${USAGE}`);
 }
@@ -286,6 +328,7 @@ if (!harness) wrong(`unknown harness "${chosen}". Use one of: ${ADAPTERS.join(",
 try {
   if (command === "run") {
     if (!first) throw new Wrong(`orchy run wants a flow file.\n\n${USAGE}`);
+    const control = watchForSignals();
     const options = {
       onEvent: emit,
       harness,
@@ -293,15 +336,17 @@ try {
       harnesses: HARNESSES,
       with: valuesOf(given),
       startedBy: starterOf(starter),
+      signal: control.signal,
+      runId: reservedRunId,
     };
     const flow = await read(first);
-    watchForSignals();
     finish(await run(flow, options));
   }
 
   if (command === "resume") {
     if (!first) throw new Wrong(`orchy resume wants a run id.\n\n${USAGE}`);
-    const options = { onEvent: emit, harness, harnessName: chosen, harnesses: HARNESSES, from };
+    const control = watchForSignals(first);
+    const options = { onEvent: emit, harness, harnessName: chosen, harnesses: HARNESSES, from, signal: control.signal };
     let value: unknown;
     if (second !== undefined) {
       try {
@@ -310,8 +355,7 @@ try {
         throw new Wrong(`the answer holds ${second}, which is not JSON. Write the value as JSON.`);
       }
     }
-    watchForSignals(first);
-    finish(await resume(first, value, options));
+    finish(await resume(first, value, { ...options, gate, revision }));
   }
 
   if (command === "check") {
@@ -321,8 +365,33 @@ try {
     const flow = await read(first);
     const problems = validate(flow, chosen);
     if (problems.length > 0) throw new Wrong(`the flow is not valid:\n- ${problems.join("\n- ")}`);
+    const gone = missing(flow, first);
+    if (gone.length > 0) throw new Wrong(`the flow names files that are not there:\n- ${gone.join("\n- ")}`);
+    const holes = unfilled(flow, first);
+    if (holes.length > 0) throw new Wrong(`the flow reads names that nothing supplies:\n- ${holes.join("\n- ")}`);
+    if (given !== undefined) {
+      const values = valuesOf(given);
+      const problem = takesProblem(flow, values, "this check");
+      if (problem) throw new Wrong(problem);
+      try {
+        keyOf(flow.memory, flow.name, values);
+      } catch (error) {
+        throw new Wrong(error instanceof Error ? error.message : String(error));
+      }
+    }
+    const setup = await localSetup(flow, process.cwd(), chosen);
+    if (setup.problems.length > 0) throw new Wrong(`the local setup is not ready:\n- ${setup.problems.join("\n- ")}`);
     // What the flow takes is the next thing the person types, so say it here.
-    console.log(`${first} is valid: ${flow.steps.length} step${flow.steps.length === 1 ? "" : "s"}${takes(flow)}`);
+    console.log(`${first} passes the local checks: ${flow.steps.length} step${flow.steps.length === 1 ? "" : "s"}${takes(flow)}`);
+    for (const notice of setup.notices) console.log(notice);
+    if (flow.steps.some((step) => step.kind === "agent")) {
+      console.log("Model availability is unknown. Model authentication is unknown. orchy check does not call a model.");
+    }
+    process.exit(EXIT.done);
+  }
+
+  if (command === "init") {
+    init(first);
     process.exit(EXIT.done);
   }
 
@@ -342,19 +411,37 @@ try {
       process.exit(EXIT.done);
     }
 
+    if (first === "key") {
+      if (second === "root" && third === undefined) console.log(keyReference(rootKey()));
+      else if (second === "flow" && third !== undefined) console.log(keyReference(flowKey(third)));
+      else if (second === "scope" && third !== undefined) console.log(keyReference(scopeKey(third)));
+      else throw new Wrong(`orchy memory key wants root, flow <name>, or scope <name>.\n\n${USAGE}`);
+      process.exit(EXIT.done);
+    }
+
+    if (first === "migrate") {
+      if (!second || !third) throw new Wrong(`orchy memory migrate wants a legacy reference and a key reference.\n\n${USAGE}`);
+      const count = migrateLegacy(process.cwd(), second, third);
+      console.log(
+        `${count} ${count === 1 ? "entry" : "entries"} copied from "${second}" to "${third}". ` +
+          `The legacy source "${second}" remains unchanged.`,
+      );
+      process.exit(EXIT.done);
+    }
+
     // The way in is named before the scope is, so a typo says what the command
     // does and not that it wants a scope for a thing it cannot do.
-    if (!first) throw new Wrong(`orchy memory wants keys, list, add, or forget.\n\n${USAGE}`);
+    if (!first) throw new Wrong(`orchy memory wants keys, key, list, add, forget, or migrate.\n\n${USAGE}`);
     if (first !== "list" && first !== "add" && first !== "forget") {
-      throw new Wrong(`orchy memory has no "${first}". Use keys, list, add, or forget.\n\n${USAGE}`);
+      throw new Wrong(`orchy memory has no "${first}". Use keys, key, list, add, forget, or migrate.\n\n${USAGE}`);
     }
     if (!second) throw new Wrong(`orchy memory ${first} wants a scope.\n\n${USAGE}`);
-    const key = asKey(second);
+    const key = memoryKey(second);
 
     if (first === "list") {
       const entries = store.recall(key);
       if (events) for (const entry of entries) console.log(JSON.stringify(entry));
-      else console.log(entries.length === 0 ? `the scope "${key}" holds nothing.\n\n${known()}` : shown(entries));
+      else console.log(entries.length === 0 ? `the scope "${keyReference(key)}" holds nothing.\n\n${known()}` : shown(entries));
       process.exit(EXIT.done);
     }
 
@@ -366,16 +453,17 @@ try {
       // entry nobody knows whether to trust.
       const by = starterOf(process.env.ORCHY_STARTED_BY);
       const entry = store.remember(key, { run: by?.runId ?? "-", step: by?.step ?? "a person", text: third.trim() });
-      console.log(`${entry.id} recorded in "${key}"`);
+      console.log(`${entry.id} recorded in "${keyReference(key)}"`);
       process.exit(EXIT.done);
     }
 
     if (first === "forget") {
       const gone = store.forget(key, third);
       if (gone === 0) {
-        throw new Wrong(third ? `the scope "${key}" holds no entry "${third}"` : `the scope "${key}" holds nothing`);
+        const shown = keyReference(key);
+        throw new Wrong(third ? `the scope "${shown}" holds no entry "${third}"` : `the scope "${shown}" holds nothing`);
       }
-      console.log(`${gone} ${gone === 1 ? "entry" : "entries"} forgotten in "${key}"`);
+      console.log(`${gone} ${gone === 1 ? "entry" : "entries"} forgotten in "${keyReference(key)}"`);
       process.exit(EXIT.done);
     }
   }
@@ -389,10 +477,10 @@ try {
     // A step that holds the `orchy` tool reaches this door, and its adapter
     // says which run asked, so the runs it starts record it. ADR 0025.
     mcp(engine, chosen, process.stdin, process.stdout, starterOf(process.env.ORCHY_STARTED_BY));
-    const leave = () => {
+    const leave = async () => {
       // The runs this door started live on: each is its own process, and its
       // state is on disk. A dispatcher's runs must outlive the step's door.
-      engine.close(false);
+      await engine.close(false);
       process.exit(EXIT.done);
     };
     // The client owns the conversation: when it closes stdin, the door closes.
@@ -408,8 +496,8 @@ try {
     // The daemon runs an agent on this machine, so it listens on this machine only.
     console.error(`orchy runs at http://127.0.0.1:${port ?? PORT} and works in ${engine.root}`);
     for (const signal of ["SIGINT", "SIGTERM"] as const) {
-      process.on(signal, () => {
-        engine.close();
+      process.on(signal, async () => {
+        await engine.close();
         process.exit(EXIT.done);
       });
     }
@@ -425,6 +513,49 @@ try {
   if (error instanceof Wrong || error instanceof Refused) wrong(message);
   console.error(message);
   process.exit(EXIT.failed);
+}
+
+/** A key from `memory keys`, or a literal custom scope. */
+function memoryKey(source: string): string {
+  try {
+    if (source === process.env.ORCHY_MEMORY_KEY) return referencedKey(`key=${source}`);
+    if (source.startsWith("key=")) return referencedKey(source);
+    if (source.startsWith("scope=")) return scopeKey(source.slice("scope=".length));
+    return scopeKey(source);
+  } catch (error) {
+    throw new Wrong(error instanceof Error ? error.message : String(error));
+  }
+}
+
+/** Writes the complete starter only when every destination is free. */
+function init(directory?: string): void {
+  const root = resolve(directory ?? ".");
+  const source = resolve(import.meta.dirname, "..", "starter");
+  const occupied = STARTER.filter((file) => {
+    try {
+      lstatSync(join(root, file));
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+  });
+  if (occupied.length > 0) {
+    throw new Wrong(`orchy init refuses to replace: ${occupied.join(", ")}. Use an empty directory or name another one.`);
+  }
+  for (const file of STARTER) {
+    const target = join(root, file);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, readFileSync(join(source, file)));
+  }
+  console.log(
+    `The starter is ready in ${root}.\nRun:\n  cd -- ${shellWord(root)}\n  orchy check flow.yaml\n  orchy run flow.yaml`,
+  );
+}
+
+/** One path as a shell word, including a path that holds a quote. */
+function shellWord(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
 /**
@@ -488,14 +619,22 @@ function table(runs: RunState[]): string {
  * state at `running` recovers no way at all, because `resume` refuses a run
  * that says it runs. So the process writes `stopped` before it goes.
  */
-function watchForSignals(runId?: string): void {
+function watchForSignals(runId?: string): AbortController {
+  const control = new AbortController();
+  let stopping = false;
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
     process.on(signal, () => {
+      if (!stopping) {
+        stopping = true;
+        control.abort(new Error("the run was stopped"));
+        return;
+      }
       const at = running ?? (runId ? { runId, cwd: process.cwd() } : undefined);
       if (at) stopRun(at.cwd, at.runId);
       process.exit(EXIT.failed);
     });
   }
+  return control;
 }
 
 function stopRun(cwd: string, runId: string): void {

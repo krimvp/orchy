@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import test from "node:test";
 import { Type } from "@sinclair/typebox";
 import type { TSchema } from "@sinclair/typebox";
 import { type AgentStep, type CallStep, type Flow, type GateStep, agent, call, expandFanout, expandFlows, flow, gate, resolvePaths, validate } from "../src/flow.ts";
-import { LONGEST, keyOf, lines } from "../src/memory.ts";
+import { LONGEST, flowKey, keyOf, keyReference, lines, rootKey, scopeKey } from "../src/memory.ts";
 import { loadFlow } from "../src/load.ts";
 import type { AgentRequest, AgentResult, Harness } from "../src/harness.ts";
 import { notesOf } from "../src/harness.ts";
@@ -16,6 +16,7 @@ import { tail } from "../src/tail.ts";
 import { claude } from "../src/claude.ts";
 import { costOf, pi } from "../src/pi.ts";
 import { formatFlow, parseFlow } from "../src/yaml.ts";
+import { changed, take } from "../src/workspace.ts";
 
 const Summary = Type.Object({ summary: Type.String() });
 
@@ -84,6 +85,41 @@ test("validate accepts a flow that is in order", () => {
   });
 
   assert.deepEqual(validate(good), []);
+});
+
+test("validate returns a problem for every malformed JSON value", () => {
+  const values: unknown[] = [
+    null,
+    [],
+    true,
+    7,
+    "flow",
+    { name: "bad", steps: null },
+    { name: "bad", steps: [null] },
+    { name: "bad", steps: [{ id: "one", kind: "call", needs: null, command: "true", returns: {} }] },
+    { name: "bad", steps: [{ id: "one", kind: "agent", needs: [], prompt: "p.md", tools: null, returns: {} }] },
+    { name: "bad", steps: [{ id: "one", kind: "agent", needs: [], prompt: "p.md", tools: [], starts: null, returns: {} }] },
+    { name: "bad", steps: [{ id: "one", kind: "call", needs: [], command: "true", with: [], returns: {} }] },
+    { name: "bad", steps: [{ id: "one", kind: "call", needs: [], command: "true", fanout: false, returns: {} }] },
+    { name: "bad", steps: [{ id: "one", kind: "gate", needs: [], question: null, returns: {} }] },
+    { name: "bad", steps: [{ id: "one", kind: "call", needs: [], command: "true", fanout: [null], returns: {} }] },
+  ];
+
+  for (const value of values) {
+    assert.doesNotThrow(() => validate(value));
+    assert.ok(validate(value).length > 0, `validate accepted ${JSON.stringify(value)}`);
+  }
+});
+
+test("validate names the paths of a null step and a null fanout member", () => {
+  assert.match(validate({ name: "bad", steps: [null] }).join("\n"), /"\/steps\/0"/);
+  assert.match(
+    validate({
+      name: "bad",
+      steps: [{ id: "one", kind: "call", needs: [], command: "true", fanout: [null], returns: {} }],
+    }).join("\n"),
+    /"\/steps\/0\/fanout\/0"/,
+  );
 });
 
 test("run refuses a flow that is not valid", async () => {
@@ -3243,6 +3279,39 @@ test("a step that writes a file the workspace already changed breaks its promise
   assert.match(state.steps.a?.error ?? "", /promises to change nothing, but it changed step\.md/);
 });
 
+test("a workspace records a repeated change to a quoted Unicode path", () => {
+  const cwd = gitWorkspace();
+  const name = 'notes/one "quoted" ü\nline.md';
+  mkdirSync(join(cwd, "notes"));
+  writeFileSync(join(cwd, name), "first");
+  execFileSync("git", ["add", name], { cwd, stdio: "pipe" });
+  execFileSync("git", ["commit", "-qm", "odd path"], { cwd, stdio: "pipe" });
+  writeFileSync(join(cwd, name), "changed before");
+
+  const before = take({ kind: "git", path: "." }, cwd);
+  writeFileSync(join(cwd, name), "changed by the step");
+
+  assert.deepEqual(changed(before, take({ kind: "git", path: "." }, cwd)), [{ path: name, how: "changed" }]);
+});
+
+test("a workspace hashes a symbolic link itself on repeated changes", () => {
+  const cwd = gitWorkspace();
+  writeFileSync(join(cwd, "one.txt"), "same");
+  writeFileSync(join(cwd, "two.txt"), "same");
+  writeFileSync(join(cwd, "three.txt"), "same");
+  symlinkSync("one.txt", join(cwd, "held"));
+  execFileSync("git", ["add", "one.txt", "two.txt", "three.txt", "held"], { cwd, stdio: "pipe" });
+  execFileSync("git", ["commit", "-qm", "link"], { cwd, stdio: "pipe" });
+  unlinkSync(join(cwd, "held"));
+  symlinkSync("two.txt", join(cwd, "held"));
+
+  const before = take({ kind: "git", path: "." }, cwd);
+  unlinkSync(join(cwd, "held"));
+  symlinkSync("three.txt", join(cwd, "held"));
+
+  assert.deepEqual(changed(before, take({ kind: "git", path: "." }, cwd)), [{ path: "held", how: "changed" }]);
+});
+
 test("a step that renames a file out of the paths it promises breaks its promise", async () => {
   const cwd = gitWorkspace();
   mkdirSync(join(cwd, "docs"));
@@ -4393,6 +4462,112 @@ test("a gate asks its question with the names in it filled in", async () => {
   assert.equal(state.question, "Does ticket ORC-41 look right?");
 });
 
+test("a nested gate asks the same question once with the values of its flow step", async () => {
+  const cwd = workspace();
+  const Ticket = Type.Object({ ticket: Type.String() });
+  const inner = flow("asked", {
+    takes: Ticket,
+    steps: [gate({ id: "approve", question: "Approve {{ ticket }}?", returns: Verdict })],
+  });
+  const ticket = "ORC-42 {{ literal }}";
+
+  const standalone = await run(inner, { cwd, with: { ticket } });
+  const expanded = await expandFlows(
+    flow("outer", {
+      steps: [{ id: "review", kind: "flow", needs: [], flow: "asked.yaml", with: { ticket } }],
+    }),
+    async () => inner,
+  );
+  const nested = await run(expanded, { cwd });
+
+  assert.deepEqual((expanded.steps[0] as GateStep).with, { ticket });
+  assert.equal(standalone.question, "Approve ORC-42 {{ literal }}?");
+  assert.equal(nested.question, standalone.question);
+});
+
+test("the values of a nested gate override the values of its flow step", async () => {
+  const Ticket = Type.Object({ ticket: Type.String() });
+  const inner = flow("asked", {
+    takes: Ticket,
+    steps: [
+      gate({
+        id: "approve",
+        question: "Approve {{ ticket }}?",
+        with: { ticket: "the inner ticket" },
+        returns: Verdict,
+      }),
+    ],
+  });
+
+  const expanded = await expandFlows(
+    flow("outer", {
+      steps: [
+        { id: "review", kind: "flow", needs: [], flow: "asked.yaml", with: { ticket: "the outer ticket" } },
+      ],
+    }),
+    async () => inner,
+  );
+
+  assert.deepEqual((expanded.steps[0] as GateStep).with, { ticket: "the inner ticket" });
+});
+
+test("a condition and a cycle of a nested gate keep their inner step ids", async () => {
+  const cwd = workspace();
+  writeFileSync(join(cwd, "ready.ts"), "export default () => ({ ready: true });\n");
+  const Ticket = Type.Object({ ticket: Type.String() });
+  const Ready = Type.Object({ ready: Type.Boolean() });
+  const inner = flow("asked", {
+    takes: Ticket,
+    steps: [
+      call({ id: "prepare", module: "ready.ts", returns: Ready }),
+      gate({
+        id: "approve",
+        needs: ["prepare"],
+        when: { prepare: { ready: true } },
+        question: "Approve {{ ticket }}?",
+        returns: Verdict,
+        cycle: { to: "approve", when: { approved: false }, limit: 1, policy: "accept" },
+      }),
+    ],
+  });
+  const expanded = await expandFlows(
+    flow("outer", {
+      steps: [
+        { id: "review", kind: "flow", needs: [], flow: "asked.yaml", with: { ticket: "ORC-43" } },
+      ],
+    }),
+    async () => inner,
+  );
+  const approve = expanded.steps[1] as GateStep;
+
+  assert.deepEqual(approve.when, { "review/prepare": { ready: true } });
+  assert.equal(approve.cycle?.to, "review/approve");
+  assert.deepEqual(validate(expanded), []);
+
+  const first = await run(expanded, { cwd });
+  assert.equal(first.status, "waiting");
+  const second = await resume(first.runId, { approved: false }, { cwd });
+  assert.equal(second.status, "waiting");
+  assert.equal(second.question?.startsWith("Approve ORC-43?"), true);
+  const done = await resume(first.runId, { approved: true }, { cwd });
+  assert.equal(done.status, "done");
+});
+
+test("a missing value in a gate question fails the run instead of becoming the question", async () => {
+  const state = await run(
+    flow("asked", {
+      steps: [gate({ id: "approve", question: "Approve {{ ticket }}?", returns: Verdict })],
+    }),
+    { cwd: workspace() },
+  );
+
+  assert.equal(state.status, "failed");
+  assert.equal(state.question, undefined);
+  assert.match(state.error ?? "", /reads "\{\{ ticket \}\}" in its question/);
+  assert.match(state.error ?? "", /Add it to "takes" on the flow/);
+  assert.doesNotMatch(state.error ?? "", /"with" on the step/);
+});
+
 test("a call step runs a command in any language, and reads its value from stdout", async () => {
   const cwd = workspace();
   const notes: string[] = [];
@@ -4446,6 +4621,93 @@ test("a command that answers no JSON is told where notes go", async () => {
 
   assert.equal(state.status, "failed");
   assert.match(state.steps.talk?.error ?? "", /notes to stderr/);
+});
+
+test("a command that writes too much output fails before it fills the run state", async () => {
+  const state = await run(
+    flow("loud", {
+      steps: [
+        call({
+          id: "talk",
+          command: `${process.execPath} -e 'process.stdout.write("x".repeat(4 * 1024 * 1024 + 1))'`,
+          returns: Type.Object({}),
+        }),
+      ],
+    }),
+    { cwd: workspace() },
+  );
+
+  assert.equal(state.status, "failed");
+  assert.match(state.steps.talk?.error ?? "", /more than 4 MiB/);
+});
+
+test("a run passes cancellation to its harness and records stopped", async () => {
+  const cwd = workspace();
+  const control = new AbortController();
+  const harness: Harness = {
+    toTrajectory: () => undefined,
+    async run(_request, _watch, signal) {
+      signal?.throwIfAborted();
+      throw new Error("the harness received no stop");
+    },
+  };
+
+  const state = await run(
+    flow("stopping", {
+      steps: [agent({ id: "work", prompt: "step.md", tools: ["read"], returns: Summary })],
+    }),
+    {
+      cwd,
+      harness,
+      signal: control.signal,
+      onEvent: (event) => event.type === "step_start" && control.abort(new Error("the run was stopped")),
+    },
+  );
+
+  assert.equal(state.status, "stopped");
+  assert.equal(JSON.parse(readFileSync(join(cwd, ".orchy", "runs", state.runId, "state.json"), "utf8")).status, "stopped");
+});
+
+test("direct adapter cancellation ends a command descendant", async () => {
+  const cwd = workspace();
+  const bin = join(cwd, "bin");
+  mkdirSync(bin);
+  const command = join(bin, "claude");
+  writeFileSync(
+    command,
+    [
+      `#!${process.execPath}`,
+      `const { spawn } = require("node:child_process");`,
+      `const fs = require("node:fs");`,
+      `fs.writeFileSync("adapter-started", "yes");`,
+      `const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setTimeout(() => require('node:fs').writeFileSync('adapter-late', 'yes'), 1500); setTimeout(() => {}, 5000)"], { stdio: "ignore" });`,
+      `child.unref();`,
+      `setTimeout(() => {}, 5000);`,
+      "",
+    ].join("\n"),
+  );
+  chmodSync(command, 0o755);
+  const path = process.env.PATH;
+  process.env.PATH = `${bin}${delimiter}${path ?? ""}`;
+  const control = new AbortController();
+
+  try {
+    const running = claude.run(
+      { step: "work", prompt: "Wait.", tools: [], returns: Type.Object({}), cwd },
+      undefined,
+      control.signal,
+    );
+    for (let count = 0; count < 100 && !existsSync(join(cwd, "adapter-started")); count += 1) {
+      await new Promise((wait) => setTimeout(wait, 20));
+    }
+    assert.equal(existsSync(join(cwd, "adapter-started")), true);
+    control.abort(new Error("the run was stopped"));
+    await assert.rejects(running, /could not run the claude command/);
+    await new Promise((wait) => setTimeout(wait, 2000));
+    assert.equal(existsSync(join(cwd, "adapter-late")), false);
+  } finally {
+    process.env.PATH = path;
+  }
 });
 
 test("the orchy check passes on a clean exit, and fails with what the command said", async () => {
@@ -4515,6 +4777,109 @@ test("a resume takes a value or a step to go back to, not both", async () => {
   );
 });
 
+test("one state revision takes one gate answer", async () => {
+  const cwd = workspace();
+  const stopped = await run(
+    flow("gated-once", { steps: [gate({ id: "confirm", question: "Ship it?", returns: Type.Boolean() })] }),
+    { cwd },
+  );
+  const revision = stopped.revision as number;
+
+  const answers = await Promise.allSettled([
+    resume(stopped.runId, true, { cwd, gate: "confirm", revision }),
+    resume(stopped.runId, false, { cwd, gate: "confirm", revision }),
+  ]);
+
+  assert.equal(answers.filter((one) => one.status === "fulfilled").length, 1);
+  assert.equal(answers.filter((one) => one.status === "rejected").length, 1);
+  const saved = JSON.parse(
+    readFileSync(join(cwd, ".orchy", "runs", stopped.runId, "state.json"), "utf8"),
+  ) as RunState;
+  assert.equal(saved.status, "done");
+});
+
+test("a claim without a live owner fails closed until a person removes it", async () => {
+  const cwd = workspace();
+  const stopped = await run(
+    flow("stale-claim", { steps: [gate({ id: "confirm", question: "Ship it?", returns: Type.Boolean() })] }),
+    { cwd },
+  );
+  const claim = join(cwd, ".orchy", "runs", stopped.runId, "claim");
+  mkdirSync(claim);
+  await assert.rejects(
+    () => resume(stopped.runId, true, { cwd, gate: "confirm", revision: stopped.revision }),
+    /claim with no live owner/,
+  );
+  rmSync(claim, { recursive: true });
+  writeFileSync(claim, JSON.stringify({ pid: 2_147_483_646, identity: "a dead process", token: "old" }));
+
+  await assert.rejects(
+    () => resume(stopped.runId, true, { cwd, gate: "confirm", revision: stopped.revision }),
+    /remove it only when no Orchy process drives the run/,
+  );
+  rmSync(claim);
+
+  const state = await resume(stopped.runId, true, {
+    cwd,
+    gate: "confirm",
+    revision: stopped.revision,
+  });
+
+  assert.equal(state.status, "done");
+});
+
+test("a component that throws null leaves a failed run", async () => {
+  const cwd = workspace();
+  writeFileSync(join(cwd, "null.ts"), "export default () => { throw null; };\n");
+
+  const state = await run(
+    flow("null-fault", { steps: [call({ id: "work", module: "null.ts", returns: Summary })] }),
+    { cwd },
+  );
+
+  assert.equal(state.status, "failed");
+  assert.match(state.steps.work?.error ?? "", /null/);
+  assert.equal(state.pid, undefined);
+});
+
+test("a post-step snapshot fault leaves a failed run", async () => {
+  const cwd = gitWorkspace();
+  writeFileSync(
+    join(cwd, "remove-git.ts"),
+    `import { rmSync } from 'node:fs'; export default () => { rmSync(${JSON.stringify(join(cwd, ".git"))}, { recursive: true }); return { summary: 'x' }; };\n`,
+  );
+  execFileSync("git", ["add", "remove-git.ts"], { cwd });
+  execFileSync("git", ["commit", "-m", "add component"], { cwd, stdio: "ignore" });
+
+  const state = await run(
+    flow("snapshot-fault", {
+      workspace: { kind: "git", path: "." },
+      steps: [call({ id: "work", module: "remove-git.ts", returns: Summary })],
+    }),
+    { cwd },
+  );
+
+  assert.equal(state.status, "failed");
+  assert.match(state.steps.work?.error ?? "", /not a git repository/);
+});
+
+test("a step value that changes in JSON persistence fails", async () => {
+  const cwd = workspace();
+  writeFileSync(join(cwd, "undefined.ts"), "export default () => ({ summary: undefined });\n");
+
+  const state = await run(
+    flow("json-only", { steps: [call({ id: "work", module: "undefined.ts", returns: Summary })] }),
+    { cwd },
+  );
+
+  assert.equal(state.status, "failed");
+  assert.match(state.steps.work?.error ?? "", /undefined, which is not JSON/);
+  const saved = JSON.parse(
+    readFileSync(join(cwd, ".orchy", "runs", state.runId, "state.json"), "utf8"),
+  ) as RunState;
+  assert.equal(saved.steps.work?.status, "failed");
+});
+
 test("the question of a gate carries the values of the steps it needs", async () => {
   const cwd = workspace();
   const harness = fakeHarness({ summary: "looks fine" });
@@ -4581,67 +4946,75 @@ test("a flow that will not load ends the command as a wrong command, not a faile
 test("a store keeps a line for each entry, and gives back the last of them", () => {
   const root = mkdtempSync(join(tmpdir(), "orchy-memory-"));
   const store = lines(root);
+  const ticket = scopeKey("ticket-14");
+  const other = scopeKey("other");
 
-  const first = store.remember("ticket-14", { run: "r1", step: "code", text: "the parser lives in src/yaml.ts" });
-  store.remember("ticket-14", { run: "r1", step: "review", text: "line, not comma", tags: ["style"] });
-  store.remember("other", { run: "r2", step: "code", text: "nothing to do with it" });
+  const first = store.remember(ticket, { run: "r1", step: "code", text: "the parser lives in src/yaml.ts" });
+  store.remember(ticket, { run: "r1", step: "review", text: "line, not comma", tags: ["style"] });
+  store.remember(other, { run: "r2", step: "code", text: "nothing to do with it" });
 
   // One key is one store, so a second key sees nothing of the first.
-  assert.equal(store.recall("ticket-14").length, 2);
-  assert.equal(store.recall("other").length, 1);
-  assert.deepEqual(store.recall("ticket-14", 1).map((one) => one.step), ["review"]);
+  assert.equal(store.recall(ticket).length, 2);
+  assert.equal(store.recall(other).length, 1);
+  assert.deepEqual(store.recall(ticket, 1).map((one) => one.step), ["review"]);
   // A flow that asks for no seed gets none, where `slice(-0)` would give it all.
-  assert.deepEqual(store.recall("ticket-14", 0), []);
-  assert.deepEqual(store.keys(), ["other", "ticket-14"]);
+  assert.deepEqual(store.recall(ticket, 0), []);
+  assert.deepEqual(store.keys(), [keyReference(other), keyReference(ticket)].sort());
 
   // Every entry names where it came from, so a wrong one is found and dropped.
   assert.equal(first.run, "r1");
-  assert.equal(store.forget("ticket-14", first.id), 1);
-  assert.equal(store.forget("ticket-14", first.id), 0);
-  assert.deepEqual(store.recall("ticket-14").map((one) => one.text), ["line, not comma"]);
+  assert.equal(store.forget(ticket, first.id), 1);
+  assert.equal(store.forget(ticket, first.id), 0);
+  assert.deepEqual(store.recall(ticket).map((one) => one.text), ["line, not comma"]);
   // The file is a line of JSON for each entry, and nothing else.
-  const file = readFileSync(join(root, ".orchy", "memory", "ticket-14.jsonl"), "utf8");
-  assert.equal(file.trim().split("\n").length, 1);
-  assert.equal((JSON.parse(file.trim()) as { text: string }).text, "line, not comma");
+  const name = readdirSync(join(root, ".orchy", "memory")).find(
+    (one) => one.endsWith(".jsonl") && readFileSync(join(root, ".orchy", "memory", one), "utf8").includes("line, not comma"),
+  ) as string;
+  const file = readFileSync(join(root, ".orchy", "memory", name), "utf8").trim().split("\n");
+  assert.equal(file.length, 2);
+  assert.equal((JSON.parse(file[1] as string) as { text: string }).text, "line, not comma");
 
-  assert.equal(store.forget("ticket-14"), 1);
-  assert.deepEqual(store.recall("ticket-14"), []);
+  assert.equal(store.forget(ticket), 1);
+  assert.deepEqual(store.recall(ticket), []);
 });
 
 test("a store skips a line a hand broke, and opens all the same", () => {
   const root = mkdtempSync(join(tmpdir(), "orchy-broken-"));
   const store = lines(root);
-  store.remember("k", { run: "r", step: "s", text: "good" });
-  appendFileSync(join(root, ".orchy", "memory", "k.jsonl"), "{ half a line\n");
-  store.remember("k", { run: "r", step: "s", text: "later" });
+  const key = scopeKey("k");
+  store.remember(key, { run: "r", step: "s", text: "good" });
+  const name = readdirSync(join(root, ".orchy", "memory")).find((one) => one.endsWith(".jsonl")) as string;
+  appendFileSync(join(root, ".orchy", "memory", name), "{ half a line\n");
+  store.remember(key, { run: "r", step: "s", text: "later" });
 
   // One malformed entry costs that entry, and not every flow that reads the store.
-  assert.deepEqual(store.recall("k").map((one) => one.text), ["good", "later"]);
+  assert.deepEqual(store.recall(key).map((one) => one.text), ["good", "later"]);
 });
 
 test("a store refuses an entry too long to seed a prompt", () => {
   const root = mkdtempSync(join(tmpdir(), "orchy-long-"));
   const store = lines(root);
+  const key = scopeKey("k");
   // `most` bounds how many entries seed a prompt, and this bounds each one, so
   // the seed itself is bounded. A store of paragraphs is a document.
-  assert.throws(() => store.remember("k", { run: "r", step: "s", text: "x".repeat(LONGEST + 1) }), /holds 2001 characters, and the most is 2000/);
-  assert.equal(store.remember("k", { run: "r", step: "s", text: "x".repeat(LONGEST) }).text.length, LONGEST);
-  assert.equal(store.recall("k").length, 1);
+  assert.throws(() => store.remember(key, { run: "r", step: "s", text: "x".repeat(LONGEST + 1) }), /holds 2001 characters, and the most is 2000/);
+  assert.equal(store.remember(key, { run: "r", step: "s", text: "x".repeat(LONGEST) }).text.length, LONGEST);
+  assert.equal(store.recall(key).length, 1);
 });
 
 test("a scope is a key: the three words, and one a flow writes for itself", () => {
   assert.equal(keyOf(undefined, "bugfix"), undefined);
   assert.equal(keyOf({ scope: "none" }, "bugfix"), undefined);
-  assert.equal(keyOf({ scope: "flow" }, "Bug Fix"), "flow-bug-fix");
-  assert.equal(keyOf({ scope: "root" }, "bugfix"), "root");
+  assert.equal(keyOf({ scope: "flow" }, "Bug Fix"), flowKey("Bug Fix"));
+  assert.equal(keyOf({ scope: "root" }, "bugfix"), rootKey());
   // The scope reads the values of the run, as a prompt does, so each ticket
   // gets its own store and a follow-up flow points at the same one.
-  assert.equal(keyOf({ scope: "ticket/{{ issue }}" }, "bugfix", { issue: "PROJ-14" }), "ticket-proj-14");
-  assert.equal(keyOf({ scope: "ticket/{{ issue }}" }, "corrections", { issue: "PROJ-14" }), "ticket-proj-14");
+  assert.equal(keyOf({ scope: "ticket/{{ issue }}" }, "bugfix", { issue: "PROJ-14" }), scopeKey("ticket/PROJ-14"));
+  assert.equal(keyOf({ scope: "ticket/{{ issue }}" }, "corrections", { issue: "PROJ-14" }), scopeKey("ticket/PROJ-14"));
   // A key becomes a file name and never a path, so a walk out of the store is
   // not a thing that can be spelled.
-  assert.equal(keyOf({ scope: "../../etc/passwd" }, "bugfix"), "etc-passwd");
-  assert.equal(keyOf({ scope: ".." }, "bugfix"), "memory");
+  assert.equal(keyOf({ scope: "../../etc/passwd" }, "bugfix"), scopeKey("../../etc/passwd"));
+  assert.equal(keyOf({ scope: ".." }, "bugfix"), scopeKey(".."));
   assert.throws(
     () => keyOf({ scope: "ticket/{{ issue }}" }, "bugfix", {}),
     /nothing supplies "issue"/,
@@ -4685,8 +5058,8 @@ test("validate refuses a step that remembers anything but none", () => {
 test("a run seeds a prompt with what earlier runs recorded, and a step can decline it", async () => {
   const cwd = workspace();
   const store = lines(cwd);
-  store.remember("flow-remembering", { run: "older", step: "code", text: "the parser lives in src/yaml.ts" });
-  store.remember("flow-remembering", { run: "older", step: "review", text: "prefer a line to a comma" });
+  store.remember(flowKey("remembering"), { run: "older", step: "code", text: "the parser lives in src/yaml.ts" });
+  store.remember(flowKey("remembering"), { run: "older", step: "review", text: "prefer a line to a comma" });
 
   const harness = fakeHarness({ summary: "done" }, { summary: "reviewed" });
   const state = await run(
@@ -4704,13 +5077,13 @@ test("a run seeds a prompt with what earlier runs recorded, and a step can decli
 
   assert.equal(state.status, "done");
   // The run resolves the key once and keeps it, so a resume reads the same store.
-  assert.deepEqual(state.memory, { key: "flow-remembering", most: 20 });
+  assert.deepEqual(state.memory, { key: flowKey("remembering"), most: 20 });
   assert.match(harness.seen[0]?.prompt ?? "", /What earlier runs recorded/);
   assert.match(harness.seen[0]?.prompt ?? "", /the parser lives in src\/yaml\.ts/);
   assert.doesNotMatch(harness.seen[1]?.prompt ?? "", /What earlier runs recorded/);
   // The key rides on the request, so a harness that runs a process gives it to
   // the step. A step that declines the memory gets no key either.
-  assert.equal(harness.seen[0]?.memory, "flow-remembering");
+  assert.equal(harness.seen[0]?.memory, flowKey("remembering"));
   assert.equal(harness.seen[1]?.memory, undefined);
   // The seed is part of the prompt, so the record keeps what the step was told.
   assert.match(state.steps.code?.prompt ?? "", /prefer a line to a comma/);
@@ -4736,12 +5109,12 @@ test("a seed holds what earlier runs recorded, and not what this run wrote", asy
   assert.doesNotMatch(harness.seen[0]?.prompt ?? "", /What earlier runs recorded/);
   assert.doesNotMatch(harness.seen[0]?.prompt ?? "", /written in this run/);
   // The store holds it all the same, for the run that comes after.
-  assert.deepEqual(lines(cwd).recall("flow-writing").map((one) => one.text), ["written in this run"]);
+  assert.deepEqual(lines(cwd).recall(flowKey("writing")).map((one) => one.text), ["written in this run"]);
 });
 
 test("a flow that declares no memory seeds nothing, and reads no store", async () => {
   const cwd = workspace();
-  lines(cwd).remember("flow-quiet", { run: "older", step: "code", text: "a thing an earlier run knew" });
+  lines(cwd).remember(flowKey("quiet"), { run: "older", step: "code", text: "a thing an earlier run knew" });
 
   const harness = fakeHarness({ summary: "done" });
   const state = await run(
@@ -4756,7 +5129,7 @@ test("a flow that declares no memory seeds nothing, and reads no store", async (
 test("a flow seeds the number of entries it asks for, and none when it asks for none", async () => {
   const cwd = workspace();
   const store = lines(cwd);
-  for (const text of ["first", "second", "third"]) store.remember("flow-counting", { run: "r", step: "s", text });
+  for (const text of ["first", "second", "third"]) store.remember(flowKey("counting"), { run: "r", step: "s", text });
 
   const seedOf = async (most: number) => {
     const harness = fakeHarness({ summary: "done" });
@@ -4819,7 +5192,7 @@ test("orchy:remember records a step, and the run after it reads what was recorde
   assert.equal(first.status, "done", first.error ?? "");
   assert.equal((first.steps.record?.value as { recorded: string[] }).recorded.length, 1);
 
-  const recorded = lines(cwd).recall("ticket-proj-14");
+  const recorded = lines(cwd).recall(scopeKey("ticket/PROJ-14"));
   assert.equal(recorded.length, 1);
   assert.match(recorded[0]?.text ?? "", /I moved the parser/);
   // Bookkeeping is a step, so the entry names the run and the step that wrote it.
@@ -4883,7 +5256,7 @@ test("a command step learns the store from its environment", async () => {
   assert.equal(state.status, "done", state.error ?? "");
   // It learns who it is from the same variable the door reads, so an entry it
   // adds names this run and this step, and not a person.
-  assert.deepEqual(state.steps.say?.value, { key: "flow-shelling", by: { runId: state.runId, step: "say" } });
+  assert.deepEqual(state.steps.say?.value, { key: flowKey("shelling"), by: { runId: state.runId, step: "say" } });
 });
 
 test("a flow step that names a flow with a memory of its own is refused", async () => {

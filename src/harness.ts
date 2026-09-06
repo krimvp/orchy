@@ -30,6 +30,13 @@ export const SUPPLIES: Record<AdapterName, readonly ToolName[]> = {
   droid: ["read", "bash", "edit", "write", "grep", "find", "ls", "web"],
 };
 
+/** Whether an adapter can give the run a cost in dollars. */
+export const COSTS: Record<AdapterName, "reported" | "partial" | "unknown"> = {
+  pi: "partial",
+  claude: "reported",
+  droid: "unknown",
+};
+
 /**
  * What each adapter reads as a model name. The grammar of a name belongs to the
  * harness, so this table lives beside the names, for the same reason as
@@ -131,6 +138,6 @@ function cut(text: string): string {
  * a step. An adapter that reports nothing still answers the same.
  */
 export interface Harness {
-  run(request: AgentRequest, watch?: Watch): Promise<AgentResult>;
+  run(request: AgentRequest, watch?: Watch, signal?: AbortSignal): Promise<AgentResult>;
   toTrajectory(handle: string, trajectoryId: string, version: string): Trajectory | undefined;
 }

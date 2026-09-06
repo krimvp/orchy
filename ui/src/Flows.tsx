@@ -2,6 +2,9 @@ import { type CSSProperties, useEffect, useState } from "react";
 import { type FlowRow, type Schema, api, follow, useLoad, useNotices } from "./api";
 import { Contract } from "./Run";
 import { Loading, length, when } from "./Runs";
+import { withTimeout } from "./ticket";
+
+const UNKNOWN_START = "The daemon did not answer. Delivery is unknown. Open Runs before you start it again.";
 
 /**
  * Brings a panel into view when it mounts. The button that opens one can sit
@@ -54,8 +57,7 @@ export function Flows() {
     setAsking(undefined);
     setFault(undefined);
     setNote("Starting the run…");
-    return api
-      .startFlow(id, values)
+    return withTimeout(api.startFlow(id, values), 10_000, UNKNOWN_START)
       .then((ticket) => follow(ticket))
       .catch((problem: Error) => (setNote(undefined), setFault(problem.message)))
       .finally(() => setBusy(undefined));
@@ -102,7 +104,7 @@ export function Flows() {
               Orchy writes <span className="mono">flows/&lt;name&gt;/flow.yaml</span> with one step and its
               prompt, and opens it in the editor.
             </p>
-            <div className="row" style={{ marginBottom: 0, flexWrap: "nowrap" }}>
+            <div className="row" style={{ marginBottom: 0 }}>
               <input
                 placeholder="what should it be called?"
                 value={name}
@@ -116,7 +118,7 @@ export function Flows() {
             </div>
           </>
         ) : (
-          <div className="row" style={{ marginBottom: 0, flexWrap: "nowrap" }}>
+          <div className="row" style={{ marginBottom: 0 }}>
             <input
               placeholder="examples/code-review/flow.yaml"
               value={path}
@@ -129,7 +131,7 @@ export function Flows() {
             </button>
           </div>
         )}
-        {fault && <pre className="bad">{fault}</pre>}
+        {fault && <pre className="bad" role="alert">{fault}</pre>}
         {offerToCreate && (
           <div className="row" style={{ marginBottom: 0 }}>
             <button className="go" onClick={() => void create({ path })}>
@@ -147,7 +149,8 @@ export function Flows() {
             key={asking.id}
             schema={asking.takes}
             label="Start the run"
-            onSend={(values) => void begin(asking.id, values as Record<string, unknown>)}
+            pendingLabel="Starting…"
+            onSend={(values) => begin(asking.id, values as Record<string, unknown>)}
           />
         </div>
       )}
@@ -246,7 +249,13 @@ function HarnessPick({
       title="The harness is the agent program that runs each step."
     >
       {(health?.adapters ?? ["pi"]).map((name) => (
-        <button key={name} className={harness === name ? "on" : ""} onClick={() => onPick(name)}>
+        <button
+          key={name}
+          type="button"
+          aria-pressed={harness === name}
+          className={harness === name ? "on" : ""}
+          onClick={() => onPick(name)}
+        >
           {name}
         </button>
       ))}
@@ -317,7 +326,13 @@ function Timing({
         />
         <div className="segmented" style={{ flex: "none" }}>
           {UNITS.map((one) => (
-            <button key={one.name} className={unit === one.name ? "on" : ""} onClick={() => setUnit(one.name)}>
+            <button
+              key={one.name}
+              type="button"
+              aria-pressed={unit === one.name}
+              className={unit === one.name ? "on" : ""}
+              onClick={() => setUnit(one.name)}
+            >
               {one.name}
             </button>
           ))}
@@ -325,7 +340,12 @@ function Timing({
       </div>
       <p className="note small">The first run starts within a minute, and each next one when the time has passed.</p>
       {takes ? (
-        <Contract schema={takes} label="Schedule it" onSend={(values) => void save(values as Record<string, unknown>)} />
+        <Contract
+          schema={takes}
+          label="Schedule it"
+          pendingLabel="Scheduling…"
+          onSend={(values) => save(values as Record<string, unknown>)}
+        />
       ) : (
         <div className="row" style={{ marginBottom: 0 }}>
           <button className="go" onClick={() => void save()}>

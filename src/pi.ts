@@ -31,7 +31,8 @@ const REFUSALS = 8;
 const REFUSED = "Validation failed for tool";
 
 export const pi: Harness = {
-  async run(request, watch) {
+  async run(request, watch, signal) {
+    signal?.throwIfAborted();
     let value: unknown;
 
     const submit = defineTool({
@@ -86,6 +87,9 @@ export const pi: Harness = {
       modelRuntime,
       model,
     });
+    const abort = () => void session.abort();
+    if (signal?.aborted) abort();
+    else signal?.addEventListener("abort", abort, { once: true });
 
     // Pi writes its session one line at a time, so the record of the step is
     // also the report of it. The tail runs whether or not a caller watches,
@@ -103,12 +107,14 @@ export const pi: Harness = {
     );
 
     try {
+      signal?.throwIfAborted();
       await session.prompt(request.prompt);
       // A model that answers in prose has done the work and skipped the last
       // step of it, which is the common way a step fails here. One reminder
       // recovers the value. A second never has, so the step fails after it.
       if (value === undefined && refusals < REFUSALS) await session.prompt(REMIND);
     } finally {
+      signal?.removeEventListener("abort", abort);
       stop();
       session.dispose();
     }

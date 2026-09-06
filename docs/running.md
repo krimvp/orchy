@@ -1,5 +1,29 @@
 # Run a flow
 
+## Check before a run
+
+`orchy check flow.yaml` checks the flow shape and every flow it holds. It also
+checks each prompt file, component file, prompt name, state path, Git workspace,
+and harness command. Give it the run values to check them too:
+
+```bash
+orchy check flow.yaml --with '{"issue":412}'
+```
+
+A failed local check ends the command with code 2, before a step starts.
+
+The check starts no step and spends nothing. It reads `--version` from a Claude
+or Droid command with a two-second limit. This result does not prove that the
+model is available. The check calls no model, so it reports model availability
+and authentication as unknown. Check the account before a paid run.
+
+The check imports a TypeScript or JavaScript flow file. Its module initialization
+can run code. A YAML flow is data and has no module initialization.
+
+Run `orchy init` in an empty directory for a complete model-free flow. The
+command refuses to replace any starter file. Run `flow.yaml` first, then use
+`agent.yaml` after Claude Code is installed and logged in.
+
 ## Schemas
 
 A contract is JSON Schema. That is the one form that Orchy keeps, because a
@@ -12,15 +36,17 @@ Each adapter gives the contract to its harness whole. Pi builds a
 `submit_result` tool from it. The `claude` command takes it with
 `--json-schema`. Neither converts it.
 
-**TypeBox** is optional. You need it only to write a flow in TypeScript, where
-it gives one source for the contract and the static type that makes
-`cycle.when` safe. A flow in YAML holds plain JSON Schema and needs nothing.
+You do not have to import **TypeBox**. You use it only to write a flow in
+TypeScript, where it gives one source for the contract and the static type that
+makes `cycle.when` safe. The package installs it as a peer because the public
+TypeScript declarations name its schema type. A flow in YAML holds plain JSON
+Schema and does not use TypeBox at run time.
 
 Orchy is on npm as `@krimvp/orchy`, because the bare name belongs to another
 package, and a clone runs from source. Either way, see the
-[Install](../README.md#install) part of the README. Add `@sinclair/typebox` only
-to write a flow in TypeScript. A flow in YAML holds plain JSON Schema and needs
-nothing.
+[Install](../README.md#install) part of the README. Import
+`@sinclair/typebox` only to write a flow in TypeScript. A flow in YAML holds
+plain JSON Schema and does not import it.
 
 ## The values a run takes
 
@@ -294,7 +320,9 @@ that starts the inner flow waits for whatever the outer step waited for, and
 whoever needed `review` now needs the step the inner flow ends with.
 
 An inner flow must end in exactly one step, so that reference is never unclear.
-A cycle inside an inner flow stays inside it.
+A condition and a cycle inside an inner flow keep the ids of its inner steps.
+The values on the flow step reach each inner step. A gate reads them in its
+question. A value on the inner step wins when both places supply one name.
 
 A `kind: flow` step carries a cycle of its own, and expansion hangs it on the
 step the inner flow ends with. So a panel sends the work back without the outer
@@ -356,9 +384,19 @@ takes it. So a flow with `changes: nothing` on the flow runs one step at a time
 from end to end. Put the promise on the steps that act, and not on the flow,
 when a wave must run wide.
 
-Two runs in one working directory still disturb each other, whatever this number
-says. A promise holds inside one run. Give each run a working directory of its
-own.
+One active Orchy run claims one Git working tree. A second run over the same
+tree fails before it changes run state or starts a step. A path alias and a
+subdirectory find the same claim. Separate Git worktrees can run at the same
+time.
+
+The claim ends when the run is done, fails, or waits at a gate. A resume claims
+the tree again. The claim does not stop a person or another program from
+changing files. It also does not keep the tree unchanged while a run waits.
+Use a separate Git worktree when a run needs files of its own.
+
+A crash or an unconfirmed stop leaves the claim in place. The next run names
+the owner, the run state, and the claim file. Inspect them with `orchy runs`.
+Remove the claim only after the owner process and its descendants have ended.
 
 ## Choose a model
 
@@ -525,7 +563,7 @@ the model ends with a step:
 
 With no `text` of its own it records the value of each step it needs, so an
 agent step that summarizes before it is the whole of what a flow has to write.
-The third way is the command line — `orchy memory add <scope> <text>` — which is
+The third way is the command line — `orchy memory add <key> <text>` — which is
 also how a `command` step and a harness with no `orchy` tool reach the store. A
 command step, and a claude or droid step, read the key as `$ORCHY_MEMORY_KEY`
 and who they are as `$ORCHY_STARTED_BY`, and `add` records that run and step.
@@ -546,9 +584,29 @@ and dropped:
 
 ```bash
 orchy memory keys
-orchy memory list ticket-proj-14
-orchy memory forget ticket-proj-14 a41f9c02   # or the whole scope, with no id
+KEY="$(orchy memory key scope 'ticket/PROJ-14')"
+orchy memory list "$KEY"
+orchy memory forget "$KEY" a41f9c02   # or the whole scope, with no id
 ```
+
+The `key` command preserves both the kind and exact text of a scope. It prints
+a canonical `key=v2:...` reference. Use `key flow <name>` for flow memory and
+`key root` for root memory. Use `scope=<literal>` when a custom scope itself
+starts with `v2:`, `legacy=`, or `key=`.
+
+Old flat file names cannot say which exact scope made them. `memory keys`
+marks these files as `legacy=`. Choose their target instead of letting Orchy
+guess, and copy one without deleting its source:
+
+```bash
+TARGET="$(orchy memory key scope 'ticket/PROJ-14')" # or key flow / key root
+orchy memory migrate legacy=ticket-proj-14 "$TARGET"
+```
+
+The target must be empty, and the legacy source remains for review and later
+cleanup. Orchy serializes adds, forgets, and migrations across processes. If a
+writer dies while holding the claim, the next command names the claim file; a
+person removes it only after checking that no Orchy process writes memory.
 
 Nothing expires, and nothing ranks: `recall_memory` matches a substring, in the
 text and in the tags. Durable project knowledge still belongs in reviewed,
@@ -583,14 +641,19 @@ A parent process reads the events alone, which is what the daemon does.
 A run that reaches a gate writes its state and ends. The command prints the run
 id. The question carries the values of the steps the gate needs, the way an
 agent step reads them in its prompt, so the person answers with the work in
-front of them.
+front of them. A name in the question reads a value from the run or the gate.
+A missing value fails the run and never becomes a question.
 
 ```bash
-orchy resume <run id> '{"approved":true}'
+orchy resume <run id> '{"approved":true}' --gate <step> --revision <number>
 ```
 
 Orchy checks the value against the contract of the gate, so a wrong value is
 refused before the run continues.
+
+The command printed by Orchy includes the gate and revision. The HTTP and MCP
+doors require the revision with an answer. A stale answer then cannot advance a
+later occurrence of the same gate.
 
 ## Continue a run that ended
 
@@ -670,11 +733,14 @@ On the page:
 1. Open **Flows** and give the path of a flow file. The path is relative to the
    directory of the daemon.
 2. Press **Run**. The run goes in the queue, and it starts when a slot is free.
-   Four runs run at the same time.
+   Four runs run at the same time. The ticket is stored before the page reports
+   acceptance, so work that is still queued survives a daemon restart.
 3. Open the run. Each step turns green when it passes and red when it fails, and
    the events arrive while the run is on the way.
 4. A run that reaches a gate shows a form built from the contract of that gate.
-   Answer it, and the run continues. This is `orchy resume` under a form.
+   The form keeps an unanswered field apart from an empty string or list. It
+   omits each optional field until you answer it. An answer names the state you
+   saw, so an old answer cannot pass a later visit to the same gate.
 5. Choose a step to read its value, its error, its length, and the files it
    changed.
 6. **What the steps say** shows each note as it arrives, while the run works. A
@@ -697,6 +763,13 @@ On the page:
     that failed, and each step of an ended run runs again from there. The steps
     that passed keep their work.
 
+If a daemon stops after it claims a ticket, the queue may say `uncertain`.
+Open the named run and its trajectory before you act. Orchy does not submit the
+work again because the old child may still run. **Dismiss** acknowledges the
+uncertainty; it does not prove delivery. Do not repeat an uncertain start or
+answer until you know its outcome. A `failed` ticket is different: Orchy knows
+that work did not start, so it is safe to correct and submit again.
+
 The daemon listens on `127.0.0.1` only, and it refuses a page that is not its
 own. A request with a foreign `Origin` reaches nothing, and so does a request
 with a `Host` that the daemon does not answer to. So open the page at
@@ -717,6 +790,12 @@ The command line and the daemon run a flow the same way. The daemon starts
 `orchy run <flow file> --events` as a child process, which writes one JSON event
 for each line, and reads the state that the child writes to disk. So a run needs
 no daemon, and `orchy run` on its own stays the same command.
+
+A stop asks the full process tree to end. Orchy waits 750 milliseconds and then
+forces the processes that remain to end. The stop answer returns after that
+work, and the run then says `stopped`. POSIX systems use a process group.
+Windows uses `taskkill /t`. A process that detaches itself from this tree is
+outside this control. A stop fails if Orchy cannot confirm that its tree ended.
 
 The daemon indexes every run it finds under `.orchy/runs` when it starts, so a
 run from the command line shows up on the page. It keeps that index in
@@ -802,6 +881,10 @@ Orchy ships `orchy:check`: a component that runs a command and passes only
 when it ends with 0 — the tests, a linter, a build, in any language. Its
 output rides as live notes, and a failure carries the last of what the
 command said, so a cycle sends the reason back to the step it checks.
+
+A command can write at most 4 MiB to stdout. The whole stdout value goes into
+the run state, so a larger answer fails the step. Orchy keeps only the last 4
+KiB of command stderr for an error. A live note can carry at most 4 KiB.
 
 ```yaml
 - id: verify

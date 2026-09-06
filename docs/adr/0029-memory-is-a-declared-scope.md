@@ -59,8 +59,9 @@ run and the step that wrote it, an id, and the time. So a wrong claim is found
 by where it came from, and dropped by its id:
 
 ```
-orchy memory list ticket-proj-14
-orchy memory forget ticket-proj-14 a41f9c02
+key="$(orchy memory key scope 'ticket/PROJ-14')"
+orchy memory list "$key"
+orchy memory forget "$key" a41f9c02
 ```
 
 A person who writes one from the command line is recorded as a person. A
@@ -148,13 +149,12 @@ an agent step that produces one and a `orchy:remember` step that records it.
   door keeps a step from naming another store by mistake; it does not keep a
   model that runs commands from reaching one on purpose. A flow that must not
   reach the store of another ticket runs in another root.
-- `forget` rewrites a file that a running step may append to at the same time,
-  and there is no lock, so a correction made during a run can drop one entry
-  that arrived while it ran. Correct a store when nothing writes to it.
-- A key is a file name, and `asKey` flattens what it is given: `ticket/PROJ-14`
-  and `ticket-proj-14` are one store, and a scope of your own that reads
-  `flow-bugfix` is the `flow` store of the flow named `bugfix`. A key is not a
-  wall between two flows that spell one alike.
+- Memory changes take one claim. A claim whose owner died stays until a person
+  inspects it. This can stop writes, but it cannot guess that a live write is
+  stale and remove its owner.
+- A legacy key is a flat file name and is not a scope boundary. The amendment
+  below replaces it with an exact typed key and gives legacy data an explicit
+  migration.
 - Nothing expires. An entry lives until a person or a flow forgets it, and the
   store grows by one file for each key. A time limit is a field this can grow;
   nobody knows the right default yet.
@@ -165,3 +165,27 @@ an agent step that produces one and a `orchy:remember` step that records it.
 - Durable project knowledge still belongs in reviewed, human-readable records in
   the repository. A store is where one run tells the next what it found, and
   not where an organisation keeps what it knows.
+
+## Amendment: a scope keeps its exact identity
+
+The original file-name rule flattened a scope with `asKey`. That rule was not
+safe. `ticket/A/B` and `ticket/A-B` became one store. Different Unicode scopes
+could both become `memory`. A custom scope could also become the `flow` store.
+This broke the declared boundary between scopes.
+
+A current key now holds a type and exact text: `root`, a flow name, or a custom
+scope. Orchy encodes that value as a `v2:` key. The file name keeps a readable
+prefix and the full SHA-256 digest. The first line of the file records the exact
+key, so `keys()` can recover it and can refuse bad metadata.
+
+The old files do not record the logical scope that made their flat name. They
+can already hold mixed entries. Therefore, Orchy does not read or copy one by
+itself. `orchy memory keys` marks it as `legacy=`, and a person selects one
+exact `key=` target with `orchy memory migrate`. The command keeps the legacy
+source. It creates the target exclusively, so two migrations do not merge or
+overwrite it.
+
+Memory changes use one claim across processes. An append, a forget, and a
+migration cannot change the files at the same time. A stale or unreadable claim
+fails closed and tells a person to inspect it. Orchy does not remove a claim
+that it cannot prove it owns.

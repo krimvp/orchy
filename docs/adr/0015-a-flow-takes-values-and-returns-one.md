@@ -69,8 +69,9 @@ A prompt held the values as a trailing JSON block, so a value never reached the
 sentence that needed it. A name in braces fixes that. The blocks stay as well,
 so a prompt that names nothing works exactly as it did.
 
-A name that resolves to nothing fails the step, and the message names the step
-and the name. The two other answers are both worse:
+A name in a gate question follows the same rule. A name that resolves to
+nothing fails the run before a person sees a question. The message names the
+step and the name. The two other answers are both worse:
 
 - Leave the braces in the prompt. The model reads `{{ issue }}`, treats it as
   text, and works on the wrong thing. Nothing says a word.
@@ -111,6 +112,10 @@ ride on each step of it, under whatever that step already holds. A flow step
 that supplies a value the sub-flow does not take is refused when the flow loads,
 and so is a flow step that supplies none to a sub-flow that takes values. So a
 sub-flow is reusable, and not fixed.
+
+A gate holds `with` for the names in its question. Expansion gives it the values
+of an inner flow. A value on the gate wins a duplicate name, as it does on an
+agent or a call step. Interpolation happens when the gate asks, and only once.
 
 A component reads the values of the run and the value of its own step from one
 argument, the third, with the step over the run. A run supplied the first, and

@@ -3,15 +3,18 @@
 This module is the long-lived heart of Orchy: it accepts orders to run flows,
 holds them in a queue, and drives each one in a child process. At most four
 runs work at once — that bound is a constant, not a setting; a user who wants
-more starts a second daemon. Each run is `cli.ts` spawned with `--events`, so
-the child writes one JSON event per line on stdout and the daemon turns that
-stream into notices for whoever watches (in practice, `server.ts`, which puts
-a daemon behind HTTP). Every thirty seconds the daemon also fires every
+more starts a second daemon. Each run is `cli.ts` with a private file
+descriptor for events. The child writes one checked JSON event per line there.
+The daemon turns that stream into notices for whoever watches. Component
+stdout is a separate stream, so ordinary output cannot control the daemon.
+Every thirty seconds the daemon also fires every
 schedule that is due, through the same `start` door a person uses; a flow
 whose last scheduled run still works is skipped, so runs never stack behind a
 slow one.
 
-The daemon keeps two records with different lifetimes. Lifecycle events
+The daemon keeps records with different lifetimes. Accepted starts and resumes
+go into the SQLite `accepted_work` ledger before their caller receives a
+ticket. Lifecycle events
 (`run_start`, step starts and ends) go into the SQLite index that `store.ts`
 opens under `<root>/.orchy/index.db`, where they survive the process. Step
 output does not: the output of a step is a view, and the trajectory is the
@@ -20,12 +23,20 @@ record, so the daemon holds only the last 500 output notes per run, for the
 `trajectory.json` on disk instead. Every event carries a sequence number, so
 two events in one millisecond still line up.
 
-A queued run is identified by a **ticket** — a number the daemon hands out
-before the child exists. Once the child reports `run_start`, the ticket gains
-a `runId` and the run lives in the index from then on. A child that dies
+A queued run is identified by a **ticket** — a global SQLite number the daemon
+hands out before the child exists. Its `status` is `queued`, `dispatching`,
+`delivered`, `failed`, or `uncertain`. Once the child reports `run_start`, the
+ticket gains a `runId` and the run lives in the index from then on. A child that dies
 before it starts a run keeps its ticket and an `error` explaining why, so a
 failure is never silent. A child that dies mid-run leaves its state on disk,
 and the daemon marks the row `stopped`.
+
+A restart claims a durable `queued` ticket, then checks the flow or run again
+before it starts a child.
+It never retries a ticket that a dead daemon had claimed, because a detached
+child may already have started. Such a ticket is `uncertain`; its `recovery`
+text names the run and the exact HTTP or UI actions to inspect and acknowledge
+it. Dismissal does not prove delivery. See ADR 0030.
 
 ## Exports
 
@@ -60,8 +71,10 @@ and the daemon marks the row `stopped`.
     when the run is neither waiting nor running.
   - `notes(runId)` — the recent output of a run's steps, as far back as
     memory holds (`StoredEvent[]`, possibly empty).
-  - `pending()` — every ticket the daemon still holds, queued or running.
-  - `forget(ticket)` — drops a ticket, typically one that ended in error.
+  - `pending()` — durable tickets from every daemon over this root.
+  - `forget(ticket)` — drops a failed ticket, or acknowledges one whose dead
+    owner makes delivery uncertain. It refuses queued, dispatching, and live
+    delivered work.
   - `state(runId)` — the run's `RunState` read from disk, or `undefined`.
   - `trajectory(runId)` — the parsed `trajectory.json` of a run, or
     `undefined` when none exists.
@@ -77,8 +90,8 @@ and the daemon marks the row `stopped`.
     callers like the server that answer queries directly.
 
 - `Daemon` — the type of what `daemon()` returns.
-- `Ticket` — `{ ticket, flowName, path, queuedAt, runId?, error? }`; the
-  receipt for an accepted run.
+- `Ticket` — `{ ticket, flowName, path, queuedAt, status, runId?, error?,
+  recovery? }`; the durable receipt for accepted work.
 - `Order` — what `start` takes, described above.
 - `Notice` — what a `watch` listener receives: either
   `{ kind: "event", runId, event }` for one stored event of one run, or

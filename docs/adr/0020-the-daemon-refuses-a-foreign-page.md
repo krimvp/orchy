@@ -98,6 +98,14 @@ The daemon refuses a flow file outside its root in the same change, because
 landed. `../..` read a file anywhere on the machine. Every step acts in the
 root, so a flow file above it belongs to another project.
 
+The check uses canonical paths. For a new file, it checks the nearest existing
+parent. Thus, a symbolic link under the root cannot carry a read or a write to
+another directory.
+
+The check and the file action are two operations. It does not stop another
+local process from replacing a path between them. The daemon has no boundary
+against a program on the same machine.
+
 The rule is not a sandbox and it is not a login. Anyone who reaches the port
 from a program still runs code on the machine, and the README states that limit
 beside this one.
