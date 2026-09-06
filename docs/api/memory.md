@@ -1,83 +1,77 @@
 # `src/memory.ts` — what a run recovers, and where it stores
 
-This module holds the memory of a run: the store a flow declares, the key that
-names it, and the one implementation behind the contract. The runner recovers
-from it before a step, four doors write to it, and none of them knows the shape
-of the file. See [ADR 0029](../adr/0029-memory-is-a-declared-scope.md) for the
-decision and its limits.
+This module holds the memory of a run. A flow declares a scope. The runner
+resolves it once, keeps its exact key in the run state, and uses one storage
+through the `Storage` contract. See [ADR 0029](../adr/0029-memory-is-a-declared-scope.md).
 
-A flow that declares nothing remembers nothing. That is the default, and it is
-the whole answer to the failure a global agent memory has: a store that every
-run writes and every run reads is a store where one mistake compounds.
+## Exact keys
 
-## The scope
+A key includes its type and exact text. The three forms are `root`, `flow`, and
+`scope`. Orchy encodes the typed value as JSON and then as base64url, with a
+`v2:` prefix. Thus, these scopes are different:
 
-`memory.scope` on a flow is the key of one store. Three words are not keys:
+- `ticket/A/B` and `ticket/A-B`
+- `flow` for a flow named `bugfix`, and a custom scope named `flow-bugfix`
+- two different Unicode names
 
-| written | the key | what it means |
-| --- | --- | --- |
-| absent, or `none` | none | remembers nothing |
-| `flow` | `flow-<name>` | one store for every run of this flow |
-| `root` | `root` | the one store of the root, asked for by name |
-| anything else | that, as a key | a key of your own |
+The storage file has a readable prefix and the full SHA-256 digest of the exact
+key. Its first JSON line records that key. Each line after it is one `Entry`.
+A malformed entry costs only that entry. Invalid key metadata fails and names
+the file to correct.
 
-A key of your own reads the values of the run the way a prompt does, so
-`ticket/{{ issue }}` gives each ticket a store, and a follow-up flow that writes
-the same scope reads what the first run left. `asKey` turns whatever comes out
-into a file name — lowercased, and everything but `[a-z0-9._-]` becomes a dash.
-A key becomes a file name and never a path, so a walk out of the store is not
-something that can be spelled.
+`remember`, `forget`, and migration use one cross-process claim. `forget`
+writes a complete temporary file and renames it. A reader therefore sees the
+old file or the new file. An append cannot race with a rewrite and lose an
+entry.
 
-The run resolves the key once, before its first step, and keeps it in
-`state.memory`. So a resume reads the store the run really used, and not the one
-the flow file names today.
+## Commands and migration
+
+`orchy memory keys` prints references that a person can give to the other
+memory commands. A current key starts with `key=`. An old flat file starts with
+`legacy=`.
+
+Make a current key without copying its encoding by hand:
+
+```sh
+orchy memory key root
+orchy memory key flow 'Bug Fix'
+orchy memory key scope 'ticket/A/B'
+```
+
+An unprefixed value on `list`, `add`, or `forget` is a literal custom scope.
+`scope=` makes that rule explicit when the text itself starts with `v2:`,
+`legacy=`, or `key=`.
+A command step can give `$ORCHY_MEMORY_KEY` directly; Orchy recognizes its own
+canonical value from that variable.
+
+Old flat files can already hold entries from multiple logical scopes. Orchy
+never guesses which scope owns them. It lists one as `legacy=<flat name>` and
+requires an explicit target:
+
+```sh
+target="$(orchy memory key scope 'ticket/A/B')"
+orchy memory migrate legacy=ticket-a-b "$target"
+```
+
+Migration checks that the source is a regular file under the root. It publishes
+one complete target with exclusive creation. It refuses an existing target.
+The legacy source stays for review and explicit later cleanup. A persisted run
+that still holds a flat key fails with this migration action. Start a new run
+after migration so its state holds the exact key.
 
 ## Exports
 
-- `Entry` — one thing a run recorded: `id`, `at`, `run`, `step`, `text`, and
-  optional `tags`. Every entry names where it came from, so a wrong one is
-  found by its provenance and dropped by its id.
-- `Storage` — the contract, and the only one: `recall(key, most?)`,
-  `remember(key, entry)`, `forget(key, id?)`, and `keys()`. `recall` with no
-  `most` answers with every entry; with a number, the last that many; with `0`,
-  none. `remember` refuses a text longer than `LONGEST`, so the seed of a
-  prompt is bounded by `most` entries of at most that many characters each.
-- `lines(root)` — the one implementation: a line of JSON for each entry, under
-  `<root>/.orchy/memory`, one file for each key. A line a hand broke costs that
-  line and not the store.
-- `keyOf(memory, flowName, takes?)` — the key one run reads and writes, or
-  nothing when the flow remembers none. It throws when the scope reads a name
-  that nothing supplies, and `run()` turns that into a refusal.
-- `asKey(text)` — a key as a file name. The command line reads a scope through
-  this too, so a person types the scope their flow declares and reaches the
-  store the run wrote.
-- `MOST` — how many entries seed a prompt when the flow names no number: 20.
-- `LONGEST` — how long one entry may be, in characters: 2000.
-- `memoryProblems(memory, takes)` — what a flow gets wrong about its memory, for
-  `validate()`. A scope that reads a value the flow does not take is refused
-  here, where `orchy check` says it and nothing has started.
-
-## Who calls it
-
-- `src/run.ts` resolves the key in `run()`, seeds each agent prompt with what
-  earlier runs left in the scope — a block named *What earlier runs recorded*,
-  beside the values of the run; what this run wrote is its own state, and the
-  block holds none of it — and puts the key on the request of the harness and
-  in the environment of a `command` step, as `$ORCHY_MEMORY_KEY`, beside
-  `$ORCHY_STARTED_BY`. A step that declares `memory: none` gets no seed and no
-  key. The claude and droid adapters pass both names to the process they run;
-  Pi runs inside the runner and gets neither.
-- `src/mcp.ts` serves `recall_memory` and `remember` to a step that holds the
-  `orchy` tool. Neither takes a key: the door reads `state.memory` of the run
-  whose step opened it, so a step cannot name the store of another ticket,
-  or another flow through the door.
-- `src/components/remember.ts` is the `orchy:remember` call step, which makes
-  the bookkeeping something the flow decides rather than something the model
-  chooses on the fly.
-- `src/cli.ts` serves `orchy memory keys | list | add | forget`, for a person
-  and for a harness that holds no `orchy` tool. `add` reads `$ORCHY_STARTED_BY`
-  and records the run and the step it names, so an entry a command step or a
-  harness adds is not recorded as a person's.
+- `Entry` holds `id`, `at`, `run`, `step`, `text`, and optional `tags`.
+- `Storage` holds `recall`, `remember`, `forget`, and `keys`.
+- `lines(root)` creates the JSON-line storage.
+- `keyOf(memory, flowName, takes?)` resolves the exact key for one run.
+- `rootKey()`, `flowKey(name)`, and `scopeKey(scope)` make typed keys.
+- `keyReference(key)` and `referencedKey(reference)` write and read `key=`
+  references.
+- `migrateLegacy(root, source, target)` copies one explicit legacy file.
+- `asKey(text)` remains the legacy flat-name conversion for migration only.
+- `MOST` is 20. `LONGEST` is 2000 characters.
+- `memoryProblems(memory, takes)` reports invalid flow memory declarations.
 
 ## Example
 
@@ -85,12 +79,10 @@ the flow file names today.
 import { keyOf, lines } from "@krimvp/orchy";
 
 const key = keyOf({ scope: "ticket/{{ issue }}" }, "bugfix", { issue: "PROJ-14" });
-// "ticket-proj-14"
-
 const store = lines(process.cwd());
-store.remember(key as string, { run: "r1", step: "code", text: "the parser lives in src/yaml.ts" });
-
-for (const entry of store.recall(key as string, 5)) {
-  console.log(entry.id, entry.step, entry.text);
-}
+store.remember(key as string, {
+  run: "r1",
+  step: "code",
+  text: "the parser lives in src/yaml.ts",
+});
 ```

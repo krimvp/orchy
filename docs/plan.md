@@ -496,6 +496,9 @@ Claude Code flow, its prompt, and its source text. `orchy check` now refuses a
 missing prompt or component before a run. It states that authentication is
 unknown because it calls no model. CI installs the packed artifact in a clean
 consumer and completes the model-free flow. The UI build uses `npm ci`.
+The check also checks supplied values, the state path, the Git workspace, and
+the harness command. It keeps model availability and authentication unknown.
+CI audits the root and UI dependency locks in a separate check.
 
 ## The proof flows
 
@@ -520,9 +523,10 @@ Orchy does not ship these until a real flow needs them.
 - An automatic timeout for a step. A run stops at a budget of dollars, and not
   at a length of time. A person can stop a run. That stop ends its owned process
   tree after a fixed grace period.
-- A workspace for one step, and a workspace for each run. Two runs in one
-  working directory disturb each other, and `src/run.ts` names that limit in a
-  `ponytail`. See [docs/shape.md](./shape.md).
+- A workspace for one step, and a workspace for each run. Active Orchy runs
+  claim one Git working tree and run one at a time. The claim does not isolate
+  a run from a person, another program, or work between a gate and its resume.
+  A separate Git worktree gives each run files of its own.
 - A remote sandbox workspace. A bounded tool is refused and not deferred. See
   [ADR 0018](./adr/0018-a-tool-list-is-not-a-sandbox.md).
 - A user, a password, and a daemon that listens beyond this machine. The daemon

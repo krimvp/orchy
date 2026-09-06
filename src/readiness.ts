@@ -1,6 +1,9 @@
-import { accessSync, constants, readFileSync, statSync } from "node:fs";
-import { dirname, isAbsolute, normalize, relative, resolve } from "node:path";
-import type { Flow } from "./flow.ts";
+import { accessSync, closeSync, constants, lstatSync, openSync, readFileSync, statSync, unlinkSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
+import { harnessOf, type Flow } from "./flow.ts";
+import { execOwned } from "./process.ts";
+import { checkWorkspace } from "./workspace.ts";
 
 /**
  * The brace names a flow reads that nothing supplies. A prompt that keeps one
@@ -91,4 +94,116 @@ export function missing(flow: Flow, flowPath: string): string[] {
     }
   }
   return gone;
+}
+
+/** Local setup that only the command line checks, because it starts commands. */
+export async function localSetup(
+  flow: Flow,
+  cwd: string,
+  fallback: string,
+): Promise<{ problems: string[]; notices: string[] }> {
+  const problems: string[] = [];
+  const notices: string[] = [];
+  try {
+    checkState(cwd);
+  } catch (error) {
+    problems.push(error instanceof Error ? error.message : String(error));
+  }
+  try {
+    checkWorkspace(flow.workspace, cwd);
+  } catch (error) {
+    problems.push(error instanceof Error ? error.message : String(error));
+  }
+
+  const harnesses = new Set(
+    flow.steps.filter((step) => step.kind === "agent").map((step) => harnessOf(flow, step) ?? fallback),
+  );
+  for (const harness of harnesses) {
+    if (harness === "pi") {
+      notices.push('pi harness: bundled with Orchy');
+      continue;
+    }
+    if (harness !== "claude" && harness !== "droid") continue;
+    try {
+      notices.push(`${harness} command: ${await versionOf(harness, cwd)}`);
+    } catch (error) {
+      problems.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+  return { problems, notices };
+}
+
+/** Proves that the state path accepts a file, and leaves no probe behind. */
+function checkState(cwd: string): void {
+  const root = resolve(cwd);
+  const state = join(root, ".orchy");
+  let directory = root;
+  try {
+    const link = lstatSync(state);
+    let found;
+    try {
+      found = statSync(state);
+    } catch (error) {
+      throw new Error(`the state path "${state}" cannot be read: ${reason(error)}`);
+    }
+    if (!found.isDirectory()) throw new Error(`the state path "${state}" is not a directory`);
+    // A link to a directory is usable by the command line. The open below
+    // checks the target instead of trusting the mode bits of the link.
+    if (!link.isDirectory() && !link.isSymbolicLink()) {
+      throw new Error(`the state path "${state}" is not a directory`);
+    }
+    directory = state;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+
+  const probe = join(directory, `.orchy-check-${process.pid}-${randomUUID()}`);
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSync(probe, "wx");
+  } catch (error) {
+    throw new Error(`Orchy cannot write run state under "${state}": ${reason(error)}`);
+  } finally {
+    try {
+      if (descriptor !== undefined) closeSync(descriptor);
+    } finally {
+      try {
+        unlinkSync(probe);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+  }
+}
+
+/** Reads a command version without a model call, and ends the full probe tree. */
+async function versionOf(command: "claude" | "droid", cwd: string): Promise<string> {
+  const control = new AbortController();
+  const timer = setTimeout(() => control.abort(new Error("the version check took more than 2 seconds")), 2_000);
+  try {
+    const owned = execOwned(command, ["--version"], { cwd, env: process.env, maxBuffer: 4 * 1024 }, control.signal);
+    owned.child.stdin.end();
+    const answer = await owned.result;
+    const version = firstLine(answer.stdout) ?? firstLine(answer.stderr);
+    if (!version) throw new Error(`${command} answered --version with no version`);
+    return version;
+  } catch (error) {
+    const held = error as { code?: unknown; message?: string; stderr?: string; stdout?: string };
+    if (held.code === -2 || held.message?.includes("ENOENT")) {
+      throw new Error(`the flow uses the "${command}" harness, but the ${command} command is not on PATH. Install it, then run orchy check again.`);
+    }
+    const detail = firstLine(held.stderr) ?? firstLine(held.stdout) ?? held.message ?? String(error);
+    throw new Error(`the flow uses the "${command}" harness, but ${command} --version failed: ${detail}`);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function firstLine(text?: string): string | undefined {
+  return text?.split("\n").map((line) => line.trim()).find(Boolean)?.slice(0, 300);
+}
+
+function reason(error: unknown): string {
+  const held = error as NodeJS.ErrnoException;
+  return held.code ? `${held.code}${held.message ? ` (${held.message})` : ""}` : error instanceof Error ? error.message : String(error);
 }

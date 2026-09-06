@@ -1,7 +1,10 @@
-import { type CSSProperties, useEffect, useState } from "react";
+import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { api, useLoad, useNotices } from "./api";
 import { Contract } from "./Run";
 import { Loading, taken, took, when } from "./Runs";
+import { canDismiss, ticketLabel, withTimeout } from "./ticket";
+
+const UNKNOWN_START = "The daemon did not answer. Delivery is unknown. Read the queue before you start it again.";
 
 /**
  * Every run of one flow, and the door to the next one. A flow runs many times,
@@ -17,6 +20,23 @@ export function FlowRuns({ id }: { id: number }) {
   const [fault, setFault] = useState<string>();
   const [note, setNote] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const dismissingNow = useRef(false);
+  const [dismissing, setDismissing] = useState<number>();
+
+  const dismiss = (ticket: number) => {
+    if (dismissingNow.current) return;
+    dismissingNow.current = true;
+    setDismissing(ticket);
+    setFault(undefined);
+    void api
+      .forget(ticket)
+      .then(() => (again(), setFault(undefined)))
+      .catch((problem: Error) => setFault(problem.message))
+      .finally(() => {
+        dismissingNow.current = false;
+        setDismissing(undefined);
+      });
+  };
 
   useEffect(() => {
     again();
@@ -25,8 +45,7 @@ export function FlowRuns({ id }: { id: number }) {
   const begin = (values?: Record<string, unknown>) => {
     setBusy(true);
     setFault(undefined);
-    return api
-      .startFlow(id, values)
+    return withTimeout(api.startFlow(id, values), 10_000, UNKNOWN_START)
       .then(() => {
         setNote("It is on its way. Change a value and start another whenever you like.");
         again();
@@ -39,7 +58,13 @@ export function FlowRuns({ id }: { id: number }) {
   const path = flow.value?.row.path;
   // A ticket whose run has begun already shows as that run, so it shows once.
   const queued = pending.filter(
-    (ticket) => ticket.path === path && (ticket.error || !ticket.runId || !runs?.some((run) => run.runId === ticket.runId)),
+    (ticket) =>
+      ticket.path === path &&
+      (ticket.error ||
+        !ticket.runId ||
+        !runs?.some((run) => run.runId === ticket.runId) ||
+        ticket.status === "failed" ||
+        ticket.status === "uncertain"),
   );
   const now = runs?.filter((run) => run.status === "waiting" || run.status === "running") ?? [];
   const past = runs?.filter((run) => run.status !== "waiting" && run.status !== "running") ?? [];
@@ -68,7 +93,8 @@ export function FlowRuns({ id }: { id: number }) {
             <Contract
               schema={takes}
               label={busy ? "Starting…" : "Start a run"}
-              onSend={(values) => void begin(values as Record<string, unknown>)}
+              pendingLabel="Starting…"
+              onSend={(values) => begin(values as Record<string, unknown>)}
             />
           </>
         ) : (
@@ -79,36 +105,39 @@ export function FlowRuns({ id }: { id: number }) {
             </button>
           </>
         )}
-        {fault && <pre className="bad">{fault}</pre>}
+        {fault && <pre className="bad" role="alert">{fault}</pre>}
         {note && <p className="good small">{note}</p>}
         <p className="note small" style={{ marginBottom: 0 }}>
           Four runs work at once. Anything past that waits in the queue and starts as one ends.
         </p>
       </div>
 
-      {error && <p className="bad">{error}</p>}
+      {error && <p className="bad" role="alert">{error}</p>}
       {!runs && <Loading />}
 
       {queued.length > 0 && (
         <>
           <h2>In the queue</h2>
-          <div className="group">
-            {queued.map((ticket) => (
-              <div key={ticket.ticket} className="flow-line">
-                <span className={`pill ${ticket.error ? "failed" : "running"}`}>
-                  {ticket.error ? "did not start" : ticket.runId ? "starting" : "queued"}
-                </span>
-                <div className="grow">
-                  <div className="dim small">{when(ticket.queuedAt)}</div>
-                  {ticket.error && <pre className="bad small">{ticket.error}</pre>}
+          <div className="group" aria-live="polite">
+            {queued.map((ticket) => {
+              const tone =
+                ticket.status === "failed" ? "failed" : ticket.status === "uncertain" ? "waiting" : "running";
+              return (
+                <div key={ticket.ticket} className="flow-line">
+                  <span className={`pill ${tone}`}>{ticketLabel(ticket)}</span>
+                  <div className="grow">
+                    <div className="dim small">{when(ticket.queuedAt)}</div>
+                    {ticket.error && <pre className="bad small">{ticket.error}</pre>}
+                    {ticket.recovery && <p className="note small">{ticket.recovery}</p>}
+                  </div>
+                  {canDismiss(ticket) && (
+                    <button className="quiet" disabled={dismissing !== undefined} onClick={() => dismiss(ticket.ticket)}>
+                      {dismissing === ticket.ticket ? "Dismissing…" : "Dismiss"}
+                    </button>
+                  )}
                 </div>
-                {ticket.error && (
-                  <button className="quiet" onClick={() => void api.forget(ticket.ticket).then(again)}>
-                    Dismiss
-                  </button>
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
         </>
       )}

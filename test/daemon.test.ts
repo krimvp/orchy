@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { mock } from "node:test";
 import { execFileSync, spawn } from "node:child_process";
-import { daemon } from "../src/daemon.ts";
+import { DatabaseSync } from "node:sqlite";
+import { daemon, type Ticket } from "../src/daemon.ts";
 import { OPERATORS } from "../src/flow.ts";
 import { serve } from "../src/server.ts";
 import { KEPT, due, open, rowOf } from "../src/store.ts";
@@ -511,7 +512,7 @@ test("a reservation from a dead process gives its slot back", () => {
   }
 });
 
-test("a planned start from a dead door keeps its slot", () => {
+test("a reservation lost before durable acceptance gives its slot back", () => {
   const root = mkdtempSync(join(tmpdir(), "orchy-unknown-start-"));
   const file = join(root, "index.db");
   const storeModule = new URL("../src/store.ts", import.meta.url).href;
@@ -521,6 +522,58 @@ test("a planned start from a dead door keeps its slot", () => {
       "--input-type=module",
       "--eval",
       `import { open } from ${JSON.stringify(storeModule)}; open(process.argv[1]).reserveStart('parent', 'dispatch', 1, 'dead', 'planned-run');`,
+      file,
+    ],
+    { stdio: "ignore" },
+  );
+
+  const store = open(file);
+  try {
+    assert.equal(store.reserveStart("parent", "dispatch", 1, "next").accepted, true);
+  } finally {
+    store.close();
+  }
+});
+
+test("an upgrade reservation with unknown delivery keeps its slot", () => {
+  const root = mkdtempSync(join(tmpdir(), "orchy-legacy-reservation-"));
+  const file = join(root, "index.db");
+  const storeModule = new URL("../src/store.ts", import.meta.url).href;
+  execFileSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "--eval",
+      `import { open } from ${JSON.stringify(storeModule)}; open(process.argv[1]).reserveStart('parent', 'dispatch', 1, 'old', 'planned-run');`,
+      file,
+    ],
+    { stdio: "ignore" },
+  );
+  const raw = new DatabaseSync(file);
+  raw.prepare("update start_reservation set phase = 'unknown', childRunId = null where token = 'old'").run();
+  raw.close();
+
+  const store = open(file);
+  try {
+    assert.deepEqual(store.reserveStart("parent", "dispatch", 1, "next"), { accepted: false, count: 1 });
+  } finally {
+    store.close();
+  }
+});
+
+test("durably accepted work keeps its reserved slot after its door dies", () => {
+  const root = mkdtempSync(join(tmpdir(), "orchy-accepted-reservation-"));
+  const file = join(root, "index.db");
+  const storeModule = new URL("../src/store.ts", import.meta.url).href;
+  execFileSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "--eval",
+      `import { open } from ${JSON.stringify(storeModule)};
+       const store = open(process.argv[1]);
+       store.reserveStart('parent', 'dispatch', 1, 'accepted', 'planned-run');
+       store.acceptWork({kind:'start', flowName:'held', path:'flow.yaml', harness:'pi', plannedRunId:'planned-run', reservation:'accepted', payload:{kind:'start'}});`,
       file,
     ],
     { stdio: "ignore" },
@@ -564,6 +617,406 @@ test("a child keeps its reservation when its MCP daemon closes", () => {
     assert.deepEqual(next.reserveStart("parent", "dispatch", 1, "next"), { accepted: false, count: 1 });
   } finally {
     next.close();
+  }
+});
+
+test("ticket numbers are durable and global across stores", () => {
+  const root = mkdtempSync(join(tmpdir(), "orchy-work-tickets-"));
+  const file = join(root, "index.db");
+  const first = open(file);
+  const second = open(file);
+  try {
+    const one = first.acceptWork({
+      kind: "start",
+      flowName: "one",
+      path: "one.yaml",
+      harness: "pi",
+      plannedRunId: "one",
+      payload: { kind: "start" },
+    });
+    const two = second.acceptWork({
+      kind: "start",
+      flowName: "two",
+      path: "two.yaml",
+      harness: "pi",
+      plannedRunId: "two",
+      payload: { kind: "start" },
+    });
+    assert.equal(two?.ticket, (one?.ticket as number) + 1);
+  } finally {
+    first.close();
+    second.close();
+  }
+});
+
+test("work that cannot be stored as bounded JSON is not accepted", () => {
+  const root = mkdtempSync(join(tmpdir(), "orchy-work-json-"));
+  const store = open(join(root, "index.db"));
+  try {
+    assert.throws(
+      () =>
+        store.acceptWork({
+          kind: "start",
+          flowName: "large",
+          path: "flow.yaml",
+          harness: "pi",
+          plannedRunId: "large",
+          payload: { kind: "start", with: { value: "x".repeat(1_000_001) } },
+        }),
+      /larger than 1000000 bytes/,
+    );
+    assert.throws(
+      () =>
+        store.acceptWork({
+          kind: "start",
+          flowName: "not-json",
+          path: "flow.yaml",
+          harness: "pi",
+          plannedRunId: "not-json",
+          payload: { kind: "start", with: { value: 1n } },
+        }),
+      /not JSON/,
+    );
+    assert.deepEqual(store.works(), []);
+  } finally {
+    store.close();
+  }
+});
+
+test("a stale readiness failure cannot overwrite another daemon's claim", () => {
+  const root = mkdtempSync(join(tmpdir(), "orchy-work-owner-"));
+  const file = join(root, "index.db");
+  const first = open(file);
+  const second = open(file);
+  try {
+    const row = first.acceptWork({
+      kind: "start",
+      flowName: "one",
+      path: "one.yaml",
+      harness: "pi",
+      plannedRunId: "one",
+      payload: { kind: "start" },
+    });
+    assert.ok(row);
+    assert.ok(first.claimWork(row.ticket));
+    assert.equal(second.failQueuedWork(row.ticket, "a stale check failed"), false);
+    assert.equal(second.work(row.ticket)?.status, "claimed");
+  } finally {
+    first.close();
+    second.close();
+  }
+});
+
+test("an error after delivery cannot turn the receipt into a failed start", () => {
+  const root = mkdtempSync(join(tmpdir(), "orchy-delivered-work-"));
+  const store = open(join(root, "index.db"));
+  try {
+    const row = store.acceptWork({
+      kind: "start",
+      flowName: "one",
+      path: "one.yaml",
+      harness: "pi",
+      plannedRunId: "one",
+      payload: { kind: "start" },
+    });
+    assert.ok(row);
+    store.claimWork(row.ticket);
+    store.deliveredWork(row.ticket, "one");
+    store.failOwnedWork(row.ticket, "a later control error");
+    assert.equal(store.work(row.ticket)?.status, "delivered");
+  } finally {
+    store.close();
+  }
+});
+
+test("two daemon pumps dispatch one durable receipt once", async () => {
+  const root = project({ name: "quick", steps: [{ id: "work", kind: "call", module: "count.ts", returns: NUMBER }] });
+  const plannedRunId = "one-durable-run";
+  mkdirSync(join(root, ".orchy"), { recursive: true });
+  const store = open(join(root, ".orchy", "index.db"));
+  store.acceptWork({
+    kind: "start",
+    flowName: "quick",
+    path: join(root, "flow.yaml"),
+    harness: "pi",
+    plannedRunId,
+    payload: { kind: "start" },
+  });
+  store.close();
+
+  const first = daemon(root, false);
+  const second = daemon(root, false);
+  try {
+    await until(async () => first.state(plannedRunId)?.status === "done");
+    assert.equal(first.store.events(plannedRunId).filter((event) => event.type === "run_start").length, 1);
+    assert.equal(first.pending().some((ticket) => ticket.status === "failed"), false);
+  } finally {
+    await first.close();
+    await second.close();
+  }
+});
+
+test("a daemon claims durable work before it loads user flow code", async () => {
+  const root = project();
+  const marker = join(root, "loaded-by-daemon");
+  const flowPath = join(root, "flow.ts");
+  writeFileSync(
+    flowPath,
+    `import { appendFileSync } from "node:fs";
+if (process.env.ORCHY_RUN_GROUP !== "1") {
+  appendFileSync(${JSON.stringify(marker)}, "loaded\\n");
+  const until = Date.now() + 400;
+  while (Date.now() < until) {}
+}
+export default { name: "claimed-first", steps: [{ id: "work", kind: "call", module: "count.ts", returns: ${JSON.stringify(NUMBER)} }] };
+`,
+  );
+  mkdirSync(join(root, ".orchy"), { recursive: true });
+  const store = open(join(root, ".orchy", "index.db"));
+  store.acceptWork({
+    kind: "start",
+    flowName: "claimed-first",
+    path: flowPath,
+    harness: "pi",
+    plannedRunId: "claimed-before-load",
+    payload: { kind: "start" },
+  });
+  store.close();
+
+  const daemonModule = new URL("../src/daemon.ts", import.meta.url).href;
+  const script = `import { daemon } from ${JSON.stringify(daemonModule)};
+const engine = daemon(process.argv[1], false);
+await new Promise((wait) => setTimeout(wait, 1500));
+await engine.close();`;
+  const runDoor = () =>
+    new Promise<void>((done, fail) => {
+      const child = spawn(process.execPath, ["--input-type=module", "--eval", script, root], { stdio: "ignore" });
+      child.on("error", fail);
+      child.on("close", (code) => (code === 0 ? done() : fail(new Error(`the test daemon ended with ${code}`))));
+    });
+  await Promise.all([runDoor(), runDoor()]);
+
+  assert.equal(readFileSync(marker, "utf8").trim().split("\n").length, 1);
+});
+
+test("a dispatch store fault leaves its receipt and does not stall the pump", async () => {
+  const root = project({ name: "quick", steps: [{ id: "work", kind: "call", module: "count.ts", returns: NUMBER }] });
+  const engine = daemon(root, false);
+  const claim = engine.store.claimWork.bind(engine.store);
+  let calls = 0;
+  mock.method(engine.store, "claimWork", (ticket: number) => {
+    calls += 1;
+    if (calls === 1) throw new Error("the database refused the claim");
+    return claim(ticket);
+  });
+  const held = engine.start({ path: join(root, "flow.yaml"), flowName: "quick", harness: "pi" });
+  const next = engine.start({ path: join(root, "flow.yaml"), flowName: "quick", harness: "pi" });
+  const heldRunId = engine.store.work(held.ticket)?.plannedRunId as string;
+  const nextRunId = engine.store.work(next.ticket)?.plannedRunId as string;
+  try {
+    await until(async () => engine.state(nextRunId)?.status === "done");
+    const receipt = engine.pending().find((ticket) => ticket.ticket === held.ticket);
+    assert.equal(receipt?.status, "queued");
+    assert.match(receipt?.error ?? "", /database refused the claim/);
+    assert.match(receipt?.recovery ?? "", /Restart the daemon/);
+  } finally {
+    mock.restoreAll();
+    await engine.close();
+  }
+
+  const restarted = daemon(root, false);
+  try {
+    await until(async () => restarted.state(heldRunId)?.status === "done");
+  } finally {
+    await restarted.close();
+  }
+});
+
+test("a live claimed receipt is not loaded by another daemon", async () => {
+  const root = project();
+  mkdirSync(join(root, ".orchy"), { recursive: true });
+  const store = open(join(root, ".orchy", "index.db"));
+  const row = store.acceptWork({
+    kind: "start",
+    flowName: "gated",
+    path: join(root, "flow.yaml"),
+    harness: "pi",
+    plannedRunId: "live-claim",
+    payload: { kind: "start" },
+  });
+  assert.ok(row);
+  assert.ok(store.claimWork(row.ticket));
+  const other = daemon(root, false);
+  try {
+    await new Promise((wait) => setTimeout(wait, 100));
+    assert.equal(existsSync(join(root, ".orchy", "runs", "live-claim", "state.json")), false);
+    assert.equal(other.pending()[0]?.status, "dispatching");
+    assert.throws(() => other.forget(row.ticket), /claimed, so it cannot be dismissed/);
+  } finally {
+    await other.close();
+    store.close();
+  }
+});
+
+test("a dead claimed receipt is uncertain and never retried", () => {
+  const root = project();
+  mkdirSync(join(root, ".orchy"), { recursive: true });
+  const file = join(root, ".orchy", "index.db");
+  const storeModule = new URL("../src/store.ts", import.meta.url).href;
+  execFileSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "--eval",
+      `import { open } from ${JSON.stringify(storeModule)};
+       const store = open(process.argv[1]);
+       const row = store.acceptWork({kind:'start', flowName:'gated', path:process.argv[2], harness:'pi', plannedRunId:'dead-claim', payload:{kind:'start'}});
+       store.claimWork(row.ticket);`,
+      file,
+      join(root, "flow.yaml"),
+    ],
+    { stdio: "ignore" },
+  );
+
+  const engine = daemon(root, false);
+  try {
+    const [ticket] = engine.pending();
+    assert.equal(ticket?.status, "uncertain");
+    assert.match(ticket?.error ?? "", /uncertain start delivery.*dead-claim/);
+    assert.match(ticket?.recovery ?? "", /GET \/api\/runs\/dead-claim/);
+    assert.equal(existsSync(join(root, ".orchy", "runs", "dead-claim", "state.json")), false);
+    engine.forget(ticket?.ticket as number);
+    assert.deepEqual(engine.pending(), []);
+  } finally {
+    engine.close();
+  }
+});
+
+test("corrupt queued work becomes visible failures and does not stop the pump", async () => {
+  const root = project({ name: "quick", steps: [{ id: "work", kind: "call", module: "count.ts", returns: NUMBER }] });
+  mkdirSync(join(root, ".orchy"), { recursive: true });
+  const file = join(root, ".orchy", "index.db");
+  const store = open(file);
+  const broken = store.acceptWork({
+    kind: "start",
+    flowName: "broken",
+    path: join(root, "flow.yaml"),
+    harness: "pi",
+    plannedRunId: "broken",
+    payload: { kind: "start" },
+  });
+  const extra = store.acceptWork({
+    kind: "start",
+    flowName: "extra",
+    path: join(root, "flow.yaml"),
+    harness: "pi",
+    plannedRunId: "extra",
+    payload: { kind: "start" },
+  });
+  const combination = store.acceptWork({
+    kind: "resume",
+    flowName: "combination",
+    path: join(root, "flow.yaml"),
+    harness: "pi",
+    runId: "combination",
+    acceptedRevision: 2,
+    payload: { kind: "resume", hasValue: false },
+  });
+  const columns = store.acceptWork({
+    kind: "start",
+    flowName: "columns",
+    path: join(root, "flow.yaml"),
+    harness: "pi",
+    plannedRunId: "columns",
+    payload: { kind: "start" },
+  });
+  store.acceptWork({
+    kind: "start",
+    flowName: "quick",
+    path: join(root, "flow.yaml"),
+    harness: "pi",
+    plannedRunId: "healthy",
+    payload: { kind: "start" },
+  });
+  store.close();
+  const raw = new DatabaseSync(file);
+  raw.prepare("update accepted_work set version = 99 where ticket = ?").run(broken?.ticket as number);
+  raw.prepare(`update accepted_work set payloadJson = '{"kind":"start","extra":true}' where ticket = ?`).run(
+    extra?.ticket as number,
+  );
+  raw.prepare(
+    `update accepted_work set payloadJson = '{"kind":"resume","hasValue":false,"value":true,"gate":"ask"}' where ticket = ?`,
+  ).run(combination?.ticket as number);
+  raw.prepare("update accepted_work set acceptedRevision = 4 where ticket = ?").run(columns?.ticket as number);
+  raw.close();
+
+  const engine = daemon(root, false);
+  try {
+    await until(async () => engine.state("healthy")?.status === "done");
+    const pending = engine.pending();
+    assert.match(pending.find((ticket) => ticket.ticket === broken?.ticket)?.error ?? "", /unsupported version 99/);
+    assert.match(pending.find((ticket) => ticket.ticket === extra?.ticket)?.error ?? "", /unknown field "extra"/);
+    assert.match(
+      pending.find((ticket) => ticket.ticket === combination?.ticket)?.error ?? "",
+      /value or gate while it says it has no value/,
+    );
+    assert.match(pending.find((ticket) => ticket.ticket === columns?.ticket)?.error ?? "", /inconsistent run fields/);
+    assert.equal(pending.filter((ticket) => ticket.status === "failed").length, 4);
+  } finally {
+    await engine.close();
+  }
+});
+
+test("a graceful close leaves queued work for the next daemon", async () => {
+  const root = project(SLOW);
+  writeFileSync(
+    join(root, "quick.yaml"),
+    formatFlow({ name: "quick", steps: [{ id: "work", kind: "call", module: "count.ts", returns: NUMBER }] } as never),
+  );
+  const first = daemon(root, false);
+  for (let count = 0; count < 4; count += 1) {
+    first.start({ path: join(root, "flow.yaml"), flowName: "slow", harness: "pi" });
+  }
+  const queued = first.start({ path: join(root, "quick.yaml"), flowName: "quick", harness: "pi" });
+  await until(async () => first.pending().find((ticket) => ticket.ticket === queued.ticket)?.status === "queued");
+  assert.throws(() => first.forget(queued.ticket), /queued, so it cannot be dismissed/);
+  const plannedRunId = first.store.work(queued.ticket)?.plannedRunId as string;
+  await first.close();
+
+  const second = daemon(root, false);
+  try {
+    await until(async () => second.state(plannedRunId)?.status === "done");
+  } finally {
+    await second.close();
+  }
+});
+
+test("two stores make one scheduled receipt and one timestamp", () => {
+  const root = mkdtempSync(join(tmpdir(), "orchy-schedule-work-"));
+  const file = join(root, "index.db");
+  const first = open(file);
+  const flow = first.addFlow(join(root, "flow.yaml"), "scheduled", "pi");
+  first.setSchedule(flow.id, 15);
+  const second = open(file);
+  const at = new Date().toISOString();
+  const work = (plannedRunId: string) => ({
+    kind: "start" as const,
+    flowName: "scheduled",
+    path: join(root, "flow.yaml"),
+    harness: "pi",
+    plannedRunId,
+    payload: { kind: "start" as const },
+  });
+  try {
+    const one = first.acceptWork(work("one"), { flowId: flow.id, at });
+    const two = second.acceptWork(work("two"), { flowId: flow.id, at });
+    assert.ok(one);
+    assert.equal(two, undefined);
+    assert.equal(first.works().length, 1);
+    assert.equal(first.schedule(flow.id)?.lastAt, at);
+  } finally {
+    first.close();
+    second.close();
   }
 });
 
@@ -1217,6 +1670,7 @@ test("a stop cancels a queued gate answer before the closing child can start it"
     assert.equal(state?.status, "stopped");
     assert.equal(engine.state(state?.runId as string)?.waitingFor, undefined);
     assert.equal(engine.state(state?.runId as string)?.steps.first, undefined);
+    assert.equal(engine.store.works().some((work) => work.kind === "resume"), false);
   } finally {
     unwatch();
     await engine.close();
@@ -1429,5 +1883,39 @@ test("two answers for one revision produce one ticket", async () => {
     assert.match(refused.body.error, /already has an answer/);
   } finally {
     await site.close();
+  }
+});
+
+test("two daemons accept one resume, and the next gate accepts another", async () => {
+  const root = project(TWO_GATES);
+  const first = daemon(root, false);
+  const second = daemon(root, false);
+  try {
+    first.start({ path: join(root, "flow.yaml"), flowName: "two-gates", harness: "pi" });
+    await until(async () => first.store.runs()[0]?.waitingFor === "first");
+    await new Promise((wait) => setTimeout(wait, 100));
+    const runId = first.store.runs()[0]?.runId as string;
+    const revision = first.state(runId)?.revision as number;
+    const accepted: Ticket[] = [];
+    const refused: Error[] = [];
+    for (const engine of [first, second]) {
+      try {
+        accepted.push(engine.resume(runId, { approved: true }, "pi", undefined, "first", revision));
+      } catch (error) {
+        refused.push(error as Error);
+      }
+    }
+    assert.equal(accepted.length, 1);
+    assert.equal(refused.length, 1);
+    assert.match(refused[0]?.message ?? "", /accepted work|already has an answer/);
+
+    await until(async () => first.store.run(runId)?.waitingFor === "second");
+    await new Promise((wait) => setTimeout(wait, 100));
+    const nextRevision = first.state(runId)?.revision as number;
+    assert.doesNotThrow(() => second.resume(runId, { approved: false }, "pi", undefined, "second", nextRevision));
+    await until(async () => first.state(runId)?.status === "done");
+  } finally {
+    await first.close();
+    await second.close();
   }
 });

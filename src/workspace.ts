@@ -1,7 +1,9 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync, readlinkSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, rmdirSync } from "node:fs";
+import { userInfo } from "node:os";
 import { join, resolve } from "node:path";
+import { type Claim, type ClaimRelease, acquireClaim, inspectClaim, processIdentity, releaseClaim } from "./claim.ts";
 
 /**
  * A tagged value, so a remote sandbox becomes a new kind and not a change to
@@ -12,6 +14,10 @@ export type Workspace = { kind: "none" } | { kind: "git"; path: string };
 export interface Snapshot {
   head: string;
   files: Record<string, string>;
+}
+
+export interface WorkspaceClaim extends Claim {
+  workspace: string;
 }
 
 /**
@@ -31,13 +37,138 @@ export function take(workspace: Workspace | undefined, cwd: string): Snapshot | 
   if (!workspace || workspace.kind === "none") return undefined;
 
   const at = resolve(cwd, workspace.path);
+  checkWorkspace(workspace, cwd);
+  return { head: git(["rev-parse", "--verify", "HEAD"], at, true).trim(), files: status(at) };
+}
+
+/** Checks that Git can read a declared workspace, without taking a snapshot. */
+export function checkWorkspace(workspace: Workspace | undefined, cwd: string): void {
+  if (!workspace || workspace.kind === "none") return;
+
+  const at = resolve(cwd, workspace.path);
   try {
     execFileSync("git", ["rev-parse", "--git-dir"], { cwd: at, stdio: "pipe" });
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT" && existsSync(at)) {
+      throw new Error("the git command is not on PATH");
+    }
     throw new Error(`the workspace at "${at}" is not a git repository`);
   }
+}
 
-  return { head: git(["rev-parse", "--verify", "HEAD"], at, true).trim(), files: status(at) };
+/** Claims one canonical Git working tree for one active run. */
+export function claimWorkspace(workspace: Workspace | undefined, cwd: string, runId: string): WorkspaceClaim | undefined {
+  const canonical = workspaceIdentity(workspace, cwd);
+  if (!canonical) return undefined;
+  const directory = claimDirectory(canonical);
+  const claim = acquireClaim(
+    directory,
+    { runId, workspace: canonical, root: realpathSync.native(resolve(cwd)) },
+    (owner) =>
+      `the Git workspace at "${canonical}" is in use by run ${owner.runId ?? "unknown"} in process ${owner.pid}. Wait for that active execution to end.`,
+    (file, owner) => staleWorkspace(canonical, file, owner),
+  );
+  return { ...claim, workspace: canonical };
+}
+
+/** Pins the claim of one live daemon child before the daemon signals it. */
+export function pinWorkspaceClaim(
+  workspace: Workspace | undefined,
+  cwd: string,
+  runId: string,
+  pid: number,
+  identity = processIdentity(pid),
+): WorkspaceClaim | undefined {
+  const canonical = workspaceIdentity(workspace, cwd);
+  if (!canonical) return undefined;
+  const inspected = inspectClaim(claimDirectory(canonical));
+  if (inspected.status === "fault") throw new Error(staleWorkspace(canonical, inspected.file, undefined));
+  if (inspected.status === "absent") return undefined;
+  const held = inspected.claim;
+  if (
+    !held ||
+    held.owner.runId !== runId ||
+    held.owner.workspace !== canonical ||
+    held.owner.pid !== pid ||
+    held.owner.identity !== identity
+  ) {
+    return undefined;
+  }
+  return { ...held, workspace: canonical };
+}
+
+/** Releases only the exact workspace claim that the caller acquired or pinned. */
+export function releaseWorkspaceClaim(claim: WorkspaceClaim | undefined): ClaimRelease {
+  if (!claim) return "absent";
+  const released = releaseClaim(claim);
+  if (released === "released") {
+    try {
+      rmdirSync(claim.directory);
+    } catch {}
+  }
+  return released;
+}
+
+/** Gives a failed cleanup the claim and the condition for manual recovery. */
+export function workspaceClaimCleanup(claim: Pick<WorkspaceClaim, "file">, released: ClaimRelease): string {
+  const reason =
+    released === "fault" ? "the claim could not be read or removed" : "another process removed or replaced the claim";
+  return `Orchy could not release the workspace claim at "${claim.file}": ${reason}. Inspect it, and remove it only after the owner process and its descendants have ended.`;
+}
+
+/** The identity is the working tree, so aliases collide and Git worktrees do not. */
+export function workspaceIdentity(workspace: Workspace | undefined, cwd: string): string | undefined {
+  if (!workspace || workspace.kind === "none") return undefined;
+  const at = resolve(cwd, workspace.path);
+  let top: string;
+  try {
+    top = execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd: at, encoding: "utf8", stdio: "pipe" }).trim();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT" && existsSync(at)) {
+      throw new Error("the git command is not on PATH");
+    }
+    throw new Error(`the workspace at "${at}" is not a git repository`);
+  }
+  const canonical = realpathSync.native(top);
+  return process.platform === "win32" ? canonical.toLowerCase() : canonical;
+}
+
+function staleWorkspace(workspace: string, file: string, owner: Claim["owner"] | undefined): string {
+  const who = owner
+    ? `Run ${owner.runId ?? "unknown"} claimed it in process ${owner.pid}, but that owner is not live.`
+    : "The claim owner record is not readable.";
+  const root = owner?.root;
+  const state = owner?.runId && root ? join(root, ".orchy", "runs", owner.runId, "state.json") : undefined;
+  const inspect = state
+    ? ` Run "orchy runs" in "${root}", and inspect "${state}" and "${file}".`
+    : ` Inspect "${file}".`;
+  return `the Git workspace at "${workspace}" has a stale claim. ${who}${inspect} Remove the claim only after the owner process and its descendants have ended.`;
+}
+
+/** The OS account path stays the same when HOME, XDG, or TMPDIR changes. */
+function claimDirectory(workspace: string): string {
+  const home = realpathSync.native(userInfo().homedir);
+  const base = join(home, ".orchy-workspace-claims");
+  privateDirectory(base);
+  const key = createHash("sha256").update(workspace).digest("hex");
+  const directory = join(base, key);
+  privateDirectory(directory);
+  return directory;
+}
+
+/** Refuses a shared or redirected claim directory instead of weakening the claim. */
+function privateDirectory(directory: string): void {
+  try {
+    mkdirSync(directory, { mode: 0o700 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
+  const stat = lstatSync(directory);
+  const uid = process.getuid?.();
+  const unsafeMode = process.platform !== "win32" && (stat.mode & 0o077) !== 0;
+  if (!stat.isDirectory() || stat.isSymbolicLink() || (uid !== undefined && stat.uid !== uid) || unsafeMode) {
+    throw new Error(`the workspace claim directory at "${directory}" is not a private directory owned by this user`);
+  }
 }
 
 export function changed(before: Snapshot | undefined, after: Snapshot | undefined): Change[] {
