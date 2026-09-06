@@ -1,4 +1,4 @@
-import { type CSSProperties, useEffect, useState } from "react";
+import { type CSSProperties, useEffect, useId, useRef, useState } from "react";
 import {
   type Changes,
   type Computed,
@@ -20,6 +20,9 @@ import { type Edge, Graph } from "./Graph";
 import { FileIcon, KindIcon, LoopIcon } from "./icons";
 import { Contract } from "./Run";
 import { Loading } from "./Runs";
+import { withTimeout } from "./ticket";
+
+const UNKNOWN_START = "The daemon did not answer. Delivery is unknown. Open Runs before you start it again.";
 
 const KINDS: Array<Step["kind"]> = ["agent", "call", "gate", "flow"];
 
@@ -44,6 +47,8 @@ function Segmented<T extends string>({
       {options.map((option) => (
         <button
           key={option.value}
+          type="button"
+          aria-pressed={value === option.value}
           className={value === option.value ? "on" : ""}
           onClick={() => onChange(option.value)}
         >
@@ -52,6 +57,49 @@ function Segmented<T extends string>({
       ))}
     </div>
   );
+}
+
+/** Keeps the keyboard in a drawer, and returns it to what opened the drawer. */
+function useDrawer(onClose: () => void) {
+  const drawer = useRef<HTMLElement>(null);
+  const close = useRef(onClose);
+  close.current = onClose;
+
+  useEffect(() => {
+    const before = document.activeElement as (Element & { focus: () => void }) | null;
+    const focusable = () =>
+      Array.from(
+        drawer.current?.querySelectorAll<HTMLElement>(
+          'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      );
+    focusable()[0]?.focus();
+    const key = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        return close.current();
+      }
+      if (event.key !== "Tab") return;
+      const fields = focusable();
+      if (fields.length === 0) return event.preventDefault();
+      const first = fields[0] as HTMLElement;
+      const last = fields[fields.length - 1] as HTMLElement;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    addEventListener("keydown", key);
+    return () => {
+      removeEventListener("keydown", key);
+      before?.focus();
+    };
+  }, []);
+
+  return drawer;
 }
 
 export function Editor({ id }: { id: number }) {
@@ -229,8 +277,7 @@ export function Editor({ id }: { id: number }) {
 
   // The flow says what it takes, so the page asks for those values and no others.
   const start = (values?: Record<string, unknown>) =>
-    api
-      .startFlow(id, values)
+    withTimeout(api.startFlow(id, values), 10_000, UNKNOWN_START)
       .then((ticket) => {
         setStarting(false);
         setFault(undefined);
@@ -326,14 +373,15 @@ export function Editor({ id }: { id: number }) {
           <Contract
             schema={flow.takes}
             label="Start the run"
-            onSend={(values) => void start(values as Record<string, unknown>)}
+            pendingLabel="Starting…"
+            onSend={(values) => start(values as Record<string, unknown>)}
           />
         </div>
       )}
 
-      {!editable && <p className="bad">This flow is TypeScript. The editor reads it and writes YAML only.</p>}
+      {!editable && <p className="bad" role="alert">This flow is TypeScript. The editor reads it and writes YAML only.</p>}
       {note && <p className="good">{note}</p>}
-      {fault && <p className="bad">{fault}</p>}
+      {fault && <p className="bad" role="alert">{fault}</p>}
       {problems.length > 0 && (
         <ul className="bad list">
           {problems.map((problem) => (
@@ -1083,20 +1131,16 @@ function LoopDrawer({
   const backs = before(flow, step.id);
   const cycle = step.cycle;
   const gate = step.kind === "gate";
-
-  useEffect(() => {
-    const key = (event: KeyboardEvent) => event.key === "Escape" && onClose();
-    addEventListener("keydown", key);
-    return () => removeEventListener("keydown", key);
-  }, [onClose]);
+  const drawer = useDrawer(onClose);
+  const title = useId();
 
   if (!cycle) return null;
   const targets = [...backs, ...(backs.includes(cycle.to) || cycle.to === step.id ? [] : [cycle.to])];
 
   return (
-    <aside className="drawer">
+    <aside ref={drawer} className="drawer" role="dialog" aria-modal="true" aria-labelledby={title}>
       <header>
-        <h3>The loop of {step.id}</h3>
+        <h3 id={title}>The loop of {step.id}</h3>
         <button className="quiet" onClick={onClose}>
           Close
         </button>
@@ -1205,16 +1249,12 @@ function FileDrawer({ path, label, onClose }: { path: string; label: string; onC
   const [text, setText] = useState<string>();
   const [note, setNote] = useState<string>();
   const [fault, setFault] = useState<string>();
+  const drawer = useDrawer(onClose);
+  const title = useId();
 
   useEffect(() => {
     if (loaded.value) setText(loaded.value.content);
   }, [loaded.value]);
-
-  useEffect(() => {
-    const key = (event: KeyboardEvent) => event.key === "Escape" && onClose();
-    addEventListener("keydown", key);
-    return () => removeEventListener("keydown", key);
-  }, [onClose]);
 
   const save = () =>
     api
@@ -1223,9 +1263,9 @@ function FileDrawer({ path, label, onClose }: { path: string; label: string; onC
       .catch((problem: Error) => (setNote(undefined), setFault(problem.message)));
 
   return (
-    <aside className="drawer file">
+    <aside ref={drawer} className="drawer file" role="dialog" aria-modal="true" aria-labelledby={title}>
       <header>
-        <h3>The {label}</h3>
+        <h3 id={title}>The {label}</h3>
         <button className="quiet" onClick={onClose}>
           Close
         </button>
@@ -1233,7 +1273,7 @@ function FileDrawer({ path, label, onClose }: { path: string; label: string; onC
       <p className="note mono small" style={{ margin: "0 0 12px" }}>
         {path}
       </p>
-      {loaded.error && <p className="bad">{loaded.error}</p>}
+      {loaded.error && <p className="bad" role="alert">{loaded.error}</p>}
       {loaded.value && !loaded.value.exists && (
         <p className="note small" style={{ margin: "0 0 10px" }}>
           There is no file here yet. Save writes it, with the directories on the way.
@@ -1256,7 +1296,7 @@ function FileDrawer({ path, label, onClose }: { path: string; label: string; onC
               Save the file
             </button>
             {note && <span className="good small">{note}</span>}
-            {fault && <span className="bad small">{fault}</span>}
+            {fault && <span className="bad small" role="alert">{fault}</span>}
           </div>
         </>
       )}

@@ -459,6 +459,7 @@ export function Graph({
     <svg
       ref={held}
       className={`graph ${editable ? "editable" : ""} ${pull ? "pulling" : ""}`}
+      aria-label={editable ? "Flow editor drawing" : "Flow drawing"}
       viewBox={`0 0 ${width} ${height}`}
       width={width}
       height={height}
@@ -491,7 +492,20 @@ export function Graph({
             <path
               className="edge hit"
               d={orthogonal(one.points)}
+              role="button"
+              tabIndex={0}
+              aria-label={
+                one.edge.kind === "cycle"
+                  ? `Loop from ${one.edge.from} to ${one.edge.to}`
+                  : `Link from ${one.edge.from} to ${one.edge.to}`
+              }
               onClick={(event) => {
+                event.stopPropagation();
+                onPickEdge(one.edge);
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter" && event.key !== " ") return;
+                event.preventDefault();
                 event.stopPropagation();
                 onPickEdge(one.edge);
               }}
@@ -525,7 +539,16 @@ export function Graph({
           ].join(" ")}
           style={{ "--i": index } as CSSProperties}
           transform={`translate(${node.x} ${node.y})`}
+          role={onSelect ? "button" : undefined}
+          tabIndex={onSelect ? 0 : undefined}
+          aria-label={`${node.step.id}, ${label(node.step)}, ${marks[node.step.id] ?? "not started"}`}
+          aria-pressed={onSelect ? selected === node.step.id : undefined}
           onClick={() => onSelect?.(node.step.id)}
+          onKeyDown={(event) => {
+            if (!onSelect || (event.key !== "Enter" && event.key !== " ")) return;
+            event.preventDefault();
+            onSelect(node.step.id);
+          }}
           onMouseUp={drop(node.step.id)}
           onMouseEnter={pull ? () => setOver(node.step.id) : undefined}
           onMouseLeave={pull ? () => setOver(undefined) : undefined}

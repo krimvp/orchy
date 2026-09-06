@@ -62,8 +62,8 @@ run.
   | `GET /api/runs/:id/trajectory` | The run's parsed `trajectory.json`, or an error while it has written none. |
   | `POST /api/runs/:id/resume` | Continues a run and returns a fresh `Ticket`. `body.value` answers the gate of a waiting run; `body.from` names the step to go back to. Without `body.harness` it uses the harness of the flow the run came from, falling back to `"pi"`. |
   | `POST /api/runs/:id/stop` | `{ stopped: true }` when a live child heard the signal, `{ stopped: true, abandoned: true }` when no child drove the run — one waiting at a gate, or one a dead daemon left — and it was marked stopped where it stands. A run that is already over answers with the reason instead. |
-  | `GET /api/queue` | Every ticket still pending, queued or running. |
-  | `DELETE /api/queue/:ticket` | Drops a ticket, typically one that ended in error. |
+  | `GET /api/queue` | Every durable ticket over this root, with `status`: `queued`, `dispatching`, `delivered`, `failed`, or `uncertain`. Failed and uncertain tickets carry concrete `recovery` text. |
+  | `DELETE /api/queue/:ticket` | Drops a failed ticket or acknowledges an uncertain one. Refuses queued, dispatching, and live delivered work. Acknowledging uncertainty does not prove that the child did or did not start. |
   | `GET /api/events` | A server-sent event stream of every daemon notice. |
   | `GET /api/runs/:id/events` | The same stream held to one run. It first replays the run's stored events and recent output notes in the order they happened, then follows live. |
 

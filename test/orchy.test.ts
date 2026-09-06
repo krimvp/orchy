@@ -7,7 +7,7 @@ import test from "node:test";
 import { Type } from "@sinclair/typebox";
 import type { TSchema } from "@sinclair/typebox";
 import { type AgentStep, type CallStep, type Flow, type GateStep, agent, call, expandFanout, expandFlows, flow, gate, resolvePaths, validate } from "../src/flow.ts";
-import { LONGEST, keyOf, lines } from "../src/memory.ts";
+import { LONGEST, flowKey, keyOf, keyReference, lines, rootKey, scopeKey } from "../src/memory.ts";
 import { loadFlow } from "../src/load.ts";
 import type { AgentRequest, AgentResult, Harness } from "../src/harness.ts";
 import { notesOf } from "../src/harness.ts";
@@ -4946,67 +4946,75 @@ test("a flow that will not load ends the command as a wrong command, not a faile
 test("a store keeps a line for each entry, and gives back the last of them", () => {
   const root = mkdtempSync(join(tmpdir(), "orchy-memory-"));
   const store = lines(root);
+  const ticket = scopeKey("ticket-14");
+  const other = scopeKey("other");
 
-  const first = store.remember("ticket-14", { run: "r1", step: "code", text: "the parser lives in src/yaml.ts" });
-  store.remember("ticket-14", { run: "r1", step: "review", text: "line, not comma", tags: ["style"] });
-  store.remember("other", { run: "r2", step: "code", text: "nothing to do with it" });
+  const first = store.remember(ticket, { run: "r1", step: "code", text: "the parser lives in src/yaml.ts" });
+  store.remember(ticket, { run: "r1", step: "review", text: "line, not comma", tags: ["style"] });
+  store.remember(other, { run: "r2", step: "code", text: "nothing to do with it" });
 
   // One key is one store, so a second key sees nothing of the first.
-  assert.equal(store.recall("ticket-14").length, 2);
-  assert.equal(store.recall("other").length, 1);
-  assert.deepEqual(store.recall("ticket-14", 1).map((one) => one.step), ["review"]);
+  assert.equal(store.recall(ticket).length, 2);
+  assert.equal(store.recall(other).length, 1);
+  assert.deepEqual(store.recall(ticket, 1).map((one) => one.step), ["review"]);
   // A flow that asks for no seed gets none, where `slice(-0)` would give it all.
-  assert.deepEqual(store.recall("ticket-14", 0), []);
-  assert.deepEqual(store.keys(), ["other", "ticket-14"]);
+  assert.deepEqual(store.recall(ticket, 0), []);
+  assert.deepEqual(store.keys(), [keyReference(other), keyReference(ticket)].sort());
 
   // Every entry names where it came from, so a wrong one is found and dropped.
   assert.equal(first.run, "r1");
-  assert.equal(store.forget("ticket-14", first.id), 1);
-  assert.equal(store.forget("ticket-14", first.id), 0);
-  assert.deepEqual(store.recall("ticket-14").map((one) => one.text), ["line, not comma"]);
+  assert.equal(store.forget(ticket, first.id), 1);
+  assert.equal(store.forget(ticket, first.id), 0);
+  assert.deepEqual(store.recall(ticket).map((one) => one.text), ["line, not comma"]);
   // The file is a line of JSON for each entry, and nothing else.
-  const file = readFileSync(join(root, ".orchy", "memory", "ticket-14.jsonl"), "utf8");
-  assert.equal(file.trim().split("\n").length, 1);
-  assert.equal((JSON.parse(file.trim()) as { text: string }).text, "line, not comma");
+  const name = readdirSync(join(root, ".orchy", "memory")).find(
+    (one) => one.endsWith(".jsonl") && readFileSync(join(root, ".orchy", "memory", one), "utf8").includes("line, not comma"),
+  ) as string;
+  const file = readFileSync(join(root, ".orchy", "memory", name), "utf8").trim().split("\n");
+  assert.equal(file.length, 2);
+  assert.equal((JSON.parse(file[1] as string) as { text: string }).text, "line, not comma");
 
-  assert.equal(store.forget("ticket-14"), 1);
-  assert.deepEqual(store.recall("ticket-14"), []);
+  assert.equal(store.forget(ticket), 1);
+  assert.deepEqual(store.recall(ticket), []);
 });
 
 test("a store skips a line a hand broke, and opens all the same", () => {
   const root = mkdtempSync(join(tmpdir(), "orchy-broken-"));
   const store = lines(root);
-  store.remember("k", { run: "r", step: "s", text: "good" });
-  appendFileSync(join(root, ".orchy", "memory", "k.jsonl"), "{ half a line\n");
-  store.remember("k", { run: "r", step: "s", text: "later" });
+  const key = scopeKey("k");
+  store.remember(key, { run: "r", step: "s", text: "good" });
+  const name = readdirSync(join(root, ".orchy", "memory")).find((one) => one.endsWith(".jsonl")) as string;
+  appendFileSync(join(root, ".orchy", "memory", name), "{ half a line\n");
+  store.remember(key, { run: "r", step: "s", text: "later" });
 
   // One malformed entry costs that entry, and not every flow that reads the store.
-  assert.deepEqual(store.recall("k").map((one) => one.text), ["good", "later"]);
+  assert.deepEqual(store.recall(key).map((one) => one.text), ["good", "later"]);
 });
 
 test("a store refuses an entry too long to seed a prompt", () => {
   const root = mkdtempSync(join(tmpdir(), "orchy-long-"));
   const store = lines(root);
+  const key = scopeKey("k");
   // `most` bounds how many entries seed a prompt, and this bounds each one, so
   // the seed itself is bounded. A store of paragraphs is a document.
-  assert.throws(() => store.remember("k", { run: "r", step: "s", text: "x".repeat(LONGEST + 1) }), /holds 2001 characters, and the most is 2000/);
-  assert.equal(store.remember("k", { run: "r", step: "s", text: "x".repeat(LONGEST) }).text.length, LONGEST);
-  assert.equal(store.recall("k").length, 1);
+  assert.throws(() => store.remember(key, { run: "r", step: "s", text: "x".repeat(LONGEST + 1) }), /holds 2001 characters, and the most is 2000/);
+  assert.equal(store.remember(key, { run: "r", step: "s", text: "x".repeat(LONGEST) }).text.length, LONGEST);
+  assert.equal(store.recall(key).length, 1);
 });
 
 test("a scope is a key: the three words, and one a flow writes for itself", () => {
   assert.equal(keyOf(undefined, "bugfix"), undefined);
   assert.equal(keyOf({ scope: "none" }, "bugfix"), undefined);
-  assert.equal(keyOf({ scope: "flow" }, "Bug Fix"), "flow-bug-fix");
-  assert.equal(keyOf({ scope: "root" }, "bugfix"), "root");
+  assert.equal(keyOf({ scope: "flow" }, "Bug Fix"), flowKey("Bug Fix"));
+  assert.equal(keyOf({ scope: "root" }, "bugfix"), rootKey());
   // The scope reads the values of the run, as a prompt does, so each ticket
   // gets its own store and a follow-up flow points at the same one.
-  assert.equal(keyOf({ scope: "ticket/{{ issue }}" }, "bugfix", { issue: "PROJ-14" }), "ticket-proj-14");
-  assert.equal(keyOf({ scope: "ticket/{{ issue }}" }, "corrections", { issue: "PROJ-14" }), "ticket-proj-14");
+  assert.equal(keyOf({ scope: "ticket/{{ issue }}" }, "bugfix", { issue: "PROJ-14" }), scopeKey("ticket/PROJ-14"));
+  assert.equal(keyOf({ scope: "ticket/{{ issue }}" }, "corrections", { issue: "PROJ-14" }), scopeKey("ticket/PROJ-14"));
   // A key becomes a file name and never a path, so a walk out of the store is
   // not a thing that can be spelled.
-  assert.equal(keyOf({ scope: "../../etc/passwd" }, "bugfix"), "etc-passwd");
-  assert.equal(keyOf({ scope: ".." }, "bugfix"), "memory");
+  assert.equal(keyOf({ scope: "../../etc/passwd" }, "bugfix"), scopeKey("../../etc/passwd"));
+  assert.equal(keyOf({ scope: ".." }, "bugfix"), scopeKey(".."));
   assert.throws(
     () => keyOf({ scope: "ticket/{{ issue }}" }, "bugfix", {}),
     /nothing supplies "issue"/,
@@ -5050,8 +5058,8 @@ test("validate refuses a step that remembers anything but none", () => {
 test("a run seeds a prompt with what earlier runs recorded, and a step can decline it", async () => {
   const cwd = workspace();
   const store = lines(cwd);
-  store.remember("flow-remembering", { run: "older", step: "code", text: "the parser lives in src/yaml.ts" });
-  store.remember("flow-remembering", { run: "older", step: "review", text: "prefer a line to a comma" });
+  store.remember(flowKey("remembering"), { run: "older", step: "code", text: "the parser lives in src/yaml.ts" });
+  store.remember(flowKey("remembering"), { run: "older", step: "review", text: "prefer a line to a comma" });
 
   const harness = fakeHarness({ summary: "done" }, { summary: "reviewed" });
   const state = await run(
@@ -5069,13 +5077,13 @@ test("a run seeds a prompt with what earlier runs recorded, and a step can decli
 
   assert.equal(state.status, "done");
   // The run resolves the key once and keeps it, so a resume reads the same store.
-  assert.deepEqual(state.memory, { key: "flow-remembering", most: 20 });
+  assert.deepEqual(state.memory, { key: flowKey("remembering"), most: 20 });
   assert.match(harness.seen[0]?.prompt ?? "", /What earlier runs recorded/);
   assert.match(harness.seen[0]?.prompt ?? "", /the parser lives in src\/yaml\.ts/);
   assert.doesNotMatch(harness.seen[1]?.prompt ?? "", /What earlier runs recorded/);
   // The key rides on the request, so a harness that runs a process gives it to
   // the step. A step that declines the memory gets no key either.
-  assert.equal(harness.seen[0]?.memory, "flow-remembering");
+  assert.equal(harness.seen[0]?.memory, flowKey("remembering"));
   assert.equal(harness.seen[1]?.memory, undefined);
   // The seed is part of the prompt, so the record keeps what the step was told.
   assert.match(state.steps.code?.prompt ?? "", /prefer a line to a comma/);
@@ -5101,12 +5109,12 @@ test("a seed holds what earlier runs recorded, and not what this run wrote", asy
   assert.doesNotMatch(harness.seen[0]?.prompt ?? "", /What earlier runs recorded/);
   assert.doesNotMatch(harness.seen[0]?.prompt ?? "", /written in this run/);
   // The store holds it all the same, for the run that comes after.
-  assert.deepEqual(lines(cwd).recall("flow-writing").map((one) => one.text), ["written in this run"]);
+  assert.deepEqual(lines(cwd).recall(flowKey("writing")).map((one) => one.text), ["written in this run"]);
 });
 
 test("a flow that declares no memory seeds nothing, and reads no store", async () => {
   const cwd = workspace();
-  lines(cwd).remember("flow-quiet", { run: "older", step: "code", text: "a thing an earlier run knew" });
+  lines(cwd).remember(flowKey("quiet"), { run: "older", step: "code", text: "a thing an earlier run knew" });
 
   const harness = fakeHarness({ summary: "done" });
   const state = await run(
@@ -5121,7 +5129,7 @@ test("a flow that declares no memory seeds nothing, and reads no store", async (
 test("a flow seeds the number of entries it asks for, and none when it asks for none", async () => {
   const cwd = workspace();
   const store = lines(cwd);
-  for (const text of ["first", "second", "third"]) store.remember("flow-counting", { run: "r", step: "s", text });
+  for (const text of ["first", "second", "third"]) store.remember(flowKey("counting"), { run: "r", step: "s", text });
 
   const seedOf = async (most: number) => {
     const harness = fakeHarness({ summary: "done" });
@@ -5184,7 +5192,7 @@ test("orchy:remember records a step, and the run after it reads what was recorde
   assert.equal(first.status, "done", first.error ?? "");
   assert.equal((first.steps.record?.value as { recorded: string[] }).recorded.length, 1);
 
-  const recorded = lines(cwd).recall("ticket-proj-14");
+  const recorded = lines(cwd).recall(scopeKey("ticket/PROJ-14"));
   assert.equal(recorded.length, 1);
   assert.match(recorded[0]?.text ?? "", /I moved the parser/);
   // Bookkeeping is a step, so the entry names the run and the step that wrote it.
@@ -5248,7 +5256,7 @@ test("a command step learns the store from its environment", async () => {
   assert.equal(state.status, "done", state.error ?? "");
   // It learns who it is from the same variable the door reads, so an entry it
   // adds names this run and this step, and not a person.
-  assert.deepEqual(state.steps.say?.value, { key: "flow-shelling", by: { runId: state.runId, step: "say" } });
+  assert.deepEqual(state.steps.say?.value, { key: flowKey("shelling"), by: { runId: state.runId, step: "say" } });
 });
 
 test("a flow step that names a flow with a memory of its own is refused", async () => {

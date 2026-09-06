@@ -711,6 +711,15 @@ ul.list li::before {
   fill: #1d2025;
 }
 
+.graph .node:focus-visible {
+  outline: none;
+}
+
+.graph .node:focus-visible .box {
+  stroke: var(--accent);
+  stroke-width: 2.5;
+}
+
 .graph .name {
   fill: var(--text);
   font-size: 12px;
@@ -1172,6 +1181,8 @@ select {
 .segmented {
   display: inline-flex;
   width: fit-content;
+  max-width: 100%;
+  flex-wrap: wrap;
   gap: 2px;
   padding: 0;
   background: none;
@@ -1656,7 +1667,7 @@ button.tool svg {
 
 .cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr));
   gap: 12px;
   margin: 16px 0;
 }
@@ -1814,6 +1825,12 @@ button.tool svg {
   pointer-events: stroke;
 }
 
+.graph .edge.hit:focus-visible {
+  outline: none;
+  stroke: color-mix(in srgb, var(--accent) 55%, transparent);
+  stroke-width: 8;
+}
+
 .graph .edge.picked {
   stroke: var(--accent);
   stroke-width: 2.5;
@@ -1898,6 +1915,32 @@ button.tool svg {
   min-height: 300px;
   margin-bottom: 12px;
   resize: none;
+}
+
+@media (max-width: 820px) {
+  .head,
+  .line {
+    grid-template-columns: 10px 88px minmax(0, 1fr) 12px;
+    gap: 8px;
+  }
+
+  .head > :nth-child(n + 3):not(:last-child),
+  .line > :nth-child(n + 3):not(:last-child) {
+    display: none;
+  }
+
+  .flow-line {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .flow-line::before {
+    display: none;
+  }
+
+  .flow-line .grow {
+    flex-basis: 100%;
+  }
 }
 
 /* A path input and the button that opens the file it names. */

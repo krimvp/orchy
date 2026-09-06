@@ -50,6 +50,7 @@
     "build": "tsc -p tsconfig.build.json",
     "test": "node --test \"test/*.test.ts\"",
     "check": "tsc --noEmit",
+    "audit:dependencies": "npm audit --audit-level=moderate && npm --prefix ui audit --audit-level=moderate",
     "daemon": "node src/cli.ts daemon",
     "ui:build": "npm --prefix ui ci && npm --prefix ui run build",
     "ui:dev": "npm --prefix ui run dev",

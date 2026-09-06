@@ -60,8 +60,34 @@ create table if not exists start_reservation (
   ownerIdentity text not null,
   createdAt text not null,
   childRunId text,
-  ownerKind text not null default 'door'
+  ownerKind text not null default 'door',
+  phase text not null default 'unknown',
+  workTicket integer
 );
+create table if not exists accepted_work (
+  ticket integer primary key,
+  version integer not null,
+  kind text not null,
+  status text not null,
+  flowName text not null,
+  path text not null,
+  harness text not null,
+  queuedAt text not null,
+  runId text,
+  plannedRunId text,
+  payloadJson text not null,
+  reservation text unique,
+  acceptedRevision integer,
+  ownerPid integer,
+  ownerIdentity text,
+  error text
+);
+create unique index if not exists one_active_resume
+  on accepted_work(runId)
+  where kind = 'resume' and status in ('queued', 'claimed');
+create unique index if not exists one_planned_start
+  on accepted_work(plannedRunId)
+  where kind = 'start';
 `;
 
 export interface FlowRow {
@@ -111,6 +137,54 @@ export interface ScheduleRow {
   lastAt: string | null;
 }
 
+export type WorkStatus = "queued" | "claimed" | "delivered" | "failed";
+
+export interface WorkRow {
+  ticket: number;
+  version: number;
+  kind: "start" | "resume";
+  status: WorkStatus;
+  flowName: string;
+  path: string;
+  harness: string;
+  queuedAt: string;
+  runId: string | null;
+  plannedRunId: string | null;
+  payloadJson: string;
+  reservation: string | null;
+  acceptedRevision: number | null;
+  ownerPid: number | null;
+  ownerIdentity: string | null;
+  error: string | null;
+}
+
+export type WorkPayload =
+  | { kind: "start"; with?: Record<string, unknown>; startedBy?: { runId: string; step: string } }
+  | { kind: "resume"; hasValue: boolean; value?: unknown; from?: string; gate?: string };
+
+export type WorkInput =
+  | {
+      kind: "start";
+      flowName: string;
+      path: string;
+      harness: string;
+      plannedRunId: string;
+      payload: Extract<WorkPayload, { kind: "start" }>;
+      reservation?: string;
+    }
+  | {
+      kind: "resume";
+      flowName: string;
+      path: string;
+      harness: string;
+      runId: string;
+      acceptedRevision: number;
+      payload: Extract<WorkPayload, { kind: "resume" }>;
+    };
+
+const WORK_VERSION = 1;
+const WORK_PAYLOAD_BYTES = 1_000_000;
+
 /**
  * A schedule that has never fired is due now — that is what scheduling it
  * asked for. After that, it is due when its interval has passed.
@@ -149,6 +223,14 @@ export function open(file: string) {
   }
   if (!reservationColumns.some((held) => held.name === "ownerKind")) {
     db.exec("alter table start_reservation add column ownerKind text not null default 'door'");
+  }
+  if (!reservationColumns.some((held) => held.name === "phase")) {
+    // A reservation from an older Orchy may already have spawned a child. It
+    // starts as unknown and stays fail closed when its owner is gone.
+    db.exec("alter table start_reservation add column phase text not null default 'unknown'");
+  }
+  if (!reservationColumns.some((held) => held.name === "workTicket")) {
+    db.exec("alter table start_reservation add column workTicket integer");
   }
 
   const all = <T>(sql: string, ...values: unknown[]): T[] =>
@@ -215,6 +297,241 @@ export function open(file: string) {
     markScheduled: (flowId: number, at: string): void =>
       void db.prepare("update schedule set lastAt = ? where flowId = ?").run(at, flowId),
 
+    /**
+     * Records accepted work before its caller reports success. When a schedule
+     * supplied the work, its due check, receipt, and timestamp are one write.
+     */
+    acceptWork(input: WorkInput, scheduled?: { flowId: number; at: string }): WorkRow | undefined {
+      const payloadJson = encodeWork(input.payload);
+      db.exec("begin immediate");
+      try {
+        if (scheduled) {
+          const schedule = one<ScheduleRow>("select * from schedule where flowId = ?", scheduled.flowId);
+          if (!schedule || !due(schedule, new Date(scheduled.at))) {
+            db.exec("commit");
+            return undefined;
+          }
+        }
+        const queuedAt = scheduled?.at ?? new Date().toISOString();
+        const inserted = db
+          .prepare(
+            `insert into accepted_work
+               (version, kind, status, flowName, path, harness, queuedAt, runId, plannedRunId,
+                payloadJson, reservation, acceptedRevision)
+             values (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            WORK_VERSION,
+            input.kind,
+            input.flowName,
+            input.path,
+            input.harness,
+            queuedAt,
+            input.kind === "resume" ? input.runId : null,
+            input.kind === "start" ? input.plannedRunId : null,
+            payloadJson,
+            input.kind === "start" ? (input.reservation ?? null) : null,
+            input.kind === "resume" ? input.acceptedRevision : null,
+          );
+        const ticket = Number(inserted.lastInsertRowid);
+        if (input.kind === "start" && input.reservation) {
+          const linked = db
+            .prepare(
+              `update start_reservation set phase = 'accepted', workTicket = ?
+               where token = ? and phase = 'reserved'`,
+            )
+            .run(ticket, input.reservation);
+          if (linked.changes !== 1) throw new Error(`the start reservation ${input.reservation} is not available`);
+        }
+        const saved = one<WorkRow>("select * from accepted_work where ticket = ?", ticket) as WorkRow;
+        payloadOf(saved);
+        if (scheduled) {
+          db.prepare("update schedule set lastAt = ? where flowId = ?").run(scheduled.at, scheduled.flowId);
+        }
+        db.exec("commit");
+        return saved;
+      } catch (error) {
+        try {
+          db.exec("rollback");
+        } catch {}
+        throw error;
+      }
+    },
+
+    works: (): WorkRow[] => all<WorkRow>("select * from accepted_work order by ticket"),
+
+    work: (ticket: number): WorkRow | undefined =>
+      one<WorkRow>("select * from accepted_work where ticket = ?", ticket),
+
+    /** One process owns dispatch before it can spawn a child. */
+    claimWork(ticket: number): WorkRow | undefined {
+      db.exec("begin immediate");
+      try {
+        const claimed = db
+          .prepare(
+            `update accepted_work set status = 'claimed', ownerPid = ?, ownerIdentity = ?
+             where ticket = ? and status = 'queued'`,
+          )
+          .run(process.pid, processIdentity(), ticket);
+        const row = claimed.changes === 1 ? one<WorkRow>("select * from accepted_work where ticket = ?", ticket) : undefined;
+        db.exec("commit");
+        return row;
+      } catch (error) {
+        try {
+          db.exec("rollback");
+        } catch {}
+        throw error;
+      }
+    },
+
+    deliveredWork(ticket: number, runId: string): void {
+      db.prepare(
+        `update accepted_work set status = 'delivered', runId = ?
+         where ticket = ? and status = 'claimed' and ownerPid = ? and ownerIdentity = ?`,
+      ).run(runId, ticket, process.pid, processIdentity());
+    },
+
+    /** Marks delivery only after the caller found the exact planned run. */
+    recoverDeliveredWork(ticket: number, runId: string): void {
+      db.prepare(
+        `update accepted_work set status = 'delivered', runId = ?
+         where ticket = ? and kind = 'start' and status = 'claimed' and plannedRunId = ?`,
+      ).run(runId, ticket, runId);
+    },
+
+    /** Fails work only while no process owns it, and frees its unused slot. */
+    failQueuedWork(ticket: number, error: string): boolean {
+      db.exec("begin immediate");
+      try {
+        const row = one<WorkRow>("select * from accepted_work where ticket = ? and status = 'queued'", ticket);
+        if (!row) {
+          db.exec("commit");
+          return false;
+        }
+        db.prepare(
+          `update accepted_work set status = 'failed', error = ?, ownerPid = null, ownerIdentity = null
+           where ticket = ? and status = 'queued'`,
+        ).run(error, ticket);
+        if (row.reservation) db.prepare("delete from start_reservation where token = ?").run(row.reservation);
+        db.exec("commit");
+        return true;
+      } catch (caught) {
+        try {
+          db.exec("rollback");
+        } catch {}
+        throw caught;
+      }
+    },
+
+    /** Records a refusal found after claim but before any child can start. */
+    failOwnedBeforeSpawn(ticket: number, error: string): boolean {
+      db.exec("begin immediate");
+      try {
+        const row = one<WorkRow>(
+          `select * from accepted_work
+           where ticket = ? and status = 'claimed' and ownerPid = ? and ownerIdentity = ?`,
+          ticket,
+          process.pid,
+          processIdentity(),
+        );
+        if (!row) {
+          db.exec("commit");
+          return false;
+        }
+        db.prepare(
+          `update accepted_work set status = 'failed', error = ?, ownerPid = null, ownerIdentity = null
+           where ticket = ? and status = 'claimed' and ownerPid = ? and ownerIdentity = ?`,
+        ).run(error, ticket, process.pid, processIdentity());
+        if (row.reservation) db.prepare("delete from start_reservation where token = ?").run(row.reservation);
+        db.exec("commit");
+        return true;
+      } catch (caught) {
+        try {
+          db.exec("rollback");
+        } catch {}
+        throw caught;
+      }
+    },
+
+    /** Cancels this dispatcher's resume before it can reach a child. */
+    cancelOwnedWork(ticket: number): boolean {
+      const removed = db.prepare(
+        `delete from accepted_work
+         where ticket = ? and kind = 'resume' and status = 'claimed' and ownerPid = ? and ownerIdentity = ?`,
+      ).run(ticket, process.pid, processIdentity());
+      return removed.changes === 1;
+    },
+
+    /** Fails work only when this process still owns its dispatch. */
+    failOwnedWork(ticket: number, error: string): void {
+      db.prepare(
+        `update accepted_work set status = 'failed', error = ?, ownerPid = null, ownerIdentity = null
+         where ticket = ? and status = 'claimed' and ownerPid = ? and ownerIdentity = ?`,
+      ).run(error, ticket, process.pid, processIdentity());
+    },
+
+    /** Relinquishes one spawned receipt after this dispatcher stops observing it. */
+    orphanOwnedWork(ticket: number): boolean {
+      const changed = db.prepare(
+        `update accepted_work set ownerIdentity = 'closed:' || ownerIdentity
+         where ticket = ? and status in ('claimed', 'delivered') and ownerPid = ? and ownerIdentity = ?`,
+      ).run(ticket, process.pid, processIdentity());
+      return changed.changes === 1;
+    },
+
+    finishWork(ticket: number): void {
+      db.prepare("delete from accepted_work where ticket = ?").run(ticket);
+    },
+
+    /** Cancels queued continuations before a stop changes their run. */
+    cancelQueuedResumes(runId: string): number[] {
+      db.exec("begin immediate");
+      try {
+        const rows = all<{ ticket: number }>(
+          "select ticket from accepted_work where kind = 'resume' and runId = ? and status = 'queued'",
+          runId,
+        );
+        db.prepare("delete from accepted_work where kind = 'resume' and runId = ? and status = 'queued'").run(runId);
+        db.exec("commit");
+        return rows.map((row) => row.ticket);
+      } catch (error) {
+        try {
+          db.exec("rollback");
+        } catch {}
+        throw error;
+      }
+    },
+
+    /**
+     * A pending receipt cannot disappear while it may still run. A dead owner
+     * may be acknowledged, but this does not free a child reservation.
+     */
+    forgetWork(ticket: number): void {
+      db.exec("begin immediate");
+      try {
+        const row = one<WorkRow>("select * from accepted_work where ticket = ?", ticket);
+        if (!row) {
+          db.exec("commit");
+          return;
+        }
+        const uncertain =
+          row.status === "claimed" &&
+          (row.ownerPid === null ||
+            row.ownerIdentity === null ||
+            !ownerLives({ pid: row.ownerPid, identity: row.ownerIdentity }));
+        if (row.status !== "failed" && !uncertain) {
+          throw new Error(`ticket ${ticket} is ${row.status}, so it cannot be dismissed`);
+        }
+        db.prepare("delete from accepted_work where ticket = ?").run(ticket);
+        db.exec("commit");
+      } catch (error) {
+        try {
+          db.exec("rollback");
+        } catch {}
+        throw error;
+      }
+    },
+
     /** Every run, or every run of one flow file, newest first. */
     runs: (path?: string, limit = KEPT): RunRow[] =>
       path
@@ -254,16 +571,20 @@ export function open(file: string) {
           ownerIdentity: string;
           childRunId: string | null;
           ownerKind: string;
+          phase: string;
+          workTicket: number | null;
         }>(
-          "select token, ownerPid, ownerIdentity, childRunId, ownerKind from start_reservation",
+          "select token, ownerPid, ownerIdentity, childRunId, ownerKind, phase, workTicket from start_reservation",
         );
         for (const reservation of held) {
           const indexed = reservation.childRunId && this.run(reservation.childRunId);
           const dead = !ownerLives({ pid: reservation.ownerPid, identity: reservation.ownerIdentity });
-          // An accepted start with a planned child but a dead door is unknown.
-          // Keep its slot. Releasing it could let a child that still starts pass
-          // `most`. A child owner that died without a run is known not to start.
-          if (indexed || (dead && (!reservation.childRunId || reservation.ownerKind === "child"))) {
+          const work = reservation.workTicket === null ? undefined : this.work(reservation.workTicket);
+          // A new reservation that never reached durable acceptance cannot
+          // have spawned. Accepted and legacy reservations stay fail closed
+          // when a child may exist. A dead child with no run cannot start later.
+          const beforeAcceptance = reservation.phase === "reserved" && !work;
+          if (indexed || (dead && (beforeAcceptance || reservation.ownerKind === "child"))) {
             db.prepare("delete from start_reservation where token = ?").run(reservation.token);
           }
         }
@@ -288,6 +609,7 @@ export function open(file: string) {
              (token, parentRunId, step, ownerPid, ownerIdentity, createdAt, childRunId, ownerKind)
            values (?, ?, ?, ?, ?, ?, ?, 'door')`,
         ).run(token, parentRunId, step, process.pid, processIdentity(), new Date().toISOString(), childRunId ?? null);
+        db.prepare("update start_reservation set phase = 'reserved' where token = ?").run(token);
         db.exec("commit");
         return { accepted: true, count };
       } catch (error) {
@@ -445,6 +767,114 @@ function stateAt(file: string): RunState | undefined {
   } catch {
     return undefined;
   }
+}
+
+/** Reads one accepted payload. A corrupt receipt is reported and never run. */
+export function payloadOf(row: WorkRow): WorkPayload {
+  validateWorkRow(row);
+  return decodePayload(row.version, row.kind, row.payloadJson);
+}
+
+function decodePayload(version: number, kind: unknown, payloadJson: string): WorkPayload {
+  if (version !== WORK_VERSION) throw new Error(`accepted work has the unsupported version ${version}`);
+  if (Buffer.byteLength(payloadJson) > WORK_PAYLOAD_BYTES) {
+    throw new Error(`accepted work is larger than ${WORK_PAYLOAD_BYTES} bytes`);
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(payloadJson);
+  } catch {
+    throw new Error("accepted work holds malformed JSON");
+  }
+  if (!record(value) || value.kind !== kind) throw new Error("accepted work holds the wrong payload kind");
+  if (kind === "start") {
+    exactKeys(value, ["kind", "with", "startedBy"], "accepted start");
+    if (value.with !== undefined && !record(value.with)) throw new Error("accepted start values are not an object");
+    if (
+      value.startedBy !== undefined &&
+      (!record(value.startedBy) || typeof value.startedBy.runId !== "string" || typeof value.startedBy.step !== "string")
+    ) {
+      throw new Error("accepted start ownership is not valid");
+    }
+    return value as WorkPayload;
+  }
+  if (kind !== "resume") throw new Error(`accepted work has the invalid kind ${String(kind)}`);
+  exactKeys(value, ["kind", "hasValue", "value", "from", "gate"], "accepted resume");
+  if (typeof value.hasValue !== "boolean") throw new Error("accepted resume does not say whether it holds a value");
+  if (value.from !== undefined && typeof value.from !== "string") throw new Error("accepted resume has an invalid step");
+  if (value.gate !== undefined && typeof value.gate !== "string") throw new Error("accepted resume has an invalid gate");
+  if (value.hasValue) {
+    if (!("value" in value)) throw new Error("accepted resume says its value is missing");
+    if (value.from !== undefined) throw new Error("accepted resume holds both a value and a step");
+    if (value.gate === undefined) throw new Error("accepted gate answer does not name its gate");
+  } else if ("value" in value || value.gate !== undefined) {
+    throw new Error("accepted resume holds a value or gate while it says it has no value");
+  }
+  return value as WorkPayload;
+}
+
+function validateWorkRow(row: WorkRow): void {
+  const kind: unknown = row.kind;
+  const status: unknown = row.status;
+  if (kind !== "start" && kind !== "resume") throw new Error(`accepted work has the invalid kind ${String(kind)}`);
+  if (!(["queued", "claimed", "delivered", "failed"] as unknown[]).includes(status)) {
+    throw new Error(`accepted work has the invalid status ${String(status)}`);
+  }
+  if (!Number.isInteger(row.ticket) || row.ticket < 1) throw new Error("accepted work has an invalid ticket");
+  if (!row.flowName || !row.path || !row.harness || !Number.isFinite(Date.parse(row.queuedAt))) {
+    throw new Error("accepted work has invalid identifying fields");
+  }
+  const owned = row.ownerPid !== null || row.ownerIdentity !== null;
+  if (owned && (!Number.isInteger(row.ownerPid) || (row.ownerPid as number) < 1 || !row.ownerIdentity)) {
+    throw new Error("accepted work has incomplete owner fields");
+  }
+  if ((status === "claimed" || status === "delivered") !== owned) {
+    throw new Error(`accepted ${String(status)} work has inconsistent owner fields`);
+  }
+  if (status === "failed" ? !row.error : row.error !== null) {
+    throw new Error(`accepted ${String(status)} work has an inconsistent error`);
+  }
+  if (kind === "start") {
+    if (!row.plannedRunId || row.acceptedRevision !== null) {
+      throw new Error("accepted start has inconsistent run fields");
+    }
+    if (row.runId !== null && (status !== "delivered" || row.runId !== row.plannedRunId)) {
+      throw new Error("accepted start has an inconsistent delivered run");
+    }
+  } else if (
+    !row.runId ||
+    row.plannedRunId !== null ||
+    row.reservation !== null ||
+    !Number.isInteger(row.acceptedRevision) ||
+    (row.acceptedRevision as number) < 0
+  ) {
+    throw new Error("accepted resume has inconsistent run fields");
+  }
+}
+
+function encodeWork(payload: WorkPayload): string {
+  let json: string;
+  try {
+    json = JSON.stringify(payload);
+  } catch (error) {
+    throw new Error(`accepted work is not JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (json === undefined) throw new Error("accepted work is not JSON");
+  if (Buffer.byteLength(json) > WORK_PAYLOAD_BYTES) {
+    throw new Error(`accepted work is larger than ${WORK_PAYLOAD_BYTES} bytes`);
+  }
+  // Read what was written before success can reach the caller.
+  decodePayload(WORK_VERSION, payload.kind, json);
+  return json;
+}
+
+function exactKeys(value: Record<string, unknown>, allowed: string[], at: string): void {
+  const extra = Object.keys(value).find((key) => !allowed.includes(key));
+  if (extra) throw new Error(`${at} holds the unknown field "${extra}"`);
+}
+
+function record(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
 /** The cost and the tokens of a run live in its trajectory, not in its state. */

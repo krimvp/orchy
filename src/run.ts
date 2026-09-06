@@ -37,7 +37,18 @@ import { type Entry, MOST, keyOf, lines } from "./memory.ts";
 import { COMMAND_OUTPUT, RUN_GROUP, cancelChild, cancellation, ownsGroup, terminate } from "./process.ts";
 import { pi } from "./pi.ts";
 import { attempts, toAtif } from "./atif.ts";
-import { type Change, type Snapshot, changed, take } from "./workspace.ts";
+import {
+  type Change,
+  type Snapshot,
+  type Workspace,
+  type WorkspaceClaim,
+  changed,
+  claimWorkspace,
+  releaseWorkspaceClaim,
+  take,
+  workspaceClaimCleanup,
+  workspaceIdentity,
+} from "./workspace.ts";
 
 const version = String(createRequire(import.meta.url)("../package.json").version);
 
@@ -268,6 +279,52 @@ export interface RunOptions {
   signal?: AbortSignal;
 }
 
+class WorkspaceClaimFault extends Error {}
+
+/** Holds one Git working tree while this process can change it. */
+async function inWorkspace<T>(
+  workspace: Workspace | undefined,
+  cwd: string,
+  runId: string,
+  signal: AbortSignal | undefined,
+  work: (claim: WorkspaceClaim | undefined, settle: () => void) => Promise<T>,
+): Promise<T> {
+  if (signal?.aborted) throw signal.reason ?? new Error("the run was stopped");
+  let claim = claimWorkspace(workspace, cwd, runId);
+  const settle = () => {
+    if (!claim) return;
+    const released = releaseWorkspaceClaim(claim);
+    if (released !== "released") throw new WorkspaceClaimFault(workspaceClaimCleanup(claim, released));
+    claim = undefined;
+  };
+  let failed = false;
+  let failure: unknown;
+  let result: T | undefined;
+  try {
+    result = await work(claim, settle);
+  } catch (error) {
+    failed = true;
+    failure = error;
+  }
+
+  // A daemon confirms that the full process group ended. The runner can end
+  // before a descendant does, so it leaves this exact claim for the daemon.
+  const daemonKeeps = process.env[RUN_GROUP] === "1" && signal?.aborted;
+  if (!daemonKeeps && claim) {
+    const released = releaseWorkspaceClaim(claim);
+    if (released !== "released") {
+      const cleanup = workspaceClaimCleanup(claim, released);
+      if (failure instanceof WorkspaceClaimFault) {
+        // The first settlement attempt already carries the exact recovery.
+      } else if (failure instanceof Error) failure.message = `${failure.message}; ${cleanup}`;
+      else if (failed) failure = new Error(`${String(failure)}; ${cleanup}`, { cause: failure });
+      else failure = new Error(cleanup);
+    }
+  }
+  if (failed || failure !== undefined) throw failure;
+  return result as T;
+}
+
 export async function run(input: Flow, options: RunOptions = {}): Promise<RunState> {
   // The members go before the expansion does, so check the flow a user wrote first.
   const adapters = [...ADAPTERS, ...Object.keys(options.harnesses ?? {})];
@@ -287,11 +344,6 @@ export async function run(input: Flow, options: RunOptions = {}): Promise<RunSta
   for (const step of flow.steps) harnessFor(flow, step, options.harness ?? pi, options.harnesses);
 
   const cwd = resolve(options.cwd ?? process.cwd());
-  // The workspace belongs to the flow, not to one step, so a workspace Orchy
-  // cannot read stops the run here — before a run directory exists, and before
-  // a step spends anything. A workspace that goes wrong later is a fault of the
-  // step that met it, and the step records it.
-  take(flow.workspace, cwd);
   const state: RunState = {
     runId: options.runId ?? randomUUID(),
     flow,
@@ -312,8 +364,15 @@ export async function run(input: Flow, options: RunOptions = {}): Promise<RunSta
   } catch (error) {
     throw new Refused(error instanceof Error ? error.message : String(error));
   }
-  mkdirSync(directoryOf(cwd, state.runId), { recursive: true });
-  return claimed(directoryOf(cwd, state.runId), state.runId, () => execute(state, cwd, options));
+  // The workspace claim comes before the run directory and its claim. Thus, a
+  // refusal changes no run state and both run and resume use one lock order.
+  return inWorkspace(flow.workspace, cwd, state.runId, options.signal, async (_claim, settle) => {
+    // This probe is still preflight: a broken Git snapshot leaves no run
+    // directory, event, or harness side effect behind.
+    take(flow.workspace, cwd);
+    mkdirSync(directoryOf(cwd, state.runId), { recursive: true });
+    return claimed(directoryOf(cwd, state.runId), state.runId, () => execute(state, cwd, options, undefined, settle));
+  });
 }
 
 /**
@@ -328,10 +387,16 @@ export async function resume(
   options: RunOptions & { from?: string; gate?: string; revision?: number } = {},
 ): Promise<RunState> {
   const cwd = resolve(options.cwd ?? process.cwd());
-  // Name a missing run before the claim path, whose directory cannot exist.
-  read(cwd, runId);
-  return claimed(directoryOf(cwd, runId), runId, async () => {
+  // This first read finds the workspace. The state is read again under both
+  // claims before the resume checks or changes it.
+  const first = read(cwd, runId);
+  return inWorkspace(first.flow.workspace, cwd, runId, options.signal, (workspaceClaim, settle) =>
+    claimed(directoryOf(cwd, runId), runId, async () => {
   const state = read(cwd, runId);
+
+  if (workspaceIdentity(state.flow.workspace, cwd) !== workspaceClaim?.workspace) {
+    throw new Refused(`the workspace of run ${runId} changed while Orchy claimed it. Inspect the run state before you continue it.`);
+  }
 
   if (options.revision !== undefined && options.revision !== (state.revision ?? 0)) {
     throw new Refused(
@@ -368,7 +433,7 @@ export async function resume(
     state.question = undefined;
     state.status = "running";
     // A gate settles outside a wave, so its own cycle takes its turn in `execute`.
-    return execute(state, cwd, options, step);
+    return execute(state, cwd, options, step, settle);
   }
 
   // A run that says it runs, and whose process has gone, is a run that died.
@@ -408,8 +473,8 @@ export async function resume(
   delete state.error;
   state.waitingFor = undefined;
   state.question = undefined;
-  return execute(state, cwd, options);
-  });
+  return execute(state, cwd, options, undefined, settle);
+  }));
 }
 
 /**
@@ -508,10 +573,20 @@ function directoryOf(cwd: string, runId: string): string {
   return join(cwd, ".orchy", "runs", runId);
 }
 
-async function execute(state: RunState, cwd: string, options: RunOptions, answered?: Step): Promise<RunState> {
+async function execute(
+  state: RunState,
+  cwd: string,
+  options: RunOptions,
+  answered?: Step,
+  settle: () => void = () => {},
+): Promise<RunState> {
   try {
-    return await drive(state, cwd, options, answered);
+    return await drive(state, cwd, options, answered, settle);
   } catch (error) {
+    if (error instanceof WorkspaceClaimFault) {
+      if (state.status === "failed" && state.error) error.message = `${state.error}; ${error.message}`;
+      throw error;
+    }
     if (options.signal?.aborted) {
       state.status = "stopped";
       state.pid = undefined;
@@ -519,6 +594,7 @@ async function execute(state: RunState, cwd: string, options: RunOptions, answer
       // The daemon owns the full process group. Only it knows when every
       // descendant has ended, so only it writes the terminal state there.
       if (process.env[RUN_GROUP] === "1") return state;
+      settle();
       keep(directoryOf(cwd, state.runId), state);
       const fallback = options.harness ?? pi;
       const convert = (id: string, handle: string, trajectoryId: string, at: string) => {
@@ -538,6 +614,12 @@ async function execute(state: RunState, cwd: string, options: RunOptions, answer
     state.error = `the run failed while it recorded its state: ${why}`;
     state.pid = undefined;
     try {
+      settle();
+    } catch (cleanup) {
+      if (cleanup instanceof Error) cleanup.message = `the run failed with "${why}"; ${cleanup.message}`;
+      throw cleanup;
+    }
+    try {
       keep(directoryOf(cwd, state.runId), state);
     } catch (storage) {
       throw new Error(`the run failed with "${why}", and Orchy could not save that failure: ${reasonOf(storage)}`);
@@ -547,7 +629,13 @@ async function execute(state: RunState, cwd: string, options: RunOptions, answer
   }
 }
 
-async function drive(state: RunState, cwd: string, options: RunOptions, answered?: Step): Promise<RunState> {
+async function drive(
+  state: RunState,
+  cwd: string,
+  options: RunOptions,
+  answered: Step | undefined,
+  settle: () => void,
+): Promise<RunState> {
   const harness = options.harness ?? pi;
   const emit = options.onEvent ?? (() => {});
   // ADR 0005: the state on disk is the run. A gate and a crash recover the same way.
@@ -563,6 +651,9 @@ async function drive(state: RunState, cwd: string, options: RunOptions, answered
     return harnessFor(state.flow, step, harness, options.harnesses).toTrajectory(handle, trajectoryId, at);
   };
   const close = () => {
+    // Publish a resumable or terminal state only after this run has given the
+    // working tree back. An event listener can act on the state immediately.
+    settle();
     state.pid = undefined;
     save();
     const file = join(directoryOf(cwd, state.runId), "trajectory.json");
@@ -657,8 +748,8 @@ async function drive(state: RunState, cwd: string, options: RunOptions, answered
     // runs at the width of the flow: a change there breaks every promise in the
     // wave, which names too many steps and never too few. A step with no
     // promise writes what it likes, and counts as a writer.
-    // ponytail: two runs in one working directory still disturb each other, so a
-    // promise holds inside one run only. A workspace for each run lifts that.
+    // ponytail: the workspace claim excludes Orchy runs only. A person or
+    // another program can still disturb it. A workspace per run lifts that.
     const promises = work.some((step) => changesOf(state.flow, step) !== undefined);
     const writes = work.some((step) => changesOf(state.flow, step) !== "nothing");
     const parallel = promises && writes ? 1 : (state.flow.parallel ?? WAVE);

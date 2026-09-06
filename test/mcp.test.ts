@@ -6,6 +6,7 @@ import { PassThrough } from "node:stream";
 import test from "node:test";
 import { daemon } from "../src/daemon.ts";
 import { mcp } from "../src/mcp.ts";
+import { scopeKey } from "../src/memory.ts";
 import { formatFlow } from "../src/yaml.ts";
 
 const COUNT = `export default (inputs: Record<string, unknown>) => ({ count: Object.keys(inputs).length });\n`;
@@ -280,11 +281,11 @@ test("the door leaves the runs it started to finish", async () => {
   const site = talking(root);
   const slow = { name: "slow", steps: [{ id: "wait", kind: "call", module: "naps.ts", returns: NUMBER }] };
   await site.call("write_flow", { path: "slow.yaml", yaml: formatFlow(slow as never) });
-  const started = (await site.call("run_flow", { path: "slow.yaml" })).body as { runId: string };
+  const started = (await site.call("run_flow", { path: "slow.yaml" })).body as { ticket: number; runId: string };
 
   // The door goes. The run is its own process and its state is on disk, so a
   // dispatcher's runs outlive the step that started them. ADR 0025.
-  site.engine.close(false);
+  await site.engine.close(false);
   await until(async () => {
     try {
       const state = JSON.parse(
@@ -295,6 +296,12 @@ test("the door leaves the runs it started to finish", async () => {
       return false;
     }
   });
+  const recovered = daemon(root, false);
+  try {
+    assert.equal(recovered.pending().some((ticket) => ticket.ticket === started.ticket), false);
+  } finally {
+    await recovered.close(false);
+  }
 });
 
 test("a missing prompt is a warning the write answers, and run_flow refuses the flow until it is there", async () => {
@@ -581,20 +588,20 @@ const REMEMBERING = {
   status: "running",
   steps: {},
   cycles: {},
-  memory: { key: "ticket-proj-14", most: 20 },
+  memory: { key: scopeKey("ticket/PROJ-14"), most: 20 },
 };
 
 test("a step records through the door, and reads back only the store of its own run", async () => {
   const root = project();
   standing(root, REMEMBERING);
   // A second run, of another ticket, whose store the first must not reach.
-  standing(root, { ...REMEMBERING, runId: "r2", memory: { key: "ticket-proj-99", most: 20 } });
+  standing(root, { ...REMEMBERING, runId: "r2", memory: { key: scopeKey("ticket/PROJ-99"), most: 20 } });
 
   const site = talking(root, { runId: "r1", step: "code" });
   const other = talking(root, { runId: "r2", step: "code" });
   try {
     const written = await site.call("remember", { text: "the parser lives in src/yaml.ts", tags: ["where"] });
-    assert.equal((written.body as { scope: string }).scope, "ticket-proj-14");
+    assert.equal((written.body as { scope: string }).scope, scopeKey("ticket/PROJ-14"));
     // The entry names the run and the step, so a wrong one is found and dropped.
     const entry = (written.body as { entry: { run: string; step: string; id: string } }).entry;
     assert.equal(entry.run, "r1");
@@ -616,7 +623,7 @@ test("a step records through the door, and reads back only the store of its own 
     // step cannot name the store of another ticket. There is nothing to ask for.
     const elsewhere = (await other.call("recall_memory", {})).body as { of: number; scope: string };
     assert.equal(elsewhere.of, 0);
-    assert.equal(elsewhere.scope, "ticket-proj-99");
+    assert.equal(elsewhere.scope, scopeKey("ticket/PROJ-99"));
   } finally {
     other.close();
     site.close();

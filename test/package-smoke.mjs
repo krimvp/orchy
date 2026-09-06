@@ -9,9 +9,13 @@ const consumer = mkdtempSync(join(tmpdir(), "orchy-package-"));
 let archive;
 
 function run(command, args, cwd = consumer) {
-  const result = spawnSync(command, args, { cwd, encoding: "utf8" });
+  const result = attempt(command, args, cwd);
   assert.equal(result.status, 0, `${command} ${args.join(" ")} failed:\n${result.stderr}\n${result.stdout}`);
   return result;
+}
+
+function attempt(command, args, cwd = consumer) {
+  return spawnSync(command, args, { cwd, encoding: "utf8" });
 }
 
 try {
@@ -30,6 +34,14 @@ try {
   run(cli, ["--version"]);
   run(cli, ["init"]);
   run(cli, ["check", "flow.yaml"]);
+  writeFileSync(
+    join(consumer, "values.yaml"),
+    "name: values\ntakes:\n  type: object\n  required: [issue]\n  properties:\n    issue: { type: number }\nsteps:\n  - id: hello\n    kind: call\n    module: hello.mjs\n    returns: { type: object }\n",
+  );
+  const wrong = attempt(cli, ["check", "values.yaml", "--with", '{"issue":"five"}']);
+  assert.equal(wrong.status, 2);
+  assert.match(wrong.stderr, /must be number/);
+  run(cli, ["check", "values.yaml", "--with", '{"issue":5}']);
   const done = run(cli, ["run", "flow.yaml"]);
   assert.match(done.stdout, /Orchy ran a model-free flow/);
 

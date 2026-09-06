@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -28,6 +28,10 @@ function project(): string {
 
 function orchy(cwd: string, ...args: string[]) {
   return spawnSync(process.execPath, [CLI, ...args], { cwd, encoding: "utf8" });
+}
+
+function orchyWith(cwd: string, env: NodeJS.ProcessEnv, ...args: string[]) {
+  return spawnSync(process.execPath, [CLI, ...args], { cwd, encoding: "utf8", env: { ...process.env, ...env } });
 }
 
 test("a flag orchy does not know is refused, and nothing runs", () => {
@@ -63,6 +67,7 @@ test("a resume of a run this directory does not hold ends with the code for a wr
 
 test("a person reads, writes, and corrects a store from the command line", () => {
   const root = project();
+  const reference = orchy(root, "memory", "key", "scope", "ticket/PROJ-14").stdout.trim();
 
   assert.match(orchy(root, "memory", "keys").stdout, /no scope holds anything/);
 
@@ -71,10 +76,10 @@ test("a person reads, writes, and corrects a store from the command line", () =>
   const added = orchy(root, "memory", "add", "ticket/PROJ-14", "the parser lives in src/yaml.ts");
   assert.equal(added.status, 0);
   const id = added.stdout.split(" ")[0] as string;
-  assert.match(added.stdout, /recorded in "ticket-proj-14"/);
+  assert.ok(added.stdout.includes(`recorded in "${reference}"`));
 
-  assert.match(orchy(root, "memory", "keys").stdout, /ticket-proj-14/);
-  const listed = orchy(root, "memory", "list", "ticket-proj-14");
+  assert.ok(orchy(root, "memory", "keys").stdout.includes(reference));
+  const listed = orchy(root, "memory", "list", reference);
   assert.match(listed.stdout, /the parser lives in src\/yaml\.ts/);
   // An entry a person wrote says so, because an entry that cannot say where it
   // came from is one nobody knows whether to trust.
@@ -84,9 +89,9 @@ test("a person reads, writes, and corrects a store from the command line", () =>
   assert.equal((JSON.parse(asJson.stdout.trim()) as { text: string }).text, "the parser lives in src/yaml.ts");
 
   // The correction a person makes: one entry by its id, and nothing else.
-  assert.match(orchy(root, "memory", "forget", "ticket-proj-14", "nosuchid").stderr, /holds no entry/);
-  assert.equal(orchy(root, "memory", "forget", "ticket-proj-14", id).status, 0);
-  assert.match(orchy(root, "memory", "list", "ticket-proj-14").stdout, /holds nothing/);
+  assert.match(orchy(root, "memory", "forget", reference, "nosuchid").stderr, /holds no entry/);
+  assert.equal(orchy(root, "memory", "forget", reference, id).status, 0);
+  assert.match(orchy(root, "memory", "list", reference).stdout, /holds nothing/);
 });
 
 test("a command step that records is recorded as the step, and a person as a person", () => {
@@ -139,6 +144,108 @@ test("orchy check says what the flow takes", () => {
   const done = orchy(root, "check", "flow.yaml");
   assert.equal(done.status, 0);
   assert.match(done.stdout, /passes the local checks: 1 step\. It takes: issue \(number\)\. Supply them with --with/);
+});
+
+test("orchy check checks the values it is given", () => {
+  const root = project();
+  const wrong = orchy(root, "check", "flow.yaml", "--with", '{"issue":"five"}');
+  assert.equal(wrong.status, 2);
+  assert.match(wrong.stderr, /must be number/);
+
+  const ready = orchy(root, "check", "flow.yaml", "--with", '{"issue":5}');
+  assert.equal(ready.status, 0, ready.stderr);
+  assert.equal(existsSync(join(root, ".orchy")), false);
+});
+
+test("orchy check resolves a memory scope with the values it is given", () => {
+  const root = project();
+  const flow = {
+    name: "remembering",
+    takes: { type: "object", properties: { issue: { type: "string" } } },
+    memory: { scope: "ticket/{{ issue }}" },
+    steps: [{ id: "work", kind: "call", module: "count.ts", returns: NUMBER }],
+  };
+  writeFileSync(join(root, "remembering.yaml"), formatFlow(flow as never));
+
+  const missing = orchy(root, "check", "remembering.yaml", "--with", "{}");
+  assert.equal(missing.status, 2);
+  assert.match(missing.stderr, /remembers under.*nothing supplies "issue".*give it to the run/s);
+  assert.equal(existsSync(join(root, ".orchy")), false);
+
+  const ready = orchy(root, "check", "remembering.yaml", "--with", '{"issue":"PROJ-14"}');
+  assert.equal(ready.status, 0, ready.stderr);
+  assert.equal(existsSync(join(root, ".orchy")), false);
+});
+
+test("orchy check refuses a state path that cannot hold runs", () => {
+  const root = project();
+  writeFileSync(join(root, ".orchy"), "not a directory\n");
+  const done = orchy(root, "check", "flow.yaml");
+  assert.equal(done.status, 2);
+  assert.match(done.stderr, /\.orchy.*is not a directory/);
+});
+
+test("orchy check refuses a Git workspace that is not a repository", () => {
+  const root = project();
+  const flow = {
+    name: "git-work",
+    workspace: { kind: "git", path: "." },
+    steps: [{ id: "work", kind: "call", module: "count.ts", returns: NUMBER }],
+  };
+  writeFileSync(join(root, "git.yaml"), formatFlow(flow as never));
+  const done = orchy(root, "check", "git.yaml");
+  assert.equal(done.status, 2);
+  assert.match(done.stderr, /is not a git repository/);
+});
+
+test("orchy check names a missing Git command", { skip: process.platform === "win32" }, () => {
+  const root = project();
+  assert.equal(spawnSync("git", ["init", "-q"], { cwd: root }).status, 0);
+  const flow = {
+    name: "git-work",
+    workspace: { kind: "git", path: "." },
+    steps: [{ id: "work", kind: "call", module: "count.ts", returns: NUMBER }],
+  };
+  writeFileSync(join(root, "git.yaml"), formatFlow(flow as never));
+  const done = orchyWith(root, { PATH: "" }, "check", "git.yaml");
+  assert.equal(done.status, 2);
+  assert.match(done.stderr, /git command is not on PATH/);
+});
+
+test("orchy check refuses a missing harness command", { skip: process.platform === "win32" }, () => {
+  const root = project();
+  const modelFree = orchyWith(root, { PATH: "" }, "check", "flow.yaml");
+  assert.equal(modelFree.status, 0, modelFree.stderr);
+  writeFileSync(join(root, "prompt.md"), "Say hello.\n");
+  const flow = {
+    name: "agent",
+    harness: "claude",
+    steps: [{ id: "work", kind: "agent", prompt: "prompt.md", tools: ["read"], returns: NUMBER }],
+  };
+  writeFileSync(join(root, "agent.yaml"), formatFlow(flow as never));
+  const done = orchyWith(root, { PATH: "" }, "check", "agent.yaml");
+  assert.equal(done.status, 2);
+  assert.match(done.stderr, /claude command is not on PATH/);
+});
+
+test("orchy check reports a harness command version", { skip: process.platform === "win32" }, () => {
+  const root = project();
+  const bin = join(root, "bin");
+  mkdirSync(bin);
+  writeFileSync(join(bin, "claude"), "#!/bin/sh\necho 'claude 1.2.3'\n");
+  chmodSync(join(bin, "claude"), 0o755);
+  writeFileSync(join(root, "prompt.md"), "Say hello.\n");
+  const flow = {
+    name: "agent",
+    harness: "claude",
+    steps: [{ id: "work", kind: "agent", prompt: "prompt.md", tools: ["read"], returns: NUMBER }],
+  };
+  writeFileSync(join(root, "agent.yaml"), formatFlow(flow as never));
+  const done = orchyWith(root, { PATH: bin }, "check", "agent.yaml");
+  assert.equal(done.status, 0, done.stderr);
+  assert.match(done.stdout, /claude command: claude 1\.2\.3/);
+  assert.match(done.stdout, /Model availability is unknown/);
+  assert.match(done.stdout, /Model authentication is unknown/);
 });
 
 test("orchy check refuses a missing prompt and a missing component", () => {
@@ -215,10 +322,14 @@ test("orchy init writes a model-free starter and refuses an overwrite", () => {
   assert.equal(readFileSync(join(root, "hello.mjs"), "utf8"), "keep this\n");
 });
 
-test("orchy check says that model authentication is unknown", () => {
+test("orchy check says that model authentication is unknown", { skip: process.platform === "win32" }, () => {
   const root = mkdtempSync(join(tmpdir(), "orchy-auth-"));
   assert.equal(orchy(root, "init").status, 0);
-  const checked = orchy(root, "check", "agent.yaml");
+  const bin = join(root, "bin");
+  mkdirSync(bin);
+  writeFileSync(join(bin, "claude"), "#!/bin/sh\necho 'claude 1.2.3'\n");
+  chmodSync(join(bin, "claude"), 0o755);
+  const checked = orchyWith(root, { PATH: bin }, "check", "agent.yaml");
   assert.equal(checked.status, 0, checked.stderr);
   assert.match(checked.stdout, /authentication is unknown/i);
   assert.match(checked.stdout, /does not call a model/i);

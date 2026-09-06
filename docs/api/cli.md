@@ -23,15 +23,16 @@ Seven commands exist:
   exits `2` with the list of problems when the flow is not valid.
 - `orchy runs` — list the runs under this directory, newest first, as a table;
   with `--events`, one JSON row per line.
-- `orchy memory keys | list <scope> | add <scope> <text> | forget <scope> [id]`
-  — read and write what runs recorded, under `.orchy/memory`. A scope is the
-  key a flow declares, and it is read the way the runner reads one, so
-  `ticket/PROJ-14` reaches the store a run wrote. `list` prints one entry a
-  line, or one JSON entry a line with `--events`. `forget` drops the entry an
-  id names, and the whole scope without one. This is the door for a person
-  correcting what a run wrote, and for a harness that holds no `orchy` tool.
-  `add` reads `$ORCHY_STARTED_BY` and records the run and step it names, so a
-  step that adds is recorded as that step and a person as a person (ADR 0029).
+- `orchy memory keys | key root | key flow|scope <name>` and the `list`, `add`,
+  `forget`, and `migrate` forms — read and write what runs recorded under
+  `.orchy/memory`. `key` prints a canonical `key=v2:...` reference. Pass that
+  reference to `list`, `add`, or `forget`; `scope=<literal>` names a custom
+  scope whose text happens to start with `v2:`, `legacy=`, or `key=`. `keys`
+  marks old flat files as `legacy=`. Migration copies one of them to a chosen
+  exact key and leaves the old file unchanged. `list` prints one entry a line,
+  or one JSON entry a line with `--events`. `forget` drops the entry an id
+  names, and the whole scope without one. `add` reads `$ORCHY_STARTED_BY` and
+  records the run and step it names (ADR 0029).
   exits `2` with the list of problems when the flow is not valid. A valid flow
   that takes values gets them named, each with its type, so the `--with` that
   comes next is written once.

@@ -3,12 +3,19 @@
 ## Check before a run
 
 `orchy check flow.yaml` checks the flow shape and every flow it holds. It also
-checks each prompt file, component file, and prompt name. A missing file or an
-unfilled name ends the command with code 2, before a step starts.
+checks each prompt file, component file, prompt name, state path, Git workspace,
+and harness command. Give it the run values to check them too:
 
-The check starts no step and spends nothing. It does not call a model, so it
-reports model authentication as unknown. Check the account with the command of
-the harness before a paid run.
+```bash
+orchy check flow.yaml --with '{"issue":412}'
+```
+
+A failed local check ends the command with code 2, before a step starts.
+
+The check starts no step and spends nothing. It reads `--version` from a Claude
+or Droid command with a two-second limit. This result does not prove that the
+model is available. The check calls no model, so it reports model availability
+and authentication as unknown. Check the account before a paid run.
 
 The check imports a TypeScript or JavaScript flow file. Its module initialization
 can run code. A YAML flow is data and has no module initialization.
@@ -377,9 +384,19 @@ takes it. So a flow with `changes: nothing` on the flow runs one step at a time
 from end to end. Put the promise on the steps that act, and not on the flow,
 when a wave must run wide.
 
-Two runs in one working directory still disturb each other, whatever this number
-says. A promise holds inside one run. Give each run a working directory of its
-own.
+One active Orchy run claims one Git working tree. A second run over the same
+tree fails before it changes run state or starts a step. A path alias and a
+subdirectory find the same claim. Separate Git worktrees can run at the same
+time.
+
+The claim ends when the run is done, fails, or waits at a gate. A resume claims
+the tree again. The claim does not stop a person or another program from
+changing files. It also does not keep the tree unchanged while a run waits.
+Use a separate Git worktree when a run needs files of its own.
+
+A crash or an unconfirmed stop leaves the claim in place. The next run names
+the owner, the run state, and the claim file. Inspect them with `orchy runs`.
+Remove the claim only after the owner process and its descendants have ended.
 
 ## Choose a model
 
@@ -546,7 +563,7 @@ the model ends with a step:
 
 With no `text` of its own it records the value of each step it needs, so an
 agent step that summarizes before it is the whole of what a flow has to write.
-The third way is the command line — `orchy memory add <scope> <text>` — which is
+The third way is the command line — `orchy memory add <key> <text>` — which is
 also how a `command` step and a harness with no `orchy` tool reach the store. A
 command step, and a claude or droid step, read the key as `$ORCHY_MEMORY_KEY`
 and who they are as `$ORCHY_STARTED_BY`, and `add` records that run and step.
@@ -567,9 +584,29 @@ and dropped:
 
 ```bash
 orchy memory keys
-orchy memory list ticket-proj-14
-orchy memory forget ticket-proj-14 a41f9c02   # or the whole scope, with no id
+KEY="$(orchy memory key scope 'ticket/PROJ-14')"
+orchy memory list "$KEY"
+orchy memory forget "$KEY" a41f9c02   # or the whole scope, with no id
 ```
+
+The `key` command preserves both the kind and exact text of a scope. It prints
+a canonical `key=v2:...` reference. Use `key flow <name>` for flow memory and
+`key root` for root memory. Use `scope=<literal>` when a custom scope itself
+starts with `v2:`, `legacy=`, or `key=`.
+
+Old flat file names cannot say which exact scope made them. `memory keys`
+marks these files as `legacy=`. Choose their target instead of letting Orchy
+guess, and copy one without deleting its source:
+
+```bash
+TARGET="$(orchy memory key scope 'ticket/PROJ-14')" # or key flow / key root
+orchy memory migrate legacy=ticket-proj-14 "$TARGET"
+```
+
+The target must be empty, and the legacy source remains for review and later
+cleanup. Orchy serializes adds, forgets, and migrations across processes. If a
+writer dies while holding the claim, the next command names the claim file; a
+person removes it only after checking that no Orchy process writes memory.
 
 Nothing expires, and nothing ranks: `recall_memory` matches a substring, in the
 text and in the tags. Durable project knowledge still belongs in reviewed,
@@ -696,7 +733,8 @@ On the page:
 1. Open **Flows** and give the path of a flow file. The path is relative to the
    directory of the daemon.
 2. Press **Run**. The run goes in the queue, and it starts when a slot is free.
-   Four runs run at the same time.
+   Four runs run at the same time. The ticket is stored before the page reports
+   acceptance, so work that is still queued survives a daemon restart.
 3. Open the run. Each step turns green when it passes and red when it fails, and
    the events arrive while the run is on the way.
 4. A run that reaches a gate shows a form built from the contract of that gate.
@@ -724,6 +762,13 @@ On the page:
 11. A run that ended offers the way back: a failed run resumes from the step
     that failed, and each step of an ended run runs again from there. The steps
     that passed keep their work.
+
+If a daemon stops after it claims a ticket, the queue may say `uncertain`.
+Open the named run and its trajectory before you act. Orchy does not submit the
+work again because the old child may still run. **Dismiss** acknowledges the
+uncertainty; it does not prove delivery. Do not repeat an uncertain start or
+answer until you know its outcome. A `failed` ticket is different: Orchy knows
+that work did not start, so it is safe to correct and submit again.
 
 The daemon listens on `127.0.0.1` only, and it refuses a page that is not its
 own. A request with a foreign `Origin` reaches nothing, and so does a request

@@ -1,9 +1,28 @@
-import { type CSSProperties, useEffect } from "react";
+import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { type Change, type RunRow, api, useLoad, useNotices } from "./api";
+import { canDismiss, ticketLabel } from "./ticket";
 
 export function Runs() {
   const { events, pending } = useNotices();
   const { value: runs, error, again } = useLoad(() => api.runs(), []);
+  const [fault, setFault] = useState<string>();
+  const dismissingNow = useRef(false);
+  const [dismissing, setDismissing] = useState<number>();
+
+  const dismiss = (ticket: number) => {
+    if (dismissingNow.current) return;
+    dismissingNow.current = true;
+    setDismissing(ticket);
+    setFault(undefined);
+    void api
+      .forget(ticket)
+      .then(() => (again(), setFault(undefined)))
+      .catch((problem: Error) => setFault(problem.message))
+      .finally(() => {
+        dismissingNow.current = false;
+        setDismissing(undefined);
+      });
+  };
 
   useEffect(() => {
     again();
@@ -15,7 +34,12 @@ export function Runs() {
   const past = runs?.filter((run) => run.status !== "waiting" && run.status !== "running") ?? [];
   // A ticket whose run is on the way already shows as that run, so it shows once.
   const queued = pending.filter(
-    (ticket) => ticket.error || !ticket.runId || !runs?.some((run) => run.runId === ticket.runId),
+    (ticket) =>
+      ticket.error ||
+      !ticket.runId ||
+      !runs?.some((run) => run.runId === ticket.runId) ||
+      ticket.status === "failed" ||
+      ticket.status === "uncertain",
   );
 
   return (
@@ -27,7 +51,8 @@ export function Runs() {
         {waiting.length > 0 ? ` · ${waiting.length} waiting for you` : ""}
         {queued.length > 0 ? ` · ${queued.length} in the queue` : ""}
       </p>
-      {error && <p className="bad">{error}</p>}
+      {error && <p className="bad" role="alert">{error}</p>}
+      {fault && <p className="bad" role="alert">{fault}</p>}
 
       {waiting.length > 0 && (
         <div className="cards" style={{ "--i": 2 } as CSSProperties}>
@@ -69,24 +94,27 @@ export function Runs() {
       )}
 
       {queued.length > 0 && (
-        <div className="group" style={{ "--i": 4 } as CSSProperties}>
-          {queued.map((ticket) => (
-            <div key={ticket.ticket} className="flow-line">
-              <span className={`pill ${ticket.error ? "failed" : "running"}`}>
-                {ticket.error ? "did not start" : ticket.runId ? "starting" : "queued"}
-              </span>
-              <div className="grow">
-                <div className="name">{ticket.flowName}</div>
-                {ticket.error && <pre className="bad small">{ticket.error}</pre>}
+        <div className="group" aria-live="polite" style={{ "--i": 4 } as CSSProperties}>
+          {queued.map((ticket) => {
+            const tone =
+              ticket.status === "failed" ? "failed" : ticket.status === "uncertain" ? "waiting" : "running";
+            return (
+              <div key={ticket.ticket} className="flow-line">
+                <span className={`pill ${tone}`}>{ticketLabel(ticket)}</span>
+                <div className="grow">
+                  <div className="name">{ticket.flowName}</div>
+                  {ticket.error && <pre className="bad small">{ticket.error}</pre>}
+                  {ticket.recovery && <p className="note small">{ticket.recovery}</p>}
+                </div>
+                <span className="dim small">{when(ticket.queuedAt)}</span>
+                {canDismiss(ticket) && (
+                  <button className="quiet" disabled={dismissing !== undefined} onClick={() => dismiss(ticket.ticket)}>
+                    {dismissing === ticket.ticket ? "Dismissing…" : "Dismiss"}
+                  </button>
+                )}
               </div>
-              <span className="dim small">{when(ticket.queuedAt)}</span>
-              {ticket.error && (
-                <button className="quiet" onClick={() => void api.forget(ticket.ticket).then(again)}>
-                  Dismiss
-                </button>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 

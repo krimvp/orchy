@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { withTimeout } from "./ticket";
 
 export type Schema = Record<string, unknown>;
 
@@ -149,7 +150,9 @@ export interface Ticket {
   path: string;
   queuedAt: string;
   runId?: string;
+  status: "queued" | "dispatching" | "delivered" | "failed" | "uncertain";
   error?: string;
+  recovery?: string;
 }
 
 export interface StepRecord {
@@ -365,14 +368,29 @@ export const api = {
  */
 export async function follow(ticket: Ticket): Promise<void> {
   for (let turn = 0; turn < 40; turn += 1) {
-    const pending = await api.queue().catch(() => [] as Ticket[]);
+    let pending: Ticket[];
+    try {
+      pending = await withTimeout(api.queue(), 5_000, "The queue did not answer.");
+    } catch {
+      location.hash = "#/";
+      throw new Error(
+        `Orchy accepted ticket ${ticket.ticket}, but the queue did not answer. Open Runs before you start it again.`,
+      );
+    }
     const held = pending.find((one) => one.ticket === ticket.ticket);
+    const state = held;
     // A job leaves the queue when it ends; its run page is the place to read why.
-    if (held?.runId || (!held && ticket.runId)) {
+    if ((state?.runId && (!state.status || state.status === "delivered")) || (!held && ticket.runId)) {
       location.hash = `#/runs/${held?.runId ?? ticket.runId}`;
       return;
     }
-    if (held?.error) throw new Error(held.error);
+    if (state?.status === "failed" || state?.status === "uncertain" || held?.error) {
+      location.hash = "#/";
+      throw new Error(
+        [held?.error, state?.recovery].filter(Boolean).join(" ") ||
+          `Ticket ${ticket.ticket} needs your attention on Runs.`,
+      );
+    }
     if (!held) break;
     await new Promise((rest) => setTimeout(rest, 500));
   }
