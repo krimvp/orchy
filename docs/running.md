@@ -1,5 +1,8 @@
 # Run a flow
 
+New to Orchy? Start with [one simple flow](./start.md). This guide then adds
+the fields and rules for larger flows.
+
 ## Check and repair this root
 
 `flows/self-improve/flow.yaml` reads failed runs in this root. It also runs

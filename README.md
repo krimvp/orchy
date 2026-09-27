@@ -1,68 +1,34 @@
 # Orchy
 
 Orchy runs agent flows. You declare the steps and the rules. Orchy runs the
-steps, enforces the rules, and records what each step did.
+steps, checks the rules, and records what each step did.
 
-A coding agent is good at one step and poor at a long one. So Orchy holds the
-control flow, and gives each step one job, one tool list, and one contract.
+A flow can call a command, ask an agent to use a model, or wait for a person.
+Each step declares what it needs and what value it must return. Orchy checks
+the order and the value. You can also set rules for tools, changed files,
+cycles, and cost.
 
-```yaml
-name: code-and-review
-workspace: { kind: git, path: . }
-harness: claude
-model: claude-opus-4-5
-takes:
-  type: object
-  required: [issue]
-  properties: { issue: { type: number } }
-returns:
-  type: object
-  properties: { approved: { type: boolean } }
+## Start here
 
-steps:
-  - id: code
-    kind: agent
-    prompt: prompts/code.md        # this file holds "{{ issue }}"
-    tools: [read, write, edit, grep, find, ls]
-    returns:
-      type: object
-      required: [summary]
-      properties: { summary: { type: string } }
-
-  - id: review
-    kind: agent
-    needs: [code]
-    harness: pi
-    model: ollama/glm-5.2
-    prompt: prompts/review.md
-    tools: [read, grep]
-    changes: nothing
-    returns:
-      type: object
-      required: [approved, findings]
-      properties:
-        approved: { type: boolean }
-        findings: { type: array, items: { type: string } }
-    cycle: { to: code, when: { approved: false }, limit: 3, policy: escalate }
-```
+The [start guide](./docs/start.md) begins with one command step. It needs no
+model or account. The guide then adds an agent step, order, a contract, and a
+gate. Each part leaves a flow you can run.
 
 ```bash
-orchy run flow.yaml --with '{"issue":412}'
+npm install -g @krimvp/orchy
 ```
 
-The flow takes the issue, and the prompt of the first step reads it as
-`{{ issue }}`. So one flow serves every issue, and a name that nothing supplies
-fails the step instead of sending a model to do the wrong work. The flow returns
-the value of the step it ends with.
+Orchy needs Node 22.18 or later. The package name has a scope; the command is
+`orchy`.
 
-One model writes the code. A different model on a different harness reviews it,
-reaches no tool that can change a file, and sends the work back until it
-approves or a person takes over.
+| If you want to... | Go to... |
+| --- | --- |
+| Run your first flow | [Start with Orchy](./docs/start.md) |
+| Learn a field or a feature | [Run a flow](./docs/running.md) |
+| Read complete flows | [Examples](./examples/README.md) |
+| Learn the design | [Plan](./docs/plan.md) |
 
-This flow declares no `budget`, because the reviewer runs on a free provider
-that reports no cost, and Orchy enforces no budget that it cannot measure. Add
-`budget: 5` to a flow whose harnesses report one, and the run stops before the
-next wave when it reaches it. See [research](./examples/research), which does.
+The rest of this page lists Orchy's rules, commands, and records.
 
 ## What Orchy guarantees
 
@@ -215,7 +181,7 @@ takes the id of one entry, and drops the whole scope without one. See
 
 `orchy mcp` serves the Model Context Protocol on stdin and stdout, so a coding
 agent writes flows, hears every problem from `validate()`, runs them, and
-answers a gate. Register it with `claude mcp add orchy -- npx @krimvp/orchy mcp`. See
+answers a gate. Register it with `claude mcp add orchy -- orchy mcp`. See
 [docs/running.md](./docs/running.md#drive-orchy-from-an-agent).
 
 A `prompt` path and a `module` path are relative to the flow file. The working
@@ -407,8 +373,7 @@ orchy run flow.yaml
 ```
 
 The bare name `orchy` on npm belongs to another package, so the scope carries
-this one. The command it installs is still `orchy`, and
-`npx @krimvp/orchy run flow.yaml` runs it without an install.
+this one. The command it installs is still `orchy`.
 
 From this repository instead. Node strips the types, so a clone needs no build
 to run:
