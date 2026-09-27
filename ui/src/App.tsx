@@ -47,7 +47,7 @@ function useAttention() {
 
   useEffect(() => {
     runs.again();
-  }, [events.length, runs.again]);
+  }, [events, runs.again]);
 
   const waiting = runs.value?.filter((run) => run.status === "waiting") ?? [];
   const running = runs.value?.filter((run) => run.status === "running") ?? [];

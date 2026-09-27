@@ -668,6 +668,7 @@ export async function start(
   values: Record<string, unknown> | undefined,
   harness?: string,
   startedBy?: { runId: string; step: string },
+  reservationId?: string,
 ) {
   const flow = await loadFlow(row.path, daemon.root);
   const problems = validate(flow, harness ?? row.harness);
@@ -686,6 +687,7 @@ export async function start(
     harness: harness ?? row.harness,
     with: values,
     ...(startedBy ? { startedBy } : {}),
+    ...(reservationId ? { reservationId } : {}),
   });
 }
 

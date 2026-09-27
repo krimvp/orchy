@@ -20,7 +20,7 @@ export function FlowRuns({ id }: { id: number }) {
 
   useEffect(() => {
     again();
-  }, [events.length, pending.length, again]);
+  }, [events, pending, again]);
 
   const begin = (values?: Record<string, unknown>) => {
     setBusy(true);

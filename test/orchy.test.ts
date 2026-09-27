@@ -3243,6 +3243,69 @@ test("a step that writes a file the workspace already changed breaks its promise
   assert.match(state.steps.a?.error ?? "", /promises to change nothing, but it changed step\.md/);
 });
 
+test("a failed step records its changes and the broken promise", async () => {
+  const cwd = gitWorkspace();
+  const state = await run(
+    flow("failed-write", {
+      workspace: { kind: "git", path: "." },
+      steps: [agent({ id: "a", prompt: "step.md", tools: ["write"], returns: Summary, changes: "nothing" })],
+    }),
+    {
+      cwd,
+      harness: actingHarness(() => {
+        writeFileSync(join(cwd, "sneaky.txt"), "work");
+        throw new Error("the harness failed");
+      }, { summary: "unused" }),
+    },
+  );
+
+  assert.equal(state.status, "failed");
+  assert.deepEqual(state.steps.a?.changed, [{ path: "sneaky.txt", how: "added" }]);
+  assert.match(state.steps.a?.error ?? "", /the harness failed/);
+  assert.match(state.steps.a?.error ?? "", /promises to change nothing, but it added sneaky\.txt/);
+});
+
+test("a second write to a dirty quoted path breaks the promise", async () => {
+  const cwd = gitWorkspace();
+  const name = "résumé draft.txt";
+  writeFileSync(join(cwd, name), "first");
+  execFileSync("git", ["add", name], { cwd, stdio: "pipe" });
+  execFileSync("git", ["commit", "-qm", "add file"], { cwd, stdio: "pipe" });
+  writeFileSync(join(cwd, name), "second");
+
+  const state = await run(
+    flow("quoted-path", {
+      workspace: { kind: "git", path: "." },
+      steps: [agent({ id: "a", prompt: "step.md", tools: ["write"], returns: Summary, changes: "nothing" })],
+    }),
+    { cwd, harness: writingHarness(cwd, name, { summary: "changed it" }) },
+  );
+
+  assert.equal(state.status, "failed");
+  assert.deepEqual(state.steps.a?.changed, [{ path: name, how: "changed" }]);
+});
+
+test("a quoted rename checks both paths", async () => {
+  const cwd = gitWorkspace();
+  const from = "docs/résumé -> draft.txt";
+  const to = "moved résumé -> draft.txt";
+  mkdirSync(join(cwd, "docs"));
+  writeFileSync(join(cwd, from), "work");
+  execFileSync("git", ["add", from], { cwd, stdio: "pipe" });
+  execFileSync("git", ["commit", "-qm", "add file"], { cwd, stdio: "pipe" });
+
+  const state = await run(
+    flow("quoted-rename", {
+      workspace: { kind: "git", path: "." },
+      steps: [agent({ id: "a", prompt: "step.md", tools: ["write"], returns: Summary, changes: { paths: ["docs"] } })],
+    }),
+    { cwd, harness: actingHarness(() => execFileSync("git", ["mv", from, to], { cwd, stdio: "pipe" }), { summary: "moved it" }) },
+  );
+
+  assert.equal(state.status, "failed");
+  assert.deepEqual(state.steps.a?.changed, [{ path: from, to, how: "renamed" }]);
+});
+
 test("a step that renames a file out of the paths it promises breaks its promise", async () => {
   const cwd = gitWorkspace();
   mkdirSync(join(cwd, "docs"));
@@ -4391,6 +4454,18 @@ test("a gate asks its question with the names in it filled in", async () => {
   assert.equal(state.status, "waiting");
   // The braces reached the person. Two runs of one flow asked the same question.
   assert.equal(state.question, "Does ticket ORC-41 look right?");
+});
+
+test("a gate with a missing name fails before it waits", async () => {
+  const state = await run(
+    flow("missing-question-name", {
+      steps: [gate({ id: "approve", question: "Does {{ missing }} look right?", returns: Type.Object({ approved: Type.Boolean() }) })],
+    }),
+    { cwd: workspace() },
+  );
+
+  assert.equal(state.status, "failed");
+  assert.match(state.error ?? "", /step "approve" reads "{{ missing }}" in its question/);
 });
 
 test("a call step runs a command in any language, and reads its value from stdout", async () => {

@@ -1,4 +1,4 @@
-import { type CSSProperties, useEffect, useState } from "react";
+import { type CSSProperties, useEffect, useRef, useState } from "react";
 import {
   type Changes,
   type Computed,
@@ -20,6 +20,7 @@ import { type Edge, Graph } from "./Graph";
 import { FileIcon, KindIcon, LoopIcon } from "./icons";
 import { Contract } from "./Run";
 import { Loading } from "./Runs";
+import { createRequestVersion, validationView } from "./notice-state";
 
 const KINDS: Array<Step["kind"]> = ["agent", "call", "gate", "flow"];
 
@@ -66,8 +67,14 @@ export function Editor({ id }: { id: number }) {
   const [fileOf, setFileOf] = useState<{ path: string; label: string }>();
   const [problems, setProblems] = useState<string[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
+  const [validatedFlow, setValidatedFlow] = useState<Flow>();
   const [note, setNote] = useState<string>();
   const [fault, setFault] = useState<string>();
+  const [validationFault, setValidationFault] = useState<string>();
+  const [validationErrorFlow, setValidationErrorFlow] = useState<Flow>();
+  const [validating, setValidating] = useState(false);
+  const [validationRetry, setValidationRetry] = useState(0);
+  const validationVersion = useRef(createRequestVersion());
   const [starting, setStarting] = useState(false);
 
   useEffect(() => {
@@ -75,11 +82,14 @@ export function Editor({ id }: { id: number }) {
       setFlow(loaded.value.flow);
       setProblems(loaded.value.problems);
       setWarnings(loaded.value.warnings ?? []);
+      setValidatedFlow(loaded.value.flow);
     }
   }, [loaded.value]);
 
   /** The flow differs from the file, so leaving without Save loses the change. */
   const dirty = Boolean(flow && loaded.value && JSON.stringify(flow) !== JSON.stringify(loaded.value.flow));
+  const verdict = validationView(flow, validatedFlow, problems, warnings, validationErrorFlow, validationFault, validating);
+  const checking = verdict.checking;
 
   // A change that never reached the file deserves one word before the tab
   // goes — and the router reads the same flag before a link leaves this page.
@@ -97,17 +107,33 @@ export function Editor({ id }: { id: number }) {
   // The runner owns the rules, so the editor asks it rather than repeating them.
   useEffect(() => {
     if (!flow) return;
+    const request = validationVersion.current.next();
+    setValidationFault(undefined);
+    setValidating(true);
     const timer = setTimeout(() => {
       void api
         .validate(flow, loaded.value?.row.path)
         .then((answer) => {
+          if (!validationVersion.current.isCurrent(request)) return;
+          setValidating(false);
           setProblems(answer.problems);
           setWarnings(answer.warnings ?? []);
+          setValidatedFlow(flow);
+          setValidationErrorFlow(undefined);
         })
-        .catch(() => undefined);
+        .catch((problem: Error) => {
+          if (validationVersion.current.isCurrent(request)) {
+            setValidating(false);
+            setValidationFault(problem.message);
+            setValidationErrorFlow(flow);
+          }
+        });
     }, 300);
-    return () => clearTimeout(timer);
-  }, [flow, loaded.value?.row.path]);
+    return () => {
+      clearTimeout(timer);
+      validationVersion.current.next();
+    };
+  }, [flow, loaded.value?.row.path, validationRetry]);
 
 
   if (loaded.error) return <p className="bad">{loaded.error}</p>;
@@ -244,6 +270,8 @@ export function Editor({ id }: { id: number }) {
       .saveFlow(id, flow)
       .then((answer) => {
         setProblems(answer.problems);
+        setValidatedFlow(flow);
+        setValidationErrorFlow(undefined);
         setNote(answer.saved ? "Saved to the file." : undefined);
         setFault(answer.saved ? undefined : "The flow is not valid, so nothing was written.");
         // The file holds the flow now, so the page reads it back and stands clean.
@@ -268,7 +296,11 @@ export function Editor({ id }: { id: number }) {
 
       {/* The toolbox: what the flow does, and what a person adds to it. */}
       <div className="bar-actions toolbox" style={{ "--i": 2 } as CSSProperties}>
-        <button className="go" disabled={!editable || problems.length > 0 || !dirty} onClick={() => void save()}>
+        <button
+          className="go"
+          disabled={!editable || !verdict.canSave || checking || Boolean(verdict.error) || !dirty}
+          onClick={() => void save()}
+        >
           {dirty ? "Save" : "Saved"}
         </button>
         <button title={dirty && editable ? "A run reads the file, so this saves first." : undefined} onClick={run}>
@@ -305,16 +337,20 @@ export function Editor({ id }: { id: number }) {
           </>
         )}
         <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-          {problems.length === 0 && warnings.length > 0 && (
-            <span className="pill waiting" title={warnings.join("\n")}>
-              {warnings.length} missing file{warnings.length === 1 ? "" : "s"}
+          {verdict.problems.length === 0 && verdict.warnings.length > 0 && (
+            <span className="pill waiting" title={verdict.warnings.join("\n")}>
+              {verdict.warnings.length} missing file{verdict.warnings.length === 1 ? "" : "s"}
             </span>
           )}
-          {problems.length === 0 ? (
+          {verdict.error ? (
+            <span className="pill failed" title={verdict.error}>validation failed</span>
+          ) : checking ? (
+            <span className="pill waiting">checking</span>
+          ) : verdict.problems.length === 0 ? (
             <span className="pill done">valid</span>
           ) : (
             <span className="pill failed">
-              {problems.length} problem{problems.length === 1 ? "" : "s"}
+              {verdict.problems.length} problem{verdict.problems.length === 1 ? "" : "s"}
             </span>
           )}
         </span>
@@ -334,18 +370,33 @@ export function Editor({ id }: { id: number }) {
       {!editable && <p className="bad">This flow is TypeScript. The editor reads it and writes YAML only.</p>}
       {note && <p className="good">{note}</p>}
       {fault && <p className="bad">{fault}</p>}
-      {problems.length > 0 && (
+      {verdict.error && (
+        <p className="bad">
+          Could not validate this flow: {verdict.error}{" "}
+          <button
+            className="quiet small"
+            onClick={() => {
+              setValidating(true);
+              setValidationErrorFlow(undefined);
+              setValidationRetry((count) => count + 1);
+            }}
+          >
+            Try again
+          </button>
+        </p>
+      )}
+      {verdict.problems.length > 0 && (
         <ul className="bad list">
-          {problems.map((problem) => (
+          {verdict.problems.map((problem) => (
             <li key={problem}>{problem}</li>
           ))}
         </ul>
       )}
       {/* A missing file blocks no save — the file drawer writes it in one click —
           but a run would spend money on it, so it stands here in plain sight. */}
-      {problems.length === 0 && warnings.length > 0 && (
+      {verdict.problems.length === 0 && verdict.warnings.length > 0 && (
         <ul className="warn list">
-          {warnings.map((warning) => (
+          {verdict.warnings.map((warning) => (
             <li key={warning}>{warning} — open it from its step and save it.</li>
           ))}
         </ul>

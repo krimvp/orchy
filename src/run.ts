@@ -569,7 +569,23 @@ async function execute(state: RunState, cwd: string, options: RunOptions, answer
       // A question is a prompt for a person, so a name in it takes its value the
       // same way. It did not: a flow that takes a ticket asked about
       // "{{ ticket }}" itself, in every run, and two waiting runs read alike.
-      return stop(state, waiting.id, ask(waiting, state), close, emit);
+      let question: string;
+      try {
+        question = ask(waiting, state);
+      } catch (error) {
+        const now = new Date().toISOString();
+        const why = error instanceof Error ? error.message : String(error);
+        emit({ type: "step_start", step: waiting.id });
+        state.steps[waiting.id] = {
+          status: "failed",
+          startedAt: now,
+          endedAt: now,
+          error: why,
+        };
+        emit({ type: "step_end", step: waiting.id, status: "failed", error: why });
+        return fail(state, undefined, close, emit);
+      }
+      return stop(state, waiting.id, question, close, emit);
     }
 
     const feedback = state.feedback;
@@ -726,26 +742,21 @@ function reasons(state: RunState): string | undefined {
 }
 
 /**
- * What a gate asks, with every name in it filled in. A name that nothing
- * supplies is the fault of the flow, and a person reading the question is the
- * last one who could fix it, so the run says so where the question would be.
+ * What a gate asks, with every name in it filled in. A missing name fails the
+ * run before a person sees a question that the flow cannot ask.
  */
 function ask(step: GateStep, state: RunState): string {
-  try {
-    const asked = fill(step.question, step.id, valuesOf(step, state));
-    // The person answers with the work in front of them, the way an agent step
-    // reads the steps before it in its prompt. A brace name reads no step
-    // value, so this block is the one way a question shows one.
-    const inputs = Object.fromEntries(
-      step.needs
-        .filter((need) => state.steps[need]?.value !== undefined)
-        .map((need) => [need, state.steps[need]?.value]),
-    );
-    if (Object.keys(inputs).length === 0) return asked;
-    return `${asked}\n\n${block("The values of the steps before this one", inputs)}`;
-  } catch (error) {
-    return error instanceof Error ? error.message : String(error);
-  }
+  const asked = fill(step.question, step.id, valuesOf(step, state), "question");
+  // The person answers with the work in front of them, the way an agent step
+  // reads the steps before it in its prompt. A brace name reads no step
+  // value, so this block is the one way a question shows one.
+  const inputs = Object.fromEntries(
+    step.needs
+      .filter((need) => state.steps[need]?.value !== undefined)
+      .map((need) => [need, state.steps[need]?.value]),
+  );
+  if (Object.keys(inputs).length === 0) return asked;
+  return `${asked}\n\n${block("The values of the steps before this one", inputs)}`;
 }
 
 function stop(
@@ -1065,7 +1076,7 @@ async function runStep(
     // A step that failed still spent what it spent. ADR 0019 counts it, so the
     // harness hands the cost over on the error and the record keeps it.
     const paid = (error as { cost?: number }).cost;
-    return {
+    const record: StepRecord = {
       ...at(),
       status: "failed",
       error: why,
@@ -1073,6 +1084,17 @@ async function runStep(
       ...(paid === undefined ? {} : { cost: paid }),
       ...(prompt ? { prompt } : {}),
     };
+    if (before) {
+      try {
+        const touched = changed(before, take(state.flow.workspace, cwd));
+        if (touched.length > 0) record.changed = touched;
+        const broken = brokenPromise(changesOf(state.flow, step), touched);
+        if (broken) record.error += `; step "${step.id}" ${broken}`;
+      } catch (snapshotError) {
+        record.error += `; step "${step.id}" could not read the workspace after it failed: ${snapshotError instanceof Error ? snapshotError.message : String(snapshotError)}`;
+      }
+    }
+    return record;
   }
 
   // Invariant 5: what the step really did, not what it says it did.
@@ -1200,12 +1222,12 @@ const NAMED = /\{\{([^{}]*)\}\}/g;
  * step: a model that reads the braces, or the word `undefined`, does the wrong
  * work and says nothing about it.
  */
-function fill(text: string, step: string, values: Record<string, unknown>): string {
+function fill(text: string, step: string, values: Record<string, unknown>, source: "prompt" | "question" = "prompt"): string {
   return text.replace(NAMED, (_all, inside: string) => {
     const name = inside.trim();
     if (!Object.hasOwn(values, name)) {
       throw new Error(
-        `step "${step}" reads "{{ ${name} }}" in its prompt, and nothing supplies "${name}". Add it to "takes" on the flow, or to "with" on the step.`,
+        `step "${step}" reads "{{ ${name} }}" in its ${source}, and nothing supplies "${name}". Add it to "takes" on the flow${source === "prompt" ? ', or to "with" on the step' : ""}.`,
       );
     }
     const value = values[name];

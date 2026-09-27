@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { keepGlobalNotice, retainNotice } from "./notice-state";
 
 export type Schema = Record<string, unknown>;
 
@@ -388,7 +389,9 @@ export function useNotices(runId?: string): { events: RunEvent[]; pending: Ticke
     source.onmessage = (message) => {
       const notice = JSON.parse(message.data as string) as Notice;
       if (notice.kind === "queue") setPending(notice.pending);
-      else setEvents((seen) => [...seen, notice.event]);
+      else if (runId || keepGlobalNotice(notice.event)) {
+        setEvents((seen) => retainNotice(seen, notice.event));
+      }
     };
     return () => source.close();
   }, [runId]);

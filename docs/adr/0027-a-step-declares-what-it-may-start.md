@@ -48,7 +48,10 @@ nothing reads is a rule that looks enforced and is not.
 - `most` counts the children of one step of one run, from the whole index
   and not from a page of it — a bound that two hundred newer runs could
   push off a page would lift in silence. A resume of the same run keeps the
-  count, because the children keep their rows.
+  count, because the children keep their rows. The door also counts a start
+  before its child has a run id. The index holds that count for all MCP doors
+  over one root. A start that fails the door check, or ends before it has a
+  run id, releases its place. A dead door leaves no queued place behind.
 - The bound reaches `run_flow` only. Reading runs, writing flows, and
   answering gates stay open to the step; each is its own authority, and a
   bound for one waits for a real flow that needs it.

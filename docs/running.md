@@ -360,6 +360,9 @@ Two runs in one working directory still disturb each other, whatever this number
 says. A promise holds inside one run. Give each run a working directory of its
 own.
 
+Orchy records changes when a step fails after it writes. It checks the promise
+and puts both the step fault and a broken promise in the error.
+
 ## Choose a model
 
 This section is for Pi.
@@ -585,6 +588,9 @@ id. The question carries the values of the steps the gate needs, the way an
 agent step reads them in its prompt, so the person answers with the work in
 front of them.
 
+A name in braces takes a value from the run. A missing name fails the run
+before it waits, and the error names the gate and the missing value.
+
 ```bash
 orchy resume <run id> '{"approved":true}'
 ```
@@ -625,8 +631,8 @@ A gate holds a cycle, so the answer of the person sends the run back.
 
 The value of the person takes its own turn before the steps after the gate run.
 A gate refuses the policy `escalate`, because an escalation asks a person for a
-value that a person just gave. A gate cannot fail, so it cannot cycle on the
-word `failed`.
+value that a person just gave. A person does not supply a failed gate value,
+so a gate cannot cycle on the word `failed`.
 
 ## Say what a step does
 
@@ -670,6 +676,8 @@ On the page:
 1. Open **Flows** and give the path of a flow file. The path is relative to the
    directory of the daemon.
 2. Press **Run**. The run goes in the queue, and it starts when a slot is free.
+   Removing a queued ticket stops that run from starting. Stop a run that
+   has started through its run page.
    Four runs run at the same time.
 3. Open the run. Each step turns green when it passes and red when it fails, and
    the events arrive while the run is on the way.
@@ -685,7 +693,8 @@ On the page:
    arguments, the results, and the tokens of each turn. A run that a cycle threw
    away is marked as one, because it is still a cost.
 8. Press **Edit** on a flow to draw it. The editor writes the same YAML file.
-   It refuses to write a flow that `validate()` rejects, and it will not write a
+   It waits for validation of the current flow before it enables **Save**. It
+   refuses to write a flow that `validate()` rejects, and it will not write a
    flow in TypeScript.
 9. Press **New flow** to make one: one file, one step, and its prompt, open in
    the editor.

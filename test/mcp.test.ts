@@ -107,12 +107,15 @@ test("the door answers initialize with its guide, and lists every tool", async (
     // The guide names the tools and the harnesses from the tables, so no copy falls behind.
     assert.match(opened.result.instructions, /check_flow/);
     assert.match(opened.result.instructions, /"pi" supplies/);
-    // The guide names the root, so an agent never has to find it.
-    assert.ok(opened.result.instructions.includes(site.engine.root));
+    // A long root is named through list_flows when the full path will not fit.
+    assert.ok(
+      opened.result.instructions.includes(site.engine.root) ||
+        opened.result.instructions.includes("list_flows names it in full"),
+    );
     // A client shows the first 2048 characters of a guide and cuts the rest,
     // so a guide that grows past this ends mid-word for the agent that reads it.
     assert.ok(
-      opened.result.instructions.length < 1980,
+      opened.result.instructions.length < 2048,
       `the guide holds ${opened.result.instructions.length} characters, and a client cuts it at 2048`,
     );
 
@@ -406,6 +409,32 @@ test("a step starts only the flows its bound names, and only so many", async () 
     assert.match(again.refused as string, /Every run counts/);
   } finally {
     site.close();
+  }
+});
+
+test("a queued child counts across two MCP doors over one root", async () => {
+  const root = project();
+  const allowed = join(root, "flows", "solo", "flow.yaml");
+  mkdirSync(join(root, "flows", "solo"), { recursive: true });
+  writeFileSync(allowed, formatFlow({ name: "solo", steps: [{ id: "work", kind: "call", module: "../../count.ts", returns: NUMBER }] } as never));
+  writeFileSync(join(root, "sleep.ts"), `export default async () => { await new Promise((done) => setTimeout(done, 30000)); return { count: 1 }; };\n`);
+  writeFileSync(join(root, "slow.yaml"), formatFlow({ name: "slow", steps: [{ id: "work", kind: "call", module: "sleep.ts", returns: NUMBER }] } as never));
+  mkdirSync(join(root, ".orchy", "runs", "boss"), { recursive: true });
+  writeFileSync(join(root, ".orchy", "runs", "boss", "state.json"), JSON.stringify({
+    runId: "boss", flow: { name: "boss", steps: [{ id: "dispatch", kind: "agent", prompt: "p.md", tools: ["orchy"], starts: { flows: [allowed], most: 1 }, returns: {} }] }, status: "waiting", steps: {}, cycles: {},
+  }));
+
+  const first = talking(root, { runId: "boss", step: "dispatch" });
+  const second = talking(root, { runId: "boss", step: "dispatch" });
+  try {
+    for (let n = 0; n < 4; n += 1) first.engine.start({ path: join(root, "slow.yaml"), flowName: "slow", harness: "pi" });
+    const queued = (await first.call("run_flow", { path: "flows/solo/flow.yaml" })).body as { ticket: number; runId?: string };
+    assert.equal(queued.runId, undefined);
+    const again = await second.call("run_flow", { path: "flows/solo/flow.yaml" });
+    assert.match(again.refused as string, /at most 1 run/);
+  } finally {
+    first.close();
+    second.close();
   }
 });
 

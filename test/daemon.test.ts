@@ -4,6 +4,7 @@ import { request as ask } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { spawn } from "node:child_process";
 import { daemon } from "../src/daemon.ts";
@@ -696,6 +697,109 @@ test("a schedule for a flow that takes values must carry them", async () => {
     );
   } finally {
     await site.close();
+  }
+});
+
+test("a schedule keeps its due time when its flow no longer passes the start check", async () => {
+  const root = project({ name: "solo", steps: [{ id: "work", kind: "call", module: "count.ts", returns: NUMBER }] });
+  const site = await running(root);
+  try {
+    await site.call("/api/flows", { method: "POST", body: JSON.stringify({ path: "flow.yaml" }) });
+    await site.call("/api/flows/1/schedule", { method: "PUT", body: JSON.stringify({ everyMinutes: 60 }) });
+    writeFileSync(join(root, "flow.yaml"), formatFlow({ name: "broken", steps: [{ id: "work", kind: "call", module: "gone.ts", returns: NUMBER }] } as never));
+
+    await site.engine.fire();
+    assert.equal(site.engine.store.schedule(1)?.lastAt, null);
+    assert.deepEqual(site.engine.pending(), []);
+  } finally {
+    await site.close();
+  }
+});
+
+test("removing a queued ticket stops its run from starting", async () => {
+  const root = project(SLOW);
+  const site = await running(root);
+  try {
+    const slow = join(root, "flow.yaml");
+    for (let n = 0; n < 4; n += 1) site.engine.start({ path: slow, flowName: "slow", harness: "pi" });
+    const next = join(root, "next.yaml");
+    writeFileSync(next, formatFlow({ name: "next", steps: [{ id: "work", kind: "call", module: "count.ts", returns: NUMBER }] } as never));
+    const queued = site.engine.start({ path: next, flowName: "next", harness: "pi" });
+    const removed = await site.call(`/api/queue/${queued.ticket}`, { method: "DELETE" });
+    assert.equal(removed.code, 200);
+    assert.equal(site.engine.pending().some((one) => one.ticket === queued.ticket), false);
+
+    await until(async () => site.engine.store.runs().filter((one) => one.path === slow).length === 4);
+    await until(async () => site.engine.pending().length === 0);
+    await new Promise((done) => setTimeout(done, 500));
+    assert.equal(site.engine.store.runs().some((one) => one.path === next), false);
+  } finally {
+    await site.close();
+  }
+});
+
+test("removing a ticket for a started run is refused", async () => {
+  const site = await running(project(SLOW));
+  try {
+    const ticket = site.engine.start({ path: join(site.engine.root, "flow.yaml"), flowName: "slow", harness: "pi" });
+    await until(async () => site.engine.pending().some((one) => one.ticket === ticket.ticket && one.runId !== undefined));
+    const removed = await site.call(`/api/queue/${ticket.ticket}`, { method: "DELETE" });
+    assert.equal(removed.code, 400);
+    assert.match((removed.body as { error: string }).error, /Stop its run instead/);
+  } finally {
+    await site.close();
+  }
+});
+
+test("a child that ends before its run id releases its start place", async () => {
+  const site = await running(project());
+  try {
+    const first = site.engine.store.reserveStart("boss", "dispatch", 1);
+    assert.ok(first.id);
+    const ticket = site.engine.start({
+      path: join(site.engine.root, "gone.yaml"), flowName: "gone", harness: "pi",
+      startedBy: { runId: "boss", step: "dispatch" }, reservationId: first.id,
+    });
+    await until(async () => site.engine.pending().some((one) => one.ticket === ticket.ticket && one.error !== undefined));
+    assert.equal(site.engine.pending().find((one) => one.ticket === ticket.ticket)?.runId, undefined);
+    assert.ok(site.engine.store.reserveStart("boss", "dispatch", 1).id);
+  } finally {
+    await site.close();
+  }
+});
+
+test("a dead MCP door leaves no queued start place", () => {
+  const root = project();
+  mkdirSync(join(root, ".orchy"), { recursive: true });
+  const store = open(join(root, ".orchy", "index.db"));
+  store.close();
+  const db = new DatabaseSync(join(root, ".orchy", "index.db"));
+  db.prepare("insert into start_reservation (id, parentRunId, step, ownerPid) values (?, ?, ?, ?)")
+    .run("orphan", "boss", "dispatch", 99999999);
+  db.close();
+  const reopened = open(join(root, ".orchy", "index.db"));
+  try {
+    assert.ok(reopened.reserveStart("boss", "dispatch", 1).id);
+  } finally {
+    reopened.close();
+  }
+});
+
+test("closing a daemon releases a child that still waits in its queue", () => {
+  const root = project(SLOW);
+  const engine = daemon(root, false);
+  const path = join(root, "flow.yaml");
+  for (let n = 0; n < 4; n += 1) engine.start({ path, flowName: "slow", harness: "pi" });
+  const held = engine.store.reserveStart("boss", "dispatch", 1);
+  assert.ok(held.id);
+  engine.start({ path, flowName: "slow", harness: "pi", reservationId: held.id });
+  engine.close();
+
+  const reopened = open(join(root, ".orchy", "index.db"));
+  try {
+    assert.ok(reopened.reserveStart("boss", "dispatch", 1).id);
+  } finally {
+    reopened.close();
   }
 });
 
