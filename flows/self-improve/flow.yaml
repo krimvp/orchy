@@ -1,0 +1,72 @@
+# Find one real fault, prove it, fix it, and check the result.
+name: self-improve
+harness: claude
+model: sonnet
+workspace: { kind: git, path: . }
+budget: 10
+takes:
+  type: object
+  properties: { run_id: { type: string } }
+
+steps:
+  - id: collect
+    kind: call
+    module: collect.ts
+    changes: nothing
+    returns:
+      type: object
+      required: [actionable, historical, checks]
+      properties:
+        actionable: { type: boolean }
+        historical: { type: [object, 'null'] }
+        checks: { type: array, minItems: 3, maxItems: 3 }
+
+  - id: diagnose
+    kind: agent
+    needs: [collect]
+    when: { collect: { actionable: true } }
+    prompt: prompts/diagnose.md
+    tools: [read, grep, find, ls, bash]
+    changes: nothing
+    returns:
+      type: object
+      required: [reproduced, failure, evidence]
+      properties:
+        reproduced: { type: boolean }
+        failure: { type: string }
+        evidence: { type: string }
+
+  - id: fix
+    kind: agent
+    needs: [diagnose]
+    when: { diagnose: { reproduced: true } }
+    prompt: prompts/fix.md
+    tools: [read, write, edit, grep, find, ls, bash]
+    returns:
+      type: object
+      required: [summary, files]
+      properties:
+        summary: { type: string }
+        files: { type: array, items: { type: string }, minItems: 1 }
+
+  - id: verify
+    kind: call
+    needs: [fix]
+    module: orchy:check
+    with: { run: "npm test && npm run check && npm run ui:build" }
+    returns: { type: object, required: [ok], properties: { ok: { type: boolean } } }
+    cycle: { to: fix, when: failed, limit: 2, policy: escalate }
+
+  - id: review
+    kind: agent
+    needs: [fix, verify]
+    prompt: prompts/review.md
+    tools: [read, grep, find, ls, bash]
+    changes: nothing
+    returns:
+      type: object
+      required: [approved, findings]
+      properties:
+        approved: { type: boolean }
+        findings: { type: array, items: { type: string } }
+    cycle: { to: fix, when: { approved: false }, limit: 2, policy: escalate }

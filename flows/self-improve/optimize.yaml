@@ -1,0 +1,130 @@
+# Measure a completed run, change one repeatable flow, then compare another run.
+name: self-improve-optimize
+harness: claude
+model: sonnet
+workspace: { kind: git, path: . }
+budget: 10
+takes:
+  type: object
+  required: [run_id]
+  properties: { run_id: { type: string } }
+
+steps:
+  - id: profile
+    kind: call
+    module: profile.ts
+    changes: nothing
+    returns:
+      type: object
+      required: [run_id, flow, flow_steps, attempt_count, executed_attempts, agent_attempts, attempts, omitted_attempts, wall_ms, attempt_ms, tokens, cost]
+      properties:
+        run_id: { type: string }
+        flow: { type: string }
+        flow_steps: { type: integer }
+        attempt_count: { type: integer }
+        executed_attempts: { type: integer }
+        agent_attempts: { type: integer }
+        attempts: { type: array }
+        omitted_attempts: { type: integer }
+        wall_ms: { type: number }
+        attempt_ms: { type: number }
+        tokens: { type: object }
+        cost: { type: object }
+
+  - id: propose
+    kind: agent
+    needs: [profile]
+    prompt: prompts/optimize-propose.md
+    tools: [read, grep, find, ls]
+    changes: nothing
+    returns:
+      type: object
+      required: [candidate, file, change, evidence, quality_check, rerun]
+      properties:
+        candidate: { type: boolean }
+        file: { type: string }
+        change: { type: string }
+        evidence: { type: string }
+        quality_check: { type: string }
+        rerun: { type: string }
+      if: { properties: { candidate: { const: true } } }
+      then:
+        properties:
+          file:
+            type: string
+            anyOf:
+              - { pattern: '^flows/(?!self-improve/)(?:[^/]+/)*[^/]+\.ya?ml$' }
+              - { pattern: '^flows/(?!self-improve/)(?:[^/]+/)+prompts/(?:[^/]+/)*[^/]+\.md$' }
+          change: { type: string, minLength: 1 }
+          evidence: { type: string, minLength: 1 }
+          quality_check: { type: string, minLength: 1 }
+          rerun: { type: string, minLength: 1 }
+
+  - id: apply
+    kind: agent
+    needs: [propose]
+    when: { propose: { candidate: true } }
+    prompt: prompts/optimize-apply.md
+    tools: [read, write, edit, grep, find, ls]
+    changes: { paths: [flows] }
+    returns:
+      type: object
+      required: [summary, files]
+      properties:
+        summary: { type: string }
+        files: { type: array, items: { type: string }, minItems: 1 }
+
+  - id: verify
+    kind: call
+    needs: [apply]
+    module: orchy:check
+    with: { run: "npm test && npm run check && npm run ui:build" }
+    returns: { type: object, required: [ok], properties: { ok: { type: boolean } } }
+    cycle: { to: apply, when: failed, limit: 2, policy: escalate }
+
+  - id: review
+    kind: agent
+    needs: [propose, apply, verify]
+    prompt: prompts/optimize-review.md
+    tools: [read, grep, find, ls, bash]
+    changes: nothing
+    returns:
+      type: object
+      required: [approved, findings]
+      properties:
+        approved: { type: boolean }
+        findings: { type: array, items: { type: string } }
+    cycle: { to: apply, when: { approved: false }, limit: 2, policy: escalate }
+
+  - id: confirm
+    kind: gate
+    needs: [profile, propose, review]
+    when: { review: { approved: true } }
+    question: >
+      Run the changed flow with the same input values. Check its quality with
+      the proposed quality check. Answer with candidate_run_id, quality_ok,
+      and quality_evidence. A candidate run must finish before comparison.
+    returns:
+      type: object
+      required: [candidate_run_id, quality_ok, quality_evidence]
+      properties:
+        candidate_run_id: { type: string, minLength: 1 }
+        quality_ok: { type: boolean }
+        quality_evidence: { type: string, minLength: 1 }
+
+  - id: compare
+    kind: call
+    needs: [confirm]
+    module: compare.ts
+    changes: nothing
+    returns:
+      type: object
+      required: [before, after, delta, change_evidence, quality_ok, quality_evidence, repeatable_savings_proven]
+      properties:
+        before: { type: object }
+        after: { type: object }
+        delta: { type: object }
+        change_evidence: { type: array, minItems: 1, items: { type: string } }
+        quality_ok: { type: boolean }
+        quality_evidence: { type: string }
+        repeatable_savings_proven: { const: false }

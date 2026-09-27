@@ -1,5 +1,64 @@
 # Run a flow
 
+## Check and repair this root
+
+`flows/self-improve/flow.yaml` reads failed runs in this root. It also runs
+`npm test`, `npm run check`, and `npm run ui:build` before an agent starts.
+The flow selects the newest run with a final status of `failed`, or the failed
+run that `run_id` names. It does not select an old failed attempt from a run
+that later completed.
+It does not select one of its own runs. It bounds each check output and each
+failure reason to about 2,400 characters. It keeps the first failure and the
+end of a failed check output.
+
+```bash
+orchy check flows/self-improve/flow.yaml
+orchy run flows/self-improve/flow.yaml --with '{}'
+orchy run flows/self-improve/flow.yaml --with '{"run_id":"RUN-ID"}'
+```
+
+The diagnose step must reproduce one fault before the fix step can run.
+If the checks pass and no failed run exists, all agent steps are skipped.
+If an old fault no longer occurs, the fix step is skipped. A check then
+tests the fix, and a review step reads the change. Two cycles can send the
+change back to the fix step. At the limit, the run asks a person.
+
+## Measure a completed run
+
+`flows/self-improve/optimize.yaml` takes the id of a completed run. Its profile
+reads the run state and its ATIF trajectory. It counts flow steps, executed
+attempts, agent attempts, time, tokens, and known cost. It marks unknown cost.
+The flow step count comes from the run state after fanout expansion.
+The proposal step changes no file. It names one change only when the same task
+and a quality check can run again. A one-off task produces no change.
+The apply step edits one YAML flow file or one Markdown file in a `prompts/`
+directory under `flows/`. It does not edit a component file.
+
+```bash
+orchy check flows/self-improve/optimize.yaml
+orchy run flows/self-improve/optimize.yaml --with '{"run_id":"BASELINE-RUN-ID"}'
+```
+
+If a change passes the repo checks and review, the run waits at a gate. Run
+the changed flow with the same input values after the apply step ends.
+Check the output quality yourself.
+Then answer the gate with the new completed run id and your quality result:
+
+```bash
+orchy resume OPTIMIZER-RUN-ID '{"candidate_run_id":"NEW-RUN-ID","quality_ok":true,"quality_evidence":"Check name and result"}'
+```
+
+The compare step refuses runs with different flow names or input values.
+It reads the files that the apply step changed. A YAML edit needs a changed
+stored flow tied to that file. A prompt edit needs a changed prompt recorded
+for an executed step that names that file. Missing or unclear records fail
+the comparison. A changed flow in another folder does not count.
+It reports the before and after metrics and their differences. `wall_ms` spans
+the run and can include a wait at a gate. `attempt_ms` sums step work and can
+exceed the span when steps overlap. One pair of runs does not prove repeatable
+savings. A lower step count alone does not show a better result. A missing
+cost stays unknown. The human quality result is evidence, not automatic proof.
+
 ## Schemas
 
 A contract is JSON Schema. That is the one form that Orchy keeps, because a
