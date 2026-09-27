@@ -786,7 +786,7 @@ test("every example and shipped flow loads, and every path one names exists, fro
         const loaded = expandFanout(await loadFlow(join(root, name, file), tmpdir()));
         for (const step of loaded.steps) {
           const path = step.kind === "agent" ? step.prompt : step.kind === "call" ? step.module : undefined;
-          if (path === undefined) continue;
+          if (path === undefined || path.startsWith("orchy:")) continue;
           assert.ok(existsSync(path), `${kind}/${name}/${file}: step "${step.id}" names "${path}", which is not there`);
         }
       }
