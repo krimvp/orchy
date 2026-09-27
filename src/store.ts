@@ -1,4 +1,5 @@
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { alive, keep, type RunEvent, type RunState } from "./run.ts";
@@ -50,6 +51,14 @@ create table if not exists hook (
   flowId integer primary key,
   token text not null unique,
   addedAt text not null
+);
+create table if not exists start_reservation (
+  id text primary key,
+  parentRunId text not null,
+  step text not null,
+  runId text,
+  ownerPid integer not null,
+  childPid integer
 );
 `;
 
@@ -121,6 +130,7 @@ export type Store = ReturnType<typeof open>;
 
 export function open(file: string) {
   const db = new DatabaseSync(file);
+  db.exec("pragma busy_timeout = 5000");
   db.exec("pragma journal_mode = wal");
   db.exec(SCHEMA);
 
@@ -220,6 +230,58 @@ export function open(file: string) {
       });
     },
 
+    /** A start is held before a child has a run id. SQLite locks this count across MCP doors. */
+    reserveStart(parentRunId: string, step: string, most: number): { id?: string; already: number } {
+      db.exec("begin immediate");
+      try {
+        for (const held of all<{ id: string; ownerPid: number; childPid: number | null }>(
+          "select id, ownerPid, childPid from start_reservation where runId is null",
+        )) {
+          if (!processAlive(held.childPid ?? held.ownerPid)) {
+            db.prepare("delete from start_reservation where id = ?").run(held.id);
+          }
+        }
+        const reservations = all<{ id: string; runId: string | null }>(
+          "select id, runId from start_reservation where parentRunId = ? and step = ?", parentRunId, step,
+        );
+        const linked = new Set(reservations.map((one) => one.runId).filter((id): id is string => id !== null));
+        const legacy = all<{ runId: string; startedByJson: string }>(
+          "select runId, startedByJson from run where startedByJson is not null",
+        ).filter((row) => {
+          try {
+            const by = JSON.parse(row.startedByJson) as { runId?: string; step?: string };
+            return by.runId === parentRunId && by.step === step && !linked.has(row.runId);
+          } catch {
+            return false;
+          }
+        }).length;
+        const already = reservations.length + legacy;
+        if (already >= most) {
+          db.exec("commit");
+          return { already };
+        }
+        const id = randomUUID();
+        db.prepare("insert into start_reservation (id, parentRunId, step, ownerPid) values (?, ?, ?, ?)").run(id, parentRunId, step, process.pid);
+        db.exec("commit");
+        return { id, already };
+      } catch (error) {
+        db.exec("rollback");
+        throw error;
+      }
+    },
+
+    linkStart(id: string, runId: string): void {
+      db.prepare("update start_reservation set runId = ? where id = ?").run(runId, id);
+    },
+
+    markStartChild(id: string, pid: number): void {
+      db.prepare("update start_reservation set childPid = ? where id = ?").run(pid, id);
+    },
+
+    releaseStart(id: string): void {
+      db.prepare("delete from start_reservation where id = ?").run(id);
+    },
+
     saveRun(row: RunRow): void {
       db.prepare(
         `insert into run (runId, flowName, path, status, startedAt, endedAt, waitingFor, question, cost, tokens, withJson, startedByJson, error)
@@ -306,6 +368,16 @@ export function open(file: string) {
       return found;
     },
   };
+}
+
+function processAlive(pid: number): boolean {
+  if (pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
 }
 
 /** The row that describes a run state. The flow name and the cost come from it. */

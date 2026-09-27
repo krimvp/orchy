@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { schemaProblem } from "./flow.ts";
 import { type RunEvent, keep, read, standing } from "./run.ts";
 import { type Store, type StoredEvent, due, metricsAt, open, rowOf } from "./store.ts";
+import { start as checkedStart } from "./server.ts";
 
 /**
  * How many runs the daemon starts at the same time. A run is a process that
@@ -50,12 +51,15 @@ export interface Order {
   with?: Record<string, unknown>;
   /** The run and the step that placed this order, when a step did. ADR 0025. */
   startedBy?: { runId: string; step: string };
+  /** The bound reserves this start until the child writes its run id. */
+  reservationId?: string;
 }
 
 interface Job extends Ticket {
   harness: string;
   with?: Record<string, unknown>;
   startedBy?: { runId: string; step: string };
+  reservationId?: string;
   runId?: string;
   /** The job continues a run instead of starting one. */
   resumes?: boolean;
@@ -108,7 +112,9 @@ export function daemon(root: string, beats = true) {
   const told = () => tell({ kind: "queue", pending: [...jobs.values()].map(ticketOf) });
 
   const finish = (job: Job) => {
+    if (job.done) return;
     job.done = true;
+    if (job.reservationId && !job.runId && !closed) store.releaseStart(job.reservationId);
     // A run that reached a run id lives in the index from here on. A job that
     // ended with a reason of its own keeps its ticket, so the reason reaches a
     // person: a resume that a contract refused leaves no other trace.
@@ -133,6 +139,7 @@ export function daemon(root: string, beats = true) {
     if (closed) return;
     if (event.type === "run_start") {
       job.runId = event.runId;
+      if (job.reservationId) store.linkStart(job.reservationId, event.runId);
       told();
     }
     // The run stops here. The child takes a moment more to go, and in that
@@ -189,6 +196,7 @@ export function daemon(root: string, beats = true) {
         stdio: ["ignore", "pipe", "pipe"],
       });
       job.child = child;
+      if (job.reservationId && child.pid) store.markStartChild(job.reservationId, child.pid);
       lines(child, (line) => receive(job, JSON.parse(line) as RunEvent));
       child.stderr?.on("data", (chunk: Buffer) => {
         job.stderr = `${job.stderr}${chunk.toString()}`.slice(-4000);
@@ -218,6 +226,7 @@ export function daemon(root: string, beats = true) {
 
   /** Puts a run in the queue. It starts when a slot is free. */
   const start = (order: Order): Ticket => {
+    if (closed) throw new Error("the daemon is closed, so this run cannot start");
     tickets += 1;
     const job: Job = { ...order, ticket: tickets, queuedAt: new Date().toISOString(), stderr: "" };
     jobs.set(job.ticket, job);
@@ -232,28 +241,38 @@ export function daemon(root: string, beats = true) {
    * flow whose last scheduled run still works is skipped — runs must not stack
    * behind a slow one — and it fires when that run has gone.
    */
-  const fire = () => {
+  let firing = false;
+  const fire = async () => {
     if (closed) return;
-    for (const held of store.schedules()) {
-      const row = store.flow(held.flowId);
-      if (!row) {
-        store.clearSchedule(held.flowId);
-        continue;
+    if (firing) return;
+    firing = true;
+    try {
+      for (const held of store.schedules()) {
+        const row = store.flow(held.flowId);
+        if (!row) {
+          store.clearSchedule(held.flowId);
+          continue;
+        }
+        if (!due(held, new Date())) continue;
+        if ([...jobs.values()].some((job) => job.path === row.path)) continue;
+        try {
+          await checkedStart(
+            api,
+            row,
+            held.withJson ? (JSON.parse(held.withJson) as Record<string, unknown>) : undefined,
+          );
+          store.markScheduled(held.flowId, new Date().toISOString());
+        } catch (error) {
+          console.error(`the schedule for "${row.path}" did not start: ${error instanceof Error ? error.message : String(error)}`);
+        }
       }
-      if (!due(held, new Date())) continue;
-      if ([...jobs.values()].some((job) => job.path === row.path)) continue;
-      store.markScheduled(held.flowId, new Date().toISOString());
-      start({
-        path: row.path,
-        flowName: row.name,
-        harness: row.harness,
-        with: held.withJson ? (JSON.parse(held.withJson) as Record<string, unknown>) : undefined,
-      });
+    } finally {
+      firing = false;
     }
   };
-  const beat = beats ? setInterval(fire, 30_000) : undefined;
+  const beat = beats ? setInterval(() => void fire(), 30_000) : undefined;
 
-  return {
+  const api = {
     store,
     root,
 
@@ -362,6 +381,14 @@ export function daemon(root: string, beats = true) {
     pending: (): Ticket[] => [...jobs.values()].map(ticketOf),
 
     forget(ticket: number): void {
+      const job = jobs.get(ticket);
+      if (!job) throw new Error(`the ticket ${ticket} is not in this queue`);
+      if (!job.done && job.child) {
+        throw new Error(`the ticket ${ticket} has started. Stop its run instead.`);
+      }
+      const at = queue.indexOf(job);
+      if (at !== -1) queue.splice(at, 1);
+      if (job.reservationId && !job.runId) store.releaseStart(job.reservationId);
       jobs.delete(ticket);
       told();
     },
@@ -397,11 +424,13 @@ export function daemon(root: string, beats = true) {
     close(kill = true): void {
       closed = true;
       clearInterval(beat);
+      for (const job of queue) if (job.reservationId) store.releaseStart(job.reservationId);
       if (kill) for (const job of jobs.values()) job.child?.kill("SIGTERM");
       listeners.clear();
       store.close();
     },
   };
+  return api;
 }
 
 function ticketOf(job: Job): Ticket {

@@ -308,18 +308,26 @@ export function mcp(
             `the step "${startedBy?.step}" starts only: ${bound.flows.join(", ")}. This flow is not one of them.`,
           );
         }
+        let reserved: { id?: string; already: number } | undefined;
         if (bound?.most !== undefined && startedBy) {
-          const already = childrenOf(daemon, startedBy.runId).filter((one) => one.step === startedBy.step).length;
-          if (already >= bound.most) {
-            throw new Error(
-              `the step "${startedBy.step}" starts at most ${bound.most} run${bound.most === 1 ? "" : "s"}, and it has started ${already}. Every run counts, including one that failed.`,
-            );
-          }
+          daemon.catchUp();
+          reserved = daemon.store.reserveStart(startedBy.runId, startedBy.step, bound.most);
         }
-        const row =
-          daemon.store.flowAt(path) ??
-          daemon.store.addFlow(path, (await readFlow(path)).name || path, harnessInFile(path) ?? harness);
-        const ticket = await start(daemon, row, args.with as Record<string, unknown> | undefined, undefined, startedBy);
+        if (bound?.most !== undefined && startedBy && !reserved?.id) {
+            throw new Error(
+              `the step "${startedBy.step}" starts at most ${bound.most} run${bound.most === 1 ? "" : "s"}, and it has started ${reserved?.already}. Every run counts, including one that failed.`,
+            );
+        }
+        let ticket: Ticket;
+        try {
+          const row =
+            daemon.store.flowAt(path) ??
+            daemon.store.addFlow(path, (await readFlow(path)).name || path, harnessInFile(path) ?? harness);
+          ticket = await start(daemon, row, args.with as Record<string, unknown> | undefined, undefined, startedBy, reserved?.id);
+        } catch (error) {
+          if (reserved?.id) daemon.store.releaseStart(reserved.id);
+          throw error;
+        }
         return started(daemon, ticket);
       },
     },

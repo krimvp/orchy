@@ -34,7 +34,7 @@ export function Run({ runId }: { runId: string }) {
 
   useEffect(() => {
     again();
-  }, [events.length, again]);
+  }, [events, again]);
 
   // The elapsed times move while the run does. A run whose row says otherwise
   // has no live process, so its clock stands still.

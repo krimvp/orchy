@@ -53,18 +53,15 @@ export function changed(before: Snapshot | undefined, after: Snapshot | undefine
 
 /**
  * One change, from the path git reports and the state it reports for it. Git
- * writes a rename as `old -> new`, and a promise must read both halves, so the
- * change keeps them apart. See invariant 5.
+ * writes a rename as two paths, and a promise must read both halves. The key
+ * holds a JSON pair so a path that contains an arrow stays whole.
  */
 function changeOf(path: string, state: string | undefined): Change {
   const how = howOf(state);
-  const at = path.indexOf(RENAME);
-  if (how !== "renamed" || at === -1) return { path, how };
-  return { path: path.slice(0, at), to: path.slice(at + RENAME.length), how };
+  if (how !== "renamed") return { path, how };
+  const [from, to] = JSON.parse(path) as [string, string];
+  return { path: from, to, how };
 }
-
-/** Git writes a rename as two paths in one line. */
-const RENAME = " -> ";
 
 /** The status letters, in the order they alarm a reader. The first one wins. */
 const HOW: Array<[string, Change["how"]]> = [
@@ -110,23 +107,27 @@ function git(args: string[], cwd: string): string {
  */
 function status(at: string): Record<string, string> {
   const files: Record<string, string> = {};
-  for (const line of git(["status", "--porcelain", "-uall"], at).split("\n")) {
+  const lines = git(["status", "--porcelain", "-z", "-uall"], at).split("\0");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? "";
     if (line.length < 4) continue;
-    const path = line.slice(3);
-    // The run state of Orchy is not the work of the step.
-    if (path.startsWith(".orchy/")) continue;
     const state = line.slice(0, 2);
-    files[path] = `${state} ${hashOf(at, path)}`;
+    const destination = line.slice(3);
+    // With -z, git writes the destination first and the source next.
+    const source = state.includes("R") ? lines[++i] : undefined;
+    const path = source === undefined ? destination : JSON.stringify([source, destination]);
+    // The run state of Orchy is not the work of the step.
+    if (destination.startsWith(".orchy/") || source?.startsWith(".orchy/")) continue;
+    files[path] = `${state} ${hashOf(at, destination)}`;
   }
   return files;
 }
 
 /**
- * What a file holds, as one short word. A path git no longer reads, and a path
- * that is a rename, hash to nothing: the status characters carry those.
+ * What a file holds, as one short word. A path git no longer reads hashes to
+ * nothing. A rename hashes the destination so a later write still shows.
  */
 function hashOf(at: string, path: string): string {
-  if (path.includes(RENAME)) return "";
   try {
     return createHash("sha1").update(readFileSync(join(at, path))).digest("hex").slice(0, 16);
   } catch {

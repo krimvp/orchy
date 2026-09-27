@@ -40,3 +40,5 @@ or on an event, such as a git hook after a commit, and not on a hand.
   function, which refuses a flow that `validate()` rejects and a flow that
   names a file that is not there. One door, so each refuses the same broken
   flow the same way.
+- A failed start leaves the schedule due. The daemon writes the reason to its
+  error stream and checks the schedule again at the next beat.

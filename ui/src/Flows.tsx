@@ -21,7 +21,7 @@ export function Flows() {
 
   useEffect(() => {
     again();
-  }, [events.length, pending.length, again]);
+  }, [events, pending, again]);
   const [path, setPath] = useState("");
   const [name, setName] = useState("");
   const [making, setMaking] = useState(false);

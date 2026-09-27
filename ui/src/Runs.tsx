@@ -7,7 +7,7 @@ export function Runs() {
 
   useEffect(() => {
     again();
-  }, [events.length, pending.length, again]);
+  }, [events, pending, again]);
 
   // A run that needs a person outranks a run that runs by itself.
   const waiting = runs?.filter((run) => run.status === "waiting") ?? [];
